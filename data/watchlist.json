@@ -1,0 +1,28 @@
+[
+  {
+    "code": "sz300059",
+    "name": "东方财富",
+    "news_summary": "成交量突破万亿",
+    "concept": "互联网金融",
+    "initial_score": 8.0,
+    "strategy_type": "LimitUp",
+    "seal_rate": 0,
+    "broken_rate": 0,
+    "next_day_premium": 0,
+    "limit_up_days": 0,
+    "turnover": 1.15
+  },
+  {
+    "code": "sh600519",
+    "name": "贵州茅台",
+    "news_summary": "分红超预期",
+    "concept": "白酒",
+    "initial_score": 7.5,
+    "strategy_type": "LimitUp",
+    "seal_rate": 0,
+    "broken_rate": 0,
+    "next_day_premium": 0,
+    "limit_up_days": 0,
+    "turnover": 0.2
+  }
+]

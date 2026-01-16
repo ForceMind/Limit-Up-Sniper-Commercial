@@ -1,0 +1,2657 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>涨停狙击手 (Limit-Up Sniper)</title>
+    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="manifest" href="/static/manifest.json">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        }
+    </script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <style>
+        /* Prevent font scaling on mobile */
+        html {
+            -webkit-text-size-adjust: 100%;
+            text-size-adjust: 100%;
+        }
+        
+        /* 自定义呼吸灯动画颜色 */
+        @keyframes sniper-pulse {
+            0%, 100% { background-color: rgba(153, 27, 27, 0.2); }
+            50% { background-color: rgba(153, 27, 27, 0.6); }
+        }
+        .animate-sniper {
+            animation: sniper-pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+        }
+        
+        /* Markdown Content Styling */
+        .markdown-content h1, .markdown-content h2, .markdown-content h3 {
+            font-weight: bold;
+            margin-top: 1em;
+            margin-bottom: 0.5em;
+            color: inherit;
+        }
+        .markdown-content h3 { font-size: 1.1em; }
+        .markdown-content ul { 
+            list-style-type: disc; 
+            padding-left: 1.5em; 
+            margin-bottom: 1em; 
+        }
+        .markdown-content li { margin-bottom: 0.25em; }
+        .markdown-content strong { 
+            font-weight: bold; 
+            color: #dc2626; /* red-600 */
+        }
+        html.dark .markdown-content strong {
+            color: #f87171; /* red-400 */
+        }
+        .markdown-content p { margin-bottom: 0.8em; }
+    </style>
+</head>
+<body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-mono h-screen p-2 md:p-4 overflow-hidden flex flex-col transition-colors duration-300">
+    {% raw %}
+    <div id="app" class="container mx-auto max-w-full flex-1 flex flex-col overflow-hidden">
+        <!-- Header -->
+        <header class="flex flex-col md:flex-row justify-between items-center mb-2 md:mb-4 border-b border-gray-200 dark:border-gray-700 pb-2 px-2 md:px-4 shrink-0 gap-2">
+            <div class="flex items-center gap-2 w-full md:w-auto justify-between md:justify-start">
+                <div class="flex items-center gap-2 md:gap-3 shrink-0">
+                    <div class="w-3 h-3 bg-red-500 rounded-full animate-ping"></div>
+                    <h1 class="text-sm md:text-xl font-bold tracking-wider text-red-600 dark:text-red-500 whitespace-nowrap">涨停狙击手 <span class="hidden md:inline text-xs text-gray-500 ml-2">指挥中心</span></h1>
+                    
+                    <!-- LHB Button -->
+                    <a href="/lhb" class="flex items-center gap-1 text-[10px] md:text-xs font-bold text-red-600 dark:text-red-400 hover:text-red-700 bg-red-50 dark:bg-red-900/30 px-1.5 md:px-3 py-0.5 md:py-1 rounded border border-red-200 dark:border-red-800 transition-colors shrink-0" title="查看龙虎榜">
+                        <span>🐲</span><span class="hidden sm:inline">龙虎榜</span>
+                    </a>
+                    
+                    <!-- News Button -->
+                    <button @click="openNewsCenter" class="flex items-center gap-1 text-[10px] md:text-xs font-bold text-blue-600 dark:text-blue-400 hover:text-blue-700 bg-blue-50 dark:bg-blue-900/30 px-1.5 md:px-3 py-0.5 md:py-1 rounded border border-blue-200 dark:border-blue-800 transition-colors shrink-0" title="新闻中心">
+                        <span>📰</span><span class="hidden sm:inline">新闻</span>
+                    </button>
+                </div>
+
+                <!-- Mobile Tabs (Integrated in Header) -->
+                <div class="flex md:hidden bg-gray-200 dark:bg-gray-800 rounded p-0.5 shrink-0 ml-auto">
+                    <button @click="activeTab = 'pre'" class="px-2 py-1 text-[10px] rounded transition-colors whitespace-nowrap" :class="activeTab === 'pre' ? 'bg-purple-600 text-white shadow' : 'text-gray-500 dark:text-gray-400'">竞价</button>
+                    <button @click="activeTab = 'pool'" class="px-2 py-1 text-[10px] rounded transition-colors whitespace-nowrap" :class="activeTab === 'pool' ? 'bg-yellow-600 text-white shadow' : 'text-gray-500 dark:text-gray-400'">涨停</button>
+                    <button @click="activeTab = 'intra'" class="px-2 py-1 text-[10px] rounded transition-colors whitespace-nowrap" :class="activeTab === 'intra' ? 'bg-red-600 text-white shadow' : 'text-gray-500 dark:text-gray-400'">盘中</button>
+                    <button @click="activeTab = 'manual'" class="px-2 py-1 text-[10px] rounded transition-colors whitespace-nowrap" :class="activeTab === 'manual' ? 'bg-blue-600 text-white shadow' : 'text-gray-500 dark:text-gray-400'">自选</button>
+                </div>
+            </div>
+            
+            <div class="flex items-center gap-2 md:gap-4 w-full md:w-auto justify-between md:justify-end flex-wrap transition-all duration-300">
+                <!-- Settings Button (Merged Filter & Config) -->
+                <button v-if="!isSearchFocused || !isMobile" @click="showSettingsModal = true" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors" title="系统设置">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                </button>
+
+                <!-- Theme Toggle -->
+                <button v-if="!isSearchFocused || !isMobile" @click="toggleTheme" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors" title="切换主题">
+                    <span v-if="isDark">🌞</span>
+                    <span v-else>🌙</span>
+                </button>
+
+                <!-- Search Bar -->
+                <div class="relative group flex-1 md:flex-none transition-all duration-300" :class="{'w-full': isSearchFocused && isMobile}">
+                    <input type="search" v-model="searchQuery" @input="onSearchInput" 
+                           @focus="isSearchFocused = true" @blur="handleSearchBlur"
+                           placeholder="搜索代码/拼音" 
+                           enterkeyhint="search"
+                           class="bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 text-gray-900 dark:text-gray-300 text-xs rounded px-2 py-1 w-full md:w-48 focus:w-full md:focus:w-64 focus:outline-none focus:border-blue-500 transition-all">
+                    
+                    <!-- Search Results Dropdown -->
+                    <div v-if="searchResults.length > 0" class="absolute top-full left-0 w-full md:w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-xl mt-1 z-50 max-h-60 overflow-y-auto">
+                        <div v-for="item in searchResults" :key="item.code"
+                             @click="addStockFromSearch(item)"
+                             class="px-3 py-2 hover:bg-gray-100 dark:hover:bg-gray-700 cursor-pointer flex justify-between items-center text-xs">
+                            <span class="font-bold text-gray-700 dark:text-gray-300">{{ item.display_code }}</span>
+                            <span class="text-gray-500 dark:text-gray-400">{{ item.name }}</span>
+                            <!-- Removed redundant full code display -->
+                        </div>
+                    </div>
+                </div>
+
+                <button @click="runAnalysis('after_hours')" :disabled="isAnalyzing || isSyncingLHB" 
+                        class="px-3 py-1 text-xs font-bold rounded border transition-colors flex items-center gap-2 whitespace-nowrap"
+                        :class="(isAnalyzing || isSyncingLHB) ? 'bg-gray-200 dark:bg-gray-700 text-gray-500 border-gray-300 dark:border-gray-600 cursor-not-allowed' : 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 border-purple-300 dark:border-purple-500/50 hover:bg-purple-200 dark:hover:bg-purple-800/50'">
+                    <span v-if="isAnalyzing" class="w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full animate-spin"></span>
+                    {{ isAnalyzing ? '分析中...' : '🌙 盘后复盘' }}
+                </button>
+                <button @click="runAnalysis('intraday')" :disabled="isAnalyzing || isSyncingLHB" 
+                        class="px-3 py-1 text-xs font-bold rounded border transition-colors flex items-center gap-2 whitespace-nowrap"
+                        :class="(isAnalyzing || isSyncingLHB) ? 'bg-gray-200 dark:bg-gray-700 text-gray-500 border-gray-300 dark:border-gray-600 cursor-not-allowed' : 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 border-red-300 dark:border-red-500/50 hover:bg-red-200 dark:hover:bg-red-800/50'">
+                    <span v-if="isAnalyzing" class="w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full animate-spin"></span>
+                    {{ isAnalyzing ? '分析中...' : '☀️ 盘中突击' }}
+                </button>
+                <div class="hidden md:block text-xs text-gray-500 font-mono whitespace-nowrap">
+                    更新: {{ lastUpdated }}
+                </div>
+                
+                <!-- View Settings (Desktop) -->
+                <div class="hidden md:flex items-center gap-2 bg-gray-200 dark:bg-gray-800 rounded p-1 border border-gray-300 dark:border-gray-700">
+
+                    <button @click="showAggressivePanel = !showAggressivePanel" 
+                            class="px-2 py-1 text-[10px] rounded transition-colors"
+                            :class="showAggressivePanel ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-300' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'">
+                        竞价
+                    </button>
+                    <button @click="showManualPanel = !showManualPanel" 
+                            class="px-2 py-1 text-[10px] rounded transition-colors"
+                            :class="showManualPanel ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-600 dark:text-blue-300' : 'text-gray-500 hover:text-gray-700 dark:hover:text-gray-300'">
+                        自选
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Market Sentiment Dashboard -->
+        <div class="mb-4 px-2 md:px-4" v-if="marketSentiment">
+            <div class="relative bg-gray-800/80 dark:bg-gray-800/80 bg-white border border-gray-200 dark:border-gray-700 rounded-lg p-3 grid grid-cols-3 md:grid-cols-5 gap-2 md:gap-4 text-xs md:text-sm shadow-lg">
+                <!-- Refresh Status & Button -->
+                <div class="absolute top-1 right-1 flex items-center gap-1 z-10">
+                    <span class="text-[10px] text-gray-400 scale-90 origin-right" v-if="sentimentLastUpdate">
+                        {{ sentimentLastUpdate }}
+                    </span>
+                    <button @click="fetchMarketSentiment" 
+                            class="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
+                            :class="{'animate-spin': sentimentLoading}"
+                            title="刷新情绪数据">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3 text-gray-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                        </svg>
+                    </button>
+                </div>
+
+                <!-- Indices -->
+                <div class="col-span-3 md:col-span-2 flex items-center justify-around border-b md:border-b-0 md:border-r border-gray-200 dark:border-gray-700 pb-2 md:pb-0 md:pr-4">
+                    <div v-for="idx in marketSentiment.indices" :key="idx.name" class="flex flex-col items-center">
+                        <span class="text-gray-500 dark:text-gray-400 text-[10px]">{{ idx.name }}</span>
+                        <div class="flex items-center gap-1 font-bold">
+                            <span :class="getColorClass(idx.change)">{{ idx.current.toFixed(2) }}</span>
+                            <span :class="getColorClass(idx.change)">{{ idx.change > 0 ? '+' : '' }}{{ idx.change }}%</span>
+                        </div>
+                        <span class="text-gray-400 dark:text-gray-500 text-[10px]">{{ idx.amount }}亿</span>
+                    </div>
+                </div>
+                
+                <!-- Limit Stats -->
+                <div class="col-span-1 md:col-span-1 flex flex-col justify-center gap-1 border-r border-gray-200 dark:border-gray-700 pr-2 md:pr-4">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-500 dark:text-gray-400 text-[10px] scale-90 origin-left">涨停</span>
+                        <span class="text-red-500 font-bold">{{ marketSentiment.stats.limit_up_count }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-500 dark:text-gray-400 text-[10px] scale-90 origin-left">炸板</span>
+                        <span class="text-green-500 font-bold">{{ marketSentiment.stats.broken_count }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-500 dark:text-gray-400 text-[10px] scale-90 origin-left">跌停</span>
+                        <span class="text-green-700 dark:text-green-400 font-bold">{{ marketSentiment.stats.limit_down_count || '-' }}</span>
+                    </div>
+                </div>
+
+                <!-- Breadth Stats -->
+                <div class="col-span-1 md:col-span-1 flex flex-col justify-center gap-1 border-r border-gray-200 dark:border-gray-700 pr-2 md:pr-4">
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-500 dark:text-gray-400 text-[10px] scale-90 origin-left">上涨</span>
+                        <span class="text-red-500 font-bold">{{ marketSentiment.stats.up_count || '-' }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-500 dark:text-gray-400 text-[10px] scale-90 origin-left">下跌</span>
+                        <span class="text-green-500 font-bold">{{ marketSentiment.stats.down_count || '-' }}</span>
+                    </div>
+                    <div class="flex justify-between items-center">
+                        <span class="text-gray-500 dark:text-gray-400 text-[10px] scale-90 origin-left">成交</span>
+                        <span class="text-blue-500 dark:text-blue-400 font-bold text-[10px]">{{ marketSentiment.stats.total_volume }}亿</span>
+                    </div>
+                </div>
+                
+                <!-- Sentiment -->
+                <div class="col-span-1 md:col-span-1 flex flex-col justify-center items-center gap-1">
+                    <div class="text-center">
+                        <div class="text-gray-500 dark:text-gray-400 text-[10px] mb-1">市场情绪</div>
+                        <div class="font-bold text-sm" :class="{
+                            'text-gray-500': isDataIncomplete,
+                            'text-red-500': !isDataIncomplete && marketSentiment.stats.sentiment === 'High',
+                            'text-green-500': !isDataIncomplete && (marketSentiment.stats.sentiment === 'Low' || marketSentiment.stats.sentiment === 'Panic'),
+                            'text-yellow-500': !isDataIncomplete && marketSentiment.stats.sentiment === 'Neutral'
+                        }">{{ isDataIncomplete ? '等待数据' : marketSentiment.stats.suggestion }}</div>
+                    </div>
+                    <div class="w-full h-1.5 rounded-full bg-gray-200 dark:bg-gray-700 relative overflow-hidden mt-1">
+                        <div class="absolute top-0 left-0 h-full transition-all duration-500"
+                             :class="{
+                                'bg-gray-400 w-full': isDataIncomplete,
+                                'bg-red-500 w-full': !isDataIncomplete && marketSentiment.stats.sentiment === 'High',
+                                'bg-yellow-500 w-1/2': !isDataIncomplete && marketSentiment.stats.sentiment === 'Neutral',
+                                'bg-green-500 w-1/4': !isDataIncomplete && marketSentiment.stats.sentiment === 'Low',
+                                'bg-green-800 w-0': !isDataIncomplete && marketSentiment.stats.sentiment === 'Panic'
+                             }"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- News Modal -->
+        <div v-if="showNewsModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" @click.self="showNewsModal = false">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-4xl h-[80vh] flex flex-col overflow-hidden">
+                <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-gray-50 dark:bg-gray-900">
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                        <span>📰</span> 新闻舆情中心
+                    </h3>
+                    <div class="flex items-center gap-2">
+                        <div class="relative group">
+                            <button class="text-xs text-red-500 hover:text-red-700 border border-red-200 px-2 py-1 rounded flex items-center gap-1">
+                                清空历史 ▾
+                            </button>
+                            <div class="absolute right-0 mt-1 w-32 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded shadow-lg hidden group-hover:block z-20">
+                                <button @click="clearNewsHistory('all')" class="w-full text-left px-3 py-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700 text-red-600">全部清空</button>
+                                <button @click="clearNewsHistory('before_today')" class="w-full text-left px-3 py-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700">今天以前</button>
+                                <button @click="clearNewsHistory('before_3d')" class="w-full text-left px-3 py-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700">3天以前</button>
+                                <button @click="clearNewsHistory('before_7d')" class="w-full text-left px-3 py-2 text-xs hover:bg-gray-100 dark:hover:bg-gray-700">7天以前</button>
+                            </div>
+                        </div>
+                        <button @click="showNewsModal = false" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 text-2xl">&times;</button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-auto p-4 space-y-4 bg-gray-100 dark:bg-gray-900/50">
+                    <div v-if="newsList.length === 0" class="text-center text-gray-500 py-10">暂无新闻记录</div>
+                    <div v-for="(group, gIndex) in newsList" :key="gIndex" class="space-y-2">
+                        <div class="sticky top-0 z-10 bg-gray-200 dark:bg-gray-700 px-3 py-1 text-xs font-bold text-gray-600 dark:text-gray-300 rounded opacity-90">{{ group.date }}</div>
+                        <div v-for="(news, index) in group.items" :key="index" class="bg-white dark:bg-gray-800 p-4 rounded shadow-sm border border-gray-200 dark:border-gray-700">
+                            <div class="flex justify-between items-start mb-2">
+                                <span class="text-xs font-bold px-2 py-0.5 rounded bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">{{ news.source || '未知来源' }}</span>
+                                <span class="text-xs text-gray-500">{{ news.time_str }}</span>
+                            </div>
+                            <div class="text-sm text-gray-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap">{{ news.text }}</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Reason Modal (Mobile/Desktop) -->
+        <div v-if="showReasonModal" class="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4" @click.self="showReasonModal = false">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md overflow-hidden animate-fade-in-up">
+                <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center bg-purple-50 dark:bg-purple-900/20">
+                    <h3 class="font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                        <span>🎯</span> 选入逻辑
+                        <span class="text-sm font-normal text-gray-500">({{ currentReasonStock?.name }})</span>
+                    </h3>
+                    <button @click="showReasonModal = false" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 text-xl">&times;</button>
+                </div>
+                <div class="p-4 max-h-[60vh] overflow-y-auto">
+                    <div class="text-sm text-gray-700 dark:text-gray-300 leading-relaxed whitespace-pre-wrap markdown-content" v-html="renderMarkdown(currentReasonStock?.news_summary || '暂无详细逻辑描述')"></div>
+                </div>
+                <div class="p-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 text-right">
+                    <button @click="showReasonModal = false" class="px-4 py-1.5 bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300 rounded text-sm hover:bg-gray-300 dark:hover:bg-gray-600 transition-colors">关闭</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Modal -->
+
+
+        <!-- Main Content: Split View (Desktop) / Tabs (Mobile) -->
+        <div class="flex-1 flex flex-col md:flex-row gap-4 overflow-hidden px-2 md:px-4 pb-0 md:pb-4">
+            
+            <!-- Left Column: Pre-Market / Watchlist -->
+            <div class="flex-1 min-w-0 flex flex-col bg-white dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden h-full"
+                 :class="{'hidden': isMobile && activeTab !== 'pre', 'flex': !isMobile || activeTab === 'pre'}"
+                 v-show="(!isMobile && showAggressivePanel) || (isMobile && activeTab === 'pre')">
+                <div class="p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+                    <h2 class="text-purple-600 dark:text-purple-400 font-bold flex items-center gap-2 text-sm md:text-base">
+                        <span>🎯</span> 竞价抢筹 (Aggressive)
+                    </h2>
+                    <div class="flex items-center gap-2">
+                        <button @click="showAggressivePanel = false" class="hidden md:block text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300" title="隐藏面板">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                        <span class="text-xs text-gray-500">{{ aggressiveStocks.length }} 标的</span>
+                    </div>
+                </div>
+                
+                <!-- Scrollable Table Container -->
+                <div class="flex-1 overflow-auto relative">
+                    <div class="min-w-[800px]">
+                        <!-- Table Header -->
+                        <div class="grid gap-2 px-2 py-2 text-xs text-gray-500 border-b border-gray-200 dark:border-gray-700 bg-gray-100/90 dark:bg-gray-900/90 sticky top-0 z-30"
+                             style="grid-template-columns: 30px 60px 70px 60px 60px 50px 60px 1fr 45px 45px 45px 45px;">
+                            <div class="">排名</div>
+                            <div class="">代码</div>
+                            <div class="">名称</div>
+                            <div class="text-right">现价</div>
+                            <div class="text-right">涨幅</div>
+                            <div class="text-right">换手</div>
+                            <div class="text-right">流通</div>
+                            <div class="text-center">板块/概念</div>
+                            <div class="text-right cursor-help" title="晋级率">晋级</div>
+                            <div class="text-right cursor-help" title="首炸率">首炸</div>
+                            <div class="text-right cursor-help" title="溢价率">溢价</div>
+                            <div class="text-right">评分</div>
+                        </div>
+
+                        <!-- Scrollable List -->
+                        <div class="p-2 space-y-1">
+                            <div v-for="(stock, index) in aggressiveStocks" :key="stock.code" 
+                                 class="group rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-500/20 grid gap-2 items-center px-2 py-2 relative cursor-pointer"
+                                 @click="openChart(stock)"
+                                 style="grid-template-columns: 30px 60px 70px 60px 60px 50px 60px 1fr 45px 45px 45px 45px;">
+                                
+                                <!-- Reason Button (Floating) -->
+                                <button @click.stop="showReason(stock)" class="absolute left-0 top-0 bottom-0 w-1 bg-purple-500/50 hover:bg-purple-600 hover:w-2 transition-all z-10" title="查看选入逻辑"></button>
+                                
+                                <div class="font-mono text-gray-500 text-xs">#{{ index + 1 }}</div>
+                                <div class="text-gray-900 dark:text-gray-300 text-sm font-bold">{{ stock.code.replace('sh', '').replace('sz', '') }}</div>
+                                <div class="font-bold truncate sticky left-0 z-20 bg-purple-50 dark:bg-gray-800 group-hover:bg-gray-100 dark:group-hover:bg-gray-700 pl-2 border-r border-gray-200 dark:border-gray-700 shadow-sm text-sm">
+                                    <a :href="`https://quote.eastmoney.com/${stock.code.replace('sh', '').replace('sz', '')}.html`" target="_blank" class="hover:underline text-gray-900 dark:text-gray-100">{{ stock.name }}</a>
+                                </div>
+                                <div class="text-right font-mono text-gray-700 dark:text-gray-300">{{ stock.current.toFixed(2) }}</div>
+                                <div class="text-right font-bold" 
+                                     :class="getColorClass(stock.change_percent)">
+                                    {{ stock.change_percent }}%
+                                </div>
+                                <div class="text-right text-blue-600 dark:text-blue-400 font-mono text-xs">
+                                    {{ stock.turnover }}%
+                                </div>
+                                <div class="text-right font-mono text-xs text-gray-600 dark:text-gray-400">
+                                    {{ stock.circulation_value ? (stock.circulation_value / 100000000).toFixed(1) + '亿' : '-' }}
+                                </div>
+                                <div class="text-center text-xs text-gray-500 dark:text-gray-400 flex items-center justify-center gap-1 overflow-hidden">
+                                    <span :class="stock.showFullConcept ? 'whitespace-normal break-words' : 'truncate'" @click.stop="toggleConcept(stock)">{{ stock.concept }}</span>
+                                    <button @click.stop="analyzeStock(stock, 'aggressive')" class="text-xs bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-300 px-1.5 py-0.5 rounded hover:scale-110 transition-transform shadow-sm border border-purple-200 dark:border-purple-700 shrink-0" title="AI深度分析">
+                                        🤖
+                                    </button>
+                                </div>
+                                <!-- Metrics -->
+                                <div class="text-right text-xs text-red-600 dark:text-red-400">{{ stock.seal_rate || '-' }}</div>
+                                <div class="text-right text-xs text-green-600 dark:text-green-400">{{ stock.broken_rate || '-' }}</div>
+                                <div class="text-right text-xs text-blue-600 dark:text-blue-300">{{ stock.next_day_premium || '-' }}</div>
+
+                                <div class="text-right text-purple-600 dark:text-purple-400 font-bold">{{ stock.initial_score }}</div>
+                            </div>
+                            <div v-if="aggressiveStocks.length === 0" class="text-center text-gray-500 dark:text-gray-600 py-4 text-xs">暂无竞价目标</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Intraday Scanner -->
+            <div class="flex-1 min-w-0 flex flex-col bg-white dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden h-full"
+                 :class="{'hidden': isMobile && activeTab !== 'intra', 'flex': !isMobile || activeTab === 'intra'}"
+                 v-show="!isMobile || activeTab === 'intra'">
+                <div class="p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+                    <h2 class="text-red-600 dark:text-red-400 font-bold flex items-center gap-2 text-sm md:text-base">
+                        <span>🚀</span> 盘中打板 (Intraday)
+                    </h2>
+                    <div class="flex items-center gap-2">
+                        <span class="text-xs text-gray-500">动量排序</span>
+                    </div>
+                </div>
+
+                <!-- Scrollable Table Container -->
+                <div class="flex-1 overflow-auto relative">
+                    <div class="min-w-[950px]">
+                        <!-- Table Header -->
+                        <div class="grid gap-2 px-2 py-2 text-xs text-gray-500 border-b border-gray-200 dark:border-gray-700 bg-gray-100/90 dark:bg-gray-900/90 sticky top-0 z-30"
+                             style="grid-template-columns: 60px 70px 1fr 100px 60px 60px 50px 50px 60px 45px 45px 45px 45px;">
+                            <div class="">代码</div>
+                            <div class="">名称</div>
+                            <div class="text-center">板块/概念</div>
+                            <div class="text-center">疑似主力</div>
+                            <div class="text-right">现价</div>
+                            <div class="text-right">涨幅</div>
+                            <div class="text-right">涨速</div>
+                            <div class="text-right">换手</div>
+                            <div class="text-right">流通</div>
+                            <div class="text-right cursor-help" title="晋级率">晋级</div>
+                            <div class="text-right cursor-help" title="首炸率">首炸</div>
+                            <div class="text-right cursor-help" title="溢价率">溢价</div>
+                            <div class="text-right">连板</div>
+                        </div>
+
+                        <!-- List -->
+                        <div class="p-2 space-y-1">
+                            <transition-group name="list" tag="div" class="space-y-1">
+                                <div v-for="(stock, index) in limitUpStocks" :key="stock.code" 
+                                     class="group rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent grid gap-2 items-center px-2 py-2 cursor-pointer"
+                                     @click="openChart(stock)"
+                                     :class="getRowHighlightClass(stock)"
+                                     style="grid-template-columns: 60px 70px 1fr 100px 60px 60px 50px 50px 60px 45px 45px 45px 45px;">
+                                    
+                                    <div class="text-gray-900 dark:text-gray-300 text-sm font-bold flex items-center gap-1">
+                                        <button v-if="isEditMode" @click.stop="removeStock(stock, 'ai')" class="text-red-500 hover:text-red-700 font-bold px-1">×</button>
+                                        {{ stock.code.replace('sh', '').replace('sz', '') }}
+                                    </div>
+                                    <div class="font-bold truncate sticky left-0 z-20 bg-white dark:bg-gray-800 group-hover:bg-gray-100 dark:group-hover:bg-gray-700 pl-2 border-r border-gray-200 dark:border-gray-700 flex items-center justify-between shadow-sm text-sm">
+                                        <span class="text-gray-900 dark:text-gray-100">{{ stock.name }}</span>
+                                    </div>
+                                    <div class="text-center text-xs text-gray-500 dark:text-gray-400 flex items-center justify-center gap-1 overflow-hidden">
+                                        <span :class="stock.showFullConcept ? 'whitespace-normal break-words' : 'truncate'" @click.stop="toggleConcept(stock)">{{ stock.concept }}</span>
+                                        <button @click.stop="analyzeStock(stock, 'limitup')" class="text-xs bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-300 px-1.5 py-0.5 rounded hover:scale-110 transition-transform shadow-sm border border-purple-200 dark:border-purple-700 shrink-0" title="AI深度分析">
+                                            🤖
+                                        </button>
+                                    </div>
+                                    <div class="text-center text-xs font-bold text-yellow-600 dark:text-yellow-400 cursor-help truncate" :title="getSeatTooltip(stock)">
+                                        {{ getSeatName(stock) }}
+                                    </div>
+                                    <div class="text-right font-mono text-gray-700 dark:text-gray-300">{{ stock.current.toFixed(2) }}</div>
+                                    <div class="text-right font-bold" :class="getColorClass(stock.change_percent)">
+                                        {{ stock.change_percent }}%
+                                    </div>
+                                    <div class="text-right text-yellow-600 dark:text-yellow-500 font-mono text-xs">
+                                        {{ stock.speed }}%
+                                    </div>
+                                    <div class="text-right font-mono text-xs text-gray-600 dark:text-gray-400">
+                                        {{ stock.turnover }}%
+                                    </div>
+                                    <div class="text-right font-mono text-xs text-gray-600 dark:text-gray-400">
+                                        {{ stock.circulation_value ? (stock.circulation_value / 100000000).toFixed(1) + '亿' : '-' }}
+                                    </div>
+                                    <!-- Metrics -->
+                                    <div class="text-right text-xs text-red-600 dark:text-red-400">{{ stock.seal_rate || '-' }}</div>
+                                    <div class="text-right text-xs text-green-600 dark:text-green-400">{{ stock.broken_rate || '-' }}</div>
+                                    <div class="text-right text-xs text-blue-600 dark:text-blue-300">{{ stock.next_day_premium || '-' }}</div>
+                                    <div class="text-right text-xs text-purple-600 dark:text-purple-400 font-bold">{{ stock.limit_up_days || '-' }}</div>
+                                </div>
+                            </transition-group>
+                            <div v-if="limitUpStocks.length === 0" class="text-center text-gray-500 dark:text-gray-600 py-4 text-xs">暂无盘中目标</div>
+                        </div>
+                        
+                        <!-- Discarded List (Below Intraday) -->
+                        <div v-if="discardedStocks.length > 0" class="mt-4 border-t border-gray-200 dark:border-gray-700 pt-2">
+                            <div class="px-3 py-1 text-xs text-gray-500 font-bold">已剔除 / 变弱 (Discarded)</div>
+                            <div class="p-2 space-y-1 opacity-60 grayscale hover:grayscale-0 transition-all">
+                                <div v-for="(stock, index) in discardedStocks" :key="stock.code" 
+                                     class="rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent grid gap-2 items-center px-2 py-2 bg-gray-100 dark:bg-gray-800/30"
+                                     style="grid-template-columns: 60px 70px 1fr 100px 60px 60px 50px 50px 60px 45px 45px 45px 45px;">
+                                    
+                                    <div class="text-gray-500 text-sm font-bold">{{ stock.code.replace('sh', '').replace('sz', '') }}</div>
+                                    <div class="font-bold truncate text-gray-500">
+                                        <a :href="`https://quote.eastmoney.com/${stock.code.replace('sh', '').replace('sz', '')}.html`" target="_blank" class="hover:underline">{{ stock.name }}</a>
+                                    </div>
+                                    <div class="text-xs text-gray-500 truncate" :title="stock.news_summary || stock.concept">
+                                        {{ stock.news_summary || stock.concept }}
+                                    </div>
+                                    <div class="text-center text-xs text-gray-400">-</div>
+                                    <div class="text-right font-mono text-gray-500">{{ stock.current.toFixed(2) }}</div>
+                                    <div class="text-right font-bold" :class="getColorClass(stock.change_percent)">
+                                        {{ stock.change_percent }}%
+                                    </div>
+                                    <div class="text-right text-gray-500 dark:text-gray-600 font-mono text-xs">
+                                        {{ stock.speed }}%
+                                    </div>
+                                    <div class="text-right font-mono text-xs text-gray-500 dark:text-gray-600">
+                                        {{ stock.turnover }}%
+                                    </div>
+                                    <div class="text-right text-xs text-gray-400">-</div>
+                                    <!-- Metrics Placeholders -->
+                                    <div class="text-right text-xs text-gray-400">-</div>
+                                    <div class="text-right text-xs text-gray-400">-</div>
+                                    <div class="text-right text-xs text-gray-400">-</div>
+                                    <div class="text-right text-xs text-gray-400">-</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Manual Strategy Section -->
+            <div class="flex-1 min-w-0 flex flex-col bg-white dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden h-full"
+                 :class="{'hidden': isMobile && activeTab !== 'manual', 'flex': !isMobile || activeTab === 'manual'}"
+                 v-show="(!isMobile && showManualPanel) || (isMobile && activeTab === 'manual')">
+                <div class="p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+                    <h2 class="text-blue-600 dark:text-blue-400 font-bold flex items-center gap-2 text-sm md:text-base">
+                        <span>📝</span> 自选个股 (Manual)
+                    </h2>
+                    <div class="flex items-center gap-2">
+                        <button @click="isEditMode = !isEditMode" class="text-xs px-2 py-1 rounded border transition-colors" 
+                                :class="isEditMode ? 'bg-red-100 text-red-600 border-red-300' : 'bg-gray-100 text-gray-600 border-gray-300'">
+                            {{ isEditMode ? '完成' : '编辑' }}
+                        </button>
+                        <button @click="showManualPanel = false" class="hidden md:block text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300" title="隐藏面板">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                        <span class="text-xs text-gray-500">人工策略</span>
+                    </div>
+                </div>
+
+                <!-- Scrollable Table Container -->
+                <div class="flex-1 overflow-auto relative">
+                    <div class="min-w-[800px]">
+                        <!-- Table Header -->
+                        <div class="grid gap-2 px-2 py-2 text-xs text-gray-500 border-b border-gray-200 dark:border-gray-700 bg-gray-100/90 dark:bg-gray-900/90 sticky top-0 z-30"
+                             style="grid-template-columns: 60px 70px 1fr 60px 60px 50px 50px 60px 45px 45px 45px 45px;">
+                            <div class="">代码</div>
+                            <div class="">名称</div>
+                            <div class="text-center">板块/概念</div>
+                            <div class="text-right">现价</div>
+                            <div class="text-right">涨幅</div>
+                            <div class="text-right">涨速</div>
+                            <div class="text-right">换手</div>
+                            <div class="text-right">流通</div>
+                            <div class="text-right cursor-help" title="晋级率">晋级</div>
+                            <div class="text-right cursor-help" title="首炸率">首炸</div>
+                            <div class="text-right cursor-help" title="溢价率">溢价</div>
+                            <div class="text-right">连板</div>
+                        </div>
+
+                        <!-- List -->
+                        <div class="p-2 space-y-1">
+                            <transition-group name="list" tag="div" class="space-y-1">
+                                <div v-for="(stock, index) in manualStocks" :key="stock.code" 
+                                     class="group rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent grid gap-2 items-center px-2 py-2 cursor-pointer"
+                                     @click="openChart(stock)"
+                                     :class="getRowHighlightClass(stock)"
+                                     style="grid-template-columns: 60px 70px 1fr 60px 60px 50px 50px 60px 45px 45px 45px 45px;">
+                                    
+                                    <div class="text-gray-900 dark:text-gray-300 text-sm font-bold flex items-center gap-1">
+                                        <button v-if="isEditMode" @click.stop="removeStock(stock, 'favorite')" class="text-red-500 hover:text-red-700 font-bold px-1">×</button>
+                                        {{ stock.code.replace('sh', '').replace('sz', '') }}
+                                    </div>
+                                    <div class="font-bold truncate sticky left-0 z-20 bg-white dark:bg-gray-800 group-hover:bg-gray-100 dark:group-hover:bg-gray-700 pl-2 border-r border-gray-200 dark:border-gray-700 flex items-center justify-between shadow-sm text-sm">
+                                        <span class="text-gray-900 dark:text-gray-100">{{ stock.name }}</span>
+                                    </div>
+                                    <div class="text-center text-xs text-gray-500 dark:text-gray-400 flex items-center justify-center gap-1 overflow-hidden">
+                                        <span :class="stock.showFullConcept ? 'whitespace-normal break-words' : 'truncate'" @click.stop="toggleConcept(stock)">{{ stock.concept }}</span>
+                                        <button @click.stop="analyzeStock(stock, 'manual')" class="text-xs bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-300 px-1.5 py-0.5 rounded hover:scale-110 transition-transform shadow-sm border border-purple-200 dark:border-purple-700 shrink-0" title="AI深度分析">
+                                            🤖
+                                        </button>
+                                    </div>
+                                    <div class="text-right font-mono text-gray-700 dark:text-gray-300">{{ stock.current.toFixed(2) }}</div>
+                                    <div class="text-right font-bold" :class="getColorClass(stock.change_percent)">
+                                        {{ stock.change_percent }}%
+                                    </div>
+                                    <div class="text-right text-yellow-600 dark:text-yellow-500 font-mono text-xs">
+                                        {{ stock.speed }}%
+                                    </div>
+                                    <div class="text-right font-mono text-xs text-gray-600 dark:text-gray-400">
+                                        {{ stock.turnover }}%
+                                    </div>
+                                    <div class="text-right font-mono text-xs text-gray-600 dark:text-gray-400">
+                                        {{ stock.circulation_value ? (stock.circulation_value / 100000000).toFixed(1) + '亿' : '-' }}
+                                    </div>
+                                    <!-- Metrics -->
+                                    <div class="text-right text-xs text-red-600 dark:text-red-400">{{ stock.seal_rate || '-' }}</div>
+                                    <div class="text-right text-xs text-green-600 dark:text-green-400">{{ stock.broken_rate || '-' }}</div>
+                                    <div class="text-right text-xs text-blue-600 dark:text-blue-300">{{ stock.next_day_premium || '-' }}</div>
+                                    <div class="text-right text-xs text-purple-600 dark:text-purple-400 font-bold">{{ stock.limit_up_days || '-' }}</div>
+
+                                </div>
+                            </transition-group>
+                            <div v-if="manualStocks.length === 0" class="text-center text-gray-500 dark:text-gray-600 py-4 text-xs">暂无自选目标</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Middle Column: Pools (Limit Up & Broken) -->
+            <div class="flex-1 min-w-0 flex flex-col md:flex-row gap-0 md:gap-2 h-full"
+                 :class="{'hidden': isMobile && activeTab !== 'pool', 'flex': !isMobile || activeTab === 'pool'}"
+                 v-show="!isMobile || activeTab === 'pool'">
+                
+                <!-- Limit Up Pool Section -->
+                <div class="flex-1 min-w-0 flex flex-col bg-white dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden transition-all duration-300"
+                     :class="{'h-1/2 md:h-full': !isMobile, 'flex-1': isMobile && activePoolTab === 'limit_up', 'h-12 flex-none overflow-hidden': isMobile && activePoolTab !== 'limit_up'}">
+                    <div class="p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center cursor-pointer md:cursor-default"
+                         @click="isMobile ? activePoolTab = 'limit_up' : null">
+                        <h2 class="text-yellow-600 dark:text-yellow-400 font-bold flex items-center gap-2 text-sm md:text-base">
+                            <span>🔥</span> 已涨停 (Limit Up)
+                            <span v-if="isMobile && activePoolTab !== 'limit_up'" class="text-xs text-gray-400">(点击展开)</span>
+                        </h2>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-gray-500">{{ limitUpPool.length }} 只</span>
+                        </div>
+                    </div>
+
+                    <!-- Scrollable Table Container -->
+                    <div class="flex-1 overflow-auto relative" v-show="!isMobile || activePoolTab === 'limit_up'">
+                        <div class="min-w-[800px]">
+                            <!-- Table Header -->
+                            <div class="grid gap-2 px-2 py-2 text-xs text-gray-500 border-b border-gray-200 dark:border-gray-700 bg-gray-100/90 dark:bg-gray-900/90 sticky top-0 z-30"
+                                 style="grid-template-columns: 60px 70px 60px 60px 60px 60px 1.5fr 1fr 45px 45px 45px 45px;">
+                                <div class="">代码</div>
+                                <div class="">名称</div>
+                                <div class="text-right">现价</div>
+                                <div class="text-right">涨幅</div>
+                                <div class="text-right">首封时间</div>
+                                <div class="text-right">流通</div>
+                                <div class="">概念</div>
+                                <div class="">关联</div>
+                                <div class="text-right cursor-help" title="晋级率">晋级</div>
+                                <div class="text-right cursor-help" title="首炸率">首炸</div>
+                                <div class="text-right cursor-help" title="溢价率">溢价</div>
+                                <div class="text-right">连板</div>
+                            </div>
+
+                            <!-- List -->
+                            <div class="p-2 space-y-1">
+                                <transition-group name="list" tag="div" class="space-y-1">
+                                    <div v-for="(stock, index) in filteredLimitUpPool" :key="stock.code" 
+                                         class="group rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent grid gap-2 items-center px-2 py-2 bg-red-50 dark:bg-red-900/10 cursor-pointer"
+                                         @click="openChart(stock)"
+                                         style="grid-template-columns: 60px 70px 60px 60px 60px 60px 1.5fr 1fr 45px 45px 45px 45px;">
+                                        
+                                        <div class="text-gray-900 dark:text-gray-300 text-sm font-bold">{{ stock.code.replace('sh', '').replace('sz', '').replace('bj', '') }}</div>
+                                        <div class="font-bold truncate sticky left-0 z-20 bg-red-50 dark:bg-gray-800 group-hover:bg-gray-100 dark:group-hover:bg-gray-700 pl-2 border-r border-gray-200 dark:border-gray-700 shadow-sm text-sm">
+                                            <span class="text-gray-900 dark:text-gray-100">{{ stock.name }}</span>
+                                        </div>
+                                        <div class="text-right font-mono text-gray-700 dark:text-gray-300">{{ stock.current.toFixed(2) }}</div>
+                                        <div class="text-right font-bold text-red-600 dark:text-red-500">
+                                            {{ stock.change_percent }}%
+                                        </div>
+                                        <div class="text-right text-gray-500 dark:text-gray-400 text-xs">
+                                            {{ stock.time }}
+                                        </div>
+                                        <div class="text-right font-mono text-xs text-gray-600 dark:text-gray-400">
+                                            {{ stock.circulation_value ? (stock.circulation_value / 100000000).toFixed(1) + '亿' : '-' }}
+                                        </div>
+                                        <div class="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1 overflow-hidden">
+                                            <span :class="stock.showFullConcept ? 'whitespace-normal break-words' : 'truncate'" @click.stop="toggleConcept(stock)">{{ stock.concept }}</span>
+                                            <button @click.stop="analyzeStock(stock, 'limitup')" class="text-xs bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-300 px-1.5 py-0.5 rounded hover:scale-110 transition-transform shadow-sm border border-purple-200 dark:border-purple-700 shrink-0" title="AI深度分析">
+                                                🤖
+                                            </button>
+                                        </div>
+                                        <div class="text-xs text-gray-500 truncate" :title="stock.associated">
+                                            {{ stock.associated }}
+                                        </div>
+                                        <!-- Metrics -->
+                                        <div class="text-right text-xs text-red-600 dark:text-red-400">{{ stock.seal_rate || '-' }}</div>
+                                        <div class="text-right text-xs text-green-600 dark:text-green-400">{{ stock.broken_rate || '-' }}</div>
+                                        <div class="text-right text-xs text-blue-600 dark:text-blue-300">{{ stock.next_day_premium || '-' }}</div>
+                                        <div class="text-right text-xs text-purple-600 dark:text-purple-400 font-bold">{{ stock.limit_up_days || '-' }}</div>
+                                    </div>
+                                </transition-group>
+                                <div v-if="limitUpPool.length === 0" class="text-center text-gray-500 dark:text-gray-600 py-4 text-xs">暂无涨停股票</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Broken Limit Pool Section -->
+                <div class="flex-1 min-w-0 flex flex-col bg-white dark:bg-gray-800/50 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden transition-all duration-300"
+                     :class="{'h-1/2 md:h-full': !isMobile, 'flex-1': isMobile && activePoolTab === 'broken', 'h-12 flex-none overflow-hidden': isMobile && activePoolTab !== 'broken'}">
+                    <div class="p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center cursor-pointer md:cursor-default"
+                         @click="isMobile ? activePoolTab = 'broken' : null">
+                        <h2 class="text-gray-600 dark:text-gray-400 font-bold flex items-center gap-2 text-sm md:text-base">
+                            <span>💣</span> 炸板 (Broken Limit)
+                            <span v-if="isMobile && activePoolTab !== 'broken'" class="text-xs text-gray-400">(点击展开)</span>
+                        </h2>
+                        <div class="flex items-center gap-2">
+                            <span class="text-xs text-gray-500">{{ brokenLimitPool.length }} 只</span>
+                        </div>
+                    </div>
+
+                    <!-- Scrollable Table Container -->
+                    <div class="flex-1 overflow-auto relative" v-show="!isMobile || activePoolTab === 'broken'">
+                        <div class="min-w-[800px]">
+                            <!-- Table Header -->
+                            <div class="grid gap-2 px-2 py-2 text-xs text-gray-500 border-b border-gray-200 dark:border-gray-700 bg-gray-100/90 dark:bg-gray-900/90 sticky top-0 z-30"
+                                 style="grid-template-columns: 60px 70px 60px 60px 60px 60px 1.5fr 1fr 45px 45px 45px 45px;">
+                                <div class="">代码</div>
+                                <div class="">名称</div>
+                                <div class="text-right">现价</div>
+                                <div class="text-right">涨幅</div>
+                                <div class="text-right">首次炸板</div>
+                                <div class="text-right">流通</div>
+                                <div class="">概念</div>
+                                <div class="">关联</div>
+                                <div class="text-right">回封率</div>
+                                <div class="text-right">振幅</div>
+                                <div class="text-right">换手</div>
+                                <div class="text-right">连板</div>
+                            </div>
+
+                            <!-- List -->
+                            <div class="p-2 space-y-1">
+                                <transition-group name="list" tag="div" class="space-y-1">
+                                    <div v-for="(stock, index) in filteredBrokenLimitPool" :key="stock.code" 
+                                         class="group rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent grid gap-2 items-center px-2 py-2 bg-gray-50 dark:bg-gray-900/10"
+                                         style="grid-template-columns: 60px 70px 60px 60px 60px 60px 1.5fr 1fr 45px 45px 45px 45px;">
+                                        
+                                        <div class="text-gray-900 dark:text-gray-300 text-sm font-bold">{{ stock.code.replace('sh', '').replace('sz', '').replace('bj', '') }}</div>
+                                        <div class="font-bold truncate sticky left-0 z-20 bg-gray-50 dark:bg-gray-800 group-hover:bg-gray-100 dark:group-hover:bg-gray-700 pl-2 border-r border-gray-200 dark:border-gray-700 shadow-sm text-sm">
+                                            <a :href="`https://quote.eastmoney.com/${stock.code.replace('sh', '').replace('sz', '').replace('bj', '')}.html`" target="_blank" class="hover:underline text-gray-900 dark:text-gray-100">{{ stock.name }}</a>
+                                        </div>
+                                        <div class="text-right font-mono text-gray-700 dark:text-gray-300">{{ stock.current.toFixed(2) }}</div>
+                                        <div class="text-right font-bold" :class="getColorClass(stock.change_percent)">
+                                            {{ stock.change_percent }}%
+                                        </div>
+                                        <div class="text-right text-gray-500 dark:text-gray-400 text-xs">
+                                            {{ stock.time }}
+                                        </div>
+                                        <div class="text-right font-mono text-xs text-gray-600 dark:text-gray-400">
+                                            {{ stock.circulation_value ? (stock.circulation_value / 100000000).toFixed(1) + '亿' : '-' }}
+                                        </div>
+                                        <div class="text-xs text-gray-500 dark:text-gray-400 flex items-center gap-1 overflow-hidden">
+                                            <span :class="stock.showFullConcept ? 'whitespace-normal break-words' : 'truncate'" @click.stop="toggleConcept(stock)">{{ stock.concept }}</span>
+                                            <button @click.stop="analyzeStock(stock, 'limitup')" class="text-xs bg-purple-100 dark:bg-purple-900/50 text-purple-600 dark:text-purple-300 px-1.5 py-0.5 rounded hover:scale-110 transition-transform shadow-sm border border-purple-200 dark:border-purple-700 shrink-0" title="AI深度分析">
+                                                🤖
+                                            </button>
+                                        </div>
+                                        <div class="text-xs text-gray-500 truncate" :title="stock.associated">
+                                            {{ stock.associated }}
+                                        </div>
+                                        <!-- Metrics -->
+                                        <div class="text-right text-xs text-red-600 dark:text-red-400">{{ stock.seal_rate || '-' }}</div>
+                                        <div class="text-right text-xs text-gray-600 dark:text-gray-400">{{ stock.amplitude || '-' }}</div>
+                                        <div class="text-right text-xs text-blue-600 dark:text-blue-300">{{ stock.turnover || '-' }}</div>
+                                        <div class="text-right text-xs text-purple-600 dark:text-purple-400 font-bold">{{ stock.limit_up_days || '-' }}</div>
+                                    </div>
+                                </transition-group>
+                                <div v-if="brokenLimitPool.length === 0" class="text-center text-gray-500 dark:text-gray-600 py-4 text-xs">暂无炸板股票</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- AI Log Window (Bottom Panel) -->
+        <div class="h-32 md:h-40 bg-gray-50 dark:bg-black border-t border-gray-200 dark:border-gray-700 flex flex-col shrink-0">
+            <div class="px-4 py-1 bg-gray-100 dark:bg-gray-800 text-xs text-gray-500 dark:text-gray-400 flex justify-between items-center">
+                <span>🤖 AI 实时日志 (AI分析)</span>
+                <span class="w-2 h-2 rounded-full" :class="wsConnected ? 'bg-green-500' : 'bg-red-500'"></span>
+            </div>
+            <div class="flex-1 overflow-y-auto p-2 font-mono text-xs space-y-1" ref="logContainer">
+                <div v-for="(log, i) in logs" :key="i" class="text-gray-700 dark:text-gray-300 break-words">
+                    <span class="text-gray-500 dark:text-gray-600">[{{ log.time }}]</span> {{ log.msg }}
+                </div>
+                <div v-if="logs.length === 0" class="text-gray-500 dark:text-gray-600 italic">等待任务启动...</div>
+            </div>
+        </div>
+
+        <!-- AI Analysis Modal -->
+        <div v-if="showAnalysisModal" class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" @click.self="showAnalysisModal = false">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-lg flex flex-col max-h-[80vh]">
+                <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                        🤖 AI 深度分析: {{ analyzingStockName }}
+                    </h3>
+                    <button @click="showAnalysisModal = false" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+                <div class="p-6 overflow-y-auto text-sm leading-relaxed text-gray-700 dark:text-gray-300 relative min-h-[200px]">
+                    <!-- Initial Loading State -->
+                    <div v-if="isAnalyzingStock && !isReanalyzing" class="flex flex-col items-center justify-center py-8 absolute inset-0">
+                        <div class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin mb-4"></div>
+                        <p class="text-gray-500 animate-pulse">正在分析盘面数据...</p>
+                    </div>
+                    
+                    <!-- Content Area -->
+                    <div v-else class="relative">
+                        <!-- Re-analyzing Overlay -->
+                        <div v-if="isReanalyzing" class="absolute inset-0 bg-white/50 dark:bg-gray-800/50 z-10 flex items-center justify-center backdrop-blur-sm">
+                            <div class="flex flex-col items-center">
+                                <div class="w-8 h-8 border-3 border-blue-500 border-t-transparent rounded-full animate-spin mb-2"></div>
+                                <span class="text-xs font-bold text-blue-600 dark:text-blue-400">重新分析中...</span>
+                            </div>
+                        </div>
+                        
+                        <!-- Markdown Content -->
+                        <div v-html="renderMarkdown(displayedAnalysisResult)" class="markdown-content"></div>
+                    </div>
+                </div>
+                <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 rounded-b-lg flex flex-col gap-3">
+                    <div class="flex justify-end gap-2">
+                        <button @click="reAnalyzeStock" 
+                                class="px-4 py-2 bg-blue-100 dark:bg-blue-900/30 text-blue-600 dark:text-blue-400 rounded hover:bg-blue-200 dark:hover:bg-blue-900/50 transition-colors text-sm flex items-center gap-1"
+                                :disabled="analysisLoading">
+                            <span :class="{'animate-spin': analysisLoading}">↻</span>
+                            {{ analysisLoading ? '分析中...' : '重新分析' }}
+                        </button>
+                    </div>
+                    <div class="text-xs text-gray-500 text-center">
+                        AI分析仅供参考，不构成投资建议
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Settings Modal (Merged Filter & Config) -->
+        <div v-if="showSettingsModal" class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" @click.self="showSettingsModal = false">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-md flex flex-col max-h-[90vh]">
+                <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                        ⚙️ 系统设置
+                    </h3>
+                    <button @click="showSettingsModal = false" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+                
+                <div class="p-6 overflow-y-auto space-y-6">
+                    <!-- 1. Filter Settings -->
+                    <div>
+                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
+                            <span>🔍</span> 市场过滤
+                        </h4>
+                        <div class="space-y-3 pl-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">主板 (60/00)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showMainBoard" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">创业板 (30)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showChiNext" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">科创板 (68)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showStar" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">北交所 (8/4/92)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showBSE" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 2. Automation Settings -->
+                    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
+                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
+                            <span>🤖</span> 自动化配置
+                        </h4>
+                        <div class="space-y-3 pl-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">启用自动复盘</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="systemConfig.auto_analysis_enabled" class="sr-only peer">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-green-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">智能调度 (Smart Schedule)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="systemConfig.use_smart_schedule" class="sr-only peer">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-green-600"></div>
+                                </label>
+                            </div>
+                            <div v-if="!systemConfig.use_smart_schedule" class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">固定间隔 (分钟)</span>
+                                <input type="number" v-model.number="systemConfig.fixed_interval_minutes" class="w-16 px-2 py-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600">
+                            </div>
+
+                            <!-- Status Info -->
+                            <div class="bg-gray-100 dark:bg-gray-900 p-3 rounded text-xs space-y-1 font-mono text-gray-600 dark:text-gray-400 mt-2">
+                                <div class="flex justify-between">
+                                    <span>当前状态:</span>
+                                    <span :class="{'text-green-600': systemConfig.current_status.startsWith('Running'), 'text-gray-500': systemConfig.current_status === 'Idle'}">{{ systemConfig.current_status }}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span>上次运行:</span>
+                                    <span>{{ formatTime(systemConfig.last_run_time) }}</span>
+                                </div>
+                                <div class="flex justify-between">
+                                    <span>下次预计:</span>
+                                    <span>{{ formatTime(systemConfig.next_run_time) }}</span>
+                                </div>
+                            </div>
+
+                            <!-- Schedule Plan Editor -->
+                            <div v-if="systemConfig.use_smart_schedule && systemConfig.schedule_plan" class="mt-3 space-y-2">
+                                <div class="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1 flex justify-between items-center">
+                                    <span>调度计划表</span>
+                                    <span class="text-[10px] text-gray-400 font-normal">修改后请保存</span>
+                                </div>
+                                <div class="bg-gray-50 dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700 overflow-hidden">
+                                    <div class="grid grid-cols-12 gap-1 p-2 bg-gray-100 dark:bg-gray-800 text-[10px] font-bold text-gray-500">
+                                        <div class="col-span-3">时间段</div>
+                                        <div class="col-span-3">模式</div>
+                                        <div class="col-span-2">间隔(分)</div>
+                                        <div class="col-span-4">说明</div>
+                                    </div>
+                                    <div v-for="(rule, index) in systemConfig.schedule_plan" :key="index" class="grid grid-cols-12 gap-1 p-2 border-t border-gray-200 dark:border-gray-700 text-[10px] items-center hover:bg-gray-100 dark:hover:bg-gray-800/50" :class="{'bg-blue-50 dark:bg-blue-900/20 border-l-4 border-l-blue-500': index === systemConfig.active_rule_index}">
+                                        <div class="col-span-3 flex flex-col gap-1">
+                                            <input type="time" v-model="rule.start" class="bg-transparent border-none p-0 h-4 w-full focus:ring-0 text-gray-700 dark:text-gray-300">
+                                            <input type="time" v-model="rule.end" class="bg-transparent border-none p-0 h-4 w-full focus:ring-0 text-gray-700 dark:text-gray-300">
+                                        </div>
+                                        <div class="col-span-3">
+                                            <select v-model="rule.mode" class="bg-transparent border border-gray-300 dark:border-gray-600 rounded p-0 w-full focus:ring-0 text-[10px] h-6 text-gray-700 dark:text-gray-300">
+                                                <option value="intraday">盘中</option>
+                                                <option value="after_hours">盘后</option>
+                                                <option value="none">暂停</option>
+                                            </select>
+                                        </div>
+                                        <div class="col-span-2">
+                                            <input type="number" v-model.number="rule.interval" class="bg-transparent border border-gray-300 dark:border-gray-600 rounded px-1 w-full text-center h-6 text-gray-700 dark:text-gray-300">
+                                        </div>
+                                        <div class="col-span-4">
+                                            <input type="text" v-model="rule.desc" class="bg-transparent border-none p-0 w-full focus:ring-0 text-gray-500 h-6">
+                                        </div>
+                                    </div>
+                                </div>
+                                <div class="text-[10px] text-gray-400 mt-1">
+                                    * 时间段重叠时优先匹配上面的规则
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- 3. LHB Settings -->
+                    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
+                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
+                            <span>🐉</span> 龙虎榜数据配置
+                        </h4>
+                        <div class="space-y-3 pl-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">启用龙虎榜抓取</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="lhbConfig.enabled" class="sr-only peer">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-orange-600"></div>
+                                </label>
+                            </div>
+                            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                * 每日 18:00 自动同步当天数据
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">抓取周期 (天)</span>
+                                <input type="number" v-model.number="lhbConfig.days" class="w-20 px-2 py-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600">
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">最小买入额 (万)</span>
+                                <div class="flex items-center gap-1">
+                                    <input type="number" v-model.number="lhbConfig.min_amount_wan" class="w-20 px-2 py-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600">
+                                </div>
+                            </div>
+                            <div class="flex justify-end pt-2">
+                                <button @click="syncLHB" :disabled="!lhbConfig.enabled || isSyncingLHB" 
+                                        class="px-3 py-1 text-xs bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded border border-orange-200 dark:border-orange-700 hover:bg-orange-200 dark:hover:bg-orange-800/50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
+                                    <span v-if="isSyncingLHB" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
+                                    {{ isSyncingLHB ? '同步中...' : '立即同步数据' }}
+                                </button>
+                            </div>
+                            <p class="text-[10px] text-gray-400">
+                                * 数据将保存在本地 data 目录，包含龙虎榜记录及对应日期的1分钟K线。
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- 4. News Settings -->
+                    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
+                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
+                            <span>📰</span> 新闻中心配置
+                        </h4>
+                        <div class="space-y-3 pl-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">自动清理历史</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="systemConfig.news_auto_clean_enabled" class="sr-only peer">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div v-if="systemConfig.news_auto_clean_enabled" class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">保留天数</span>
+                                <input type="number" v-model.number="systemConfig.news_auto_clean_days" class="w-20 px-2 py-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600">
+                            </div>
+                            <p class="text-[10px] text-gray-400">
+                                * 开启后，系统在保存新抓取的新闻时会自动删除超过保留天数的旧记录。
+                            </p>
+                        </div>
+                    </div>
+
+                    <!-- 5. API Key Setting -->
+                    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
+                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
+                            <span>🔑</span> API 设置
+                        </h4>
+                        <div class="space-y-2 pl-2">
+                            <label class="block text-xs text-gray-500 dark:text-gray-400">DeepSeek API Key</label>
+                            <input type="password" v-model="apiKey" @change="saveApiKey" placeholder="sk-..." 
+                                   class="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500">
+                            <p class="text-[10px] text-gray-400">仅在本地独立运行时需要填写。服务器版本请忽略。</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 rounded-b-lg flex justify-end gap-2">
+                    <button @click="showSettingsModal = false" class="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">取消</button>
+                    <button @click="saveConfig" class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors">保存设置</button>
+                </div>
+                
+                <!-- Help Link -->
+                <div class="px-6 pb-4 text-center">
+                    <a href="/help" target="_blank" class="text-xs text-blue-500 hover:underline flex items-center justify-center gap-1">
+                        <span>📖</span> 查看使用帮助与功能说明
+                    </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Loading State -->
+        <div v-if="stocks.length === 0 && !isAnalyzing" class="absolute inset-0 flex items-center justify-center bg-white/90 dark:bg-gray-900/90 z-50">
+            <div class="text-center">
+                <div class="w-12 h-12 border-4 border-red-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
+                <p class="text-red-600 dark:text-red-500 tracking-widest animate-pulse">系统初始化中...</p>
+            </div>
+        </div>
+        <!-- Chart Modal -->
+        <div v-if="showChartModal" class="fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-0 md:p-4" @click.self="closeChartModal">
+            <div class="bg-white dark:bg-gray-800 md:rounded-lg shadow-xl w-full max-w-6xl h-full md:h-[85vh] flex flex-col overflow-hidden">
+                <div class="p-2 md:p-4 border-b border-gray-200 dark:border-gray-700 flex flex-col md:flex-row justify-between items-start md:items-center shrink-0 gap-2">
+                    <div class="flex items-center justify-between w-full md:w-auto gap-4">
+                        <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
+                            {{ currentStock.name }} <span class="text-sm font-normal text-gray-500">{{ currentStock.code.replace(/\D/g, '') }}</span>
+                        </h3>
+                        <button @click="closeChartModal" class="md:hidden text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 p-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
+                    <div class="flex flex-wrap gap-2 w-full md:w-auto justify-between md:justify-end items-center">
+                        <div class="flex gap-2 flex-1 md:flex-none">
+                            <button @click="switchChartType('1min')" :class="chartType === '1min' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'" class="px-3 py-1.5 rounded text-sm transition-colors flex-1 md:flex-none text-center font-medium">分时</button>
+                            <button @click="switchChartType('day')" :class="chartType === 'day' ? 'bg-blue-600 text-white' : 'bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300'" class="px-3 py-1.5 rounded text-sm transition-colors flex-1 md:flex-none text-center font-medium">日K</button>
+                        </div>
+                        <button @click="triggerAIAnalysis" :disabled="analyzingAI || loadingChart" class="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded text-sm flex items-center justify-center gap-2 transition-colors disabled:opacity-50 flex-1 md:flex-none font-medium shadow-sm">
+                            <span v-if="analyzingAI" class="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
+                            <span>{{ analyzingAI ? '分析中...' : (chartType === 'day' ? '🤖 日K分析' : '🤖 分时分析') }}</span>
+                        </button>
+                        <button @click="closeChartModal" class="hidden md:block text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 p-1">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div class="flex-1 flex flex-col md:block relative overflow-hidden">
+                    <div class="w-full h-[50vh] md:h-full relative shrink-0">
+                        <div id="klineChart" class="w-full h-full"></div>
+                    </div>
+                    <!-- AI Analysis Panel -->
+                    <transition 
+                        enter-active-class="transition ease-out duration-300" 
+                        enter-from-class="translate-y-full md:translate-y-0 md:translate-x-full opacity-0" 
+                        enter-to-class="translate-y-0 md:translate-x-0 opacity-100" 
+                        leave-active-class="transition ease-in duration-200" 
+                        leave-from-class="translate-y-0 md:translate-x-0 opacity-100" 
+                        leave-to-class="translate-y-full md:translate-y-0 md:translate-x-full opacity-0">
+                        <div v-show="aiAnalysisResult" ref="aiPanel" 
+                             class="w-full md:w-[400px] 
+                                    border-t md:border-t-0 md:border-l border-gray-200 dark:border-gray-700 
+                                    overflow-y-auto p-4 
+                                    bg-gray-50/95 dark:bg-gray-900/95 backdrop-blur-sm
+                                    shrink-0 
+                                    h-auto max-h-[40vh] 
+                                    md:h-full md:max-h-full 
+                                    z-20 
+                                    relative md:absolute md:top-0 md:right-0 shadow-2xl">
+                            <div class="flex justify-between items-center mb-4 sticky top-0 bg-transparent py-2 z-10">
+                                <h4 class="font-bold text-purple-600 flex items-center gap-2">
+                                    <span>🧠</span> AI 分析报告
+                                </h4>
+                                <div class="flex items-center gap-2">
+                                    <span class="text-xs text-gray-500">{{ new Date().toLocaleTimeString() }}</span>
+                                    <button @click="aiAnalysisResult = null" class="text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700">
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                                            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                        </svg>
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="markdown-content text-sm leading-relaxed pb-4 text-gray-800 dark:text-gray-200" v-html="renderMarkdown(aiAnalysisResult)"></div>
+                        </div>
+                    </transition>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endraw %}
+
+    <script>
+        const { createApp } = Vue
+
+        createApp({
+            data() {
+                return {
+                    // Data
+                    newsList: [],
+                    showNewsModal: false,
+                    showReasonModal: false,
+                    currentReasonStock: null,
+                    stocks: [],
+                    limitUpPool: [],
+                    brokenLimitPool: [],
+                    lastUpdated: '等待中...',
+                    previousPrices: {}, 
+                    isAnalyzing: false,
+                    activeTab: 'pre', // 'pre', 'intra', 'manual', 'pool'
+                    newStockCode: '',
+                    logs: [],
+                    wsConnected: false,
+                    currentTime: new Date(),
+                    searchQuery: '',
+                    searchResults: [],
+                    searchTimeout: null,
+                    isMobile: window.innerWidth < 768,
+                    marketSentiment: {
+                        indices: [],
+                        stats: {
+                            limit_up_count: 0,
+                            broken_count: 0,
+                            total_volume: 0,
+                            sentiment: 'Neutral',
+                            suggestion: '等待数据'
+                        }
+                    },
+                    sentimentLoading: false,
+                    sentimentLastUpdate: null,
+                    showAggressivePanel: true,
+                    showManualPanel: true,
+                    isDark: true,
+                    // Filter Settings
+                    filterSettings: {
+                        showMainBoard: true,
+                        showChiNext: true,
+                        showStar: true,
+                        showBSE: true
+                    },
+                    // AI Analysis Modal
+                    showAnalysisModal: false,
+                    analysisResult: '',
+                    displayedAnalysisResult: '', // For typewriter effect
+                    typewriterInterval: null,
+                    analyzingStockName: '',
+                    isAnalyzingStock: false,
+                    analysisLoading: false,
+                    isReanalyzing: false, // New flag for re-analysis
+                    currentAnalysisStock: null,
+                    currentPromptType: 'default',
+                    isEditMode: false,
+                    activePoolTab: 'limit_up', // 'limit_up' or 'broken'
+                    // Settings
+                    showSettingsModal: false,
+                    isSearchFocused: false,
+                    apiKey: '', // Store API Key
+                    systemConfig: {
+                        auto_analysis_enabled: true,
+                        use_smart_schedule: true,
+                        fixed_interval_minutes: 30,
+                        current_status: '空闲中',
+                        last_run_time: null,
+                        next_run_time: null,
+                        active_rule_index: -1,
+                        news_auto_clean_enabled: true,
+                        news_auto_clean_days: 14
+                    },
+                    lhbConfig: {
+                        enabled: false,
+                        days: 90,
+                        min_amount_wan: 5000
+                    },
+                    isSyncingLHB: false,
+                    // Chart Modal
+                    showChartModal: false,
+                    currentStock: {},
+                    chartType: '1min',
+                    aiAnalysisResult: null,
+                    analyzingAI: false,
+                    loadingChart: false,
+                    chartInstance: null,
+                }
+            },
+            computed: {
+                // Time-based visibility logic
+                isPreMarketTime() {
+                    const now = new Date();
+                    const day = now.getDay();
+                    const isWeekend = (day === 0 || day === 6);
+                    const h = now.getHours();
+                    const m = now.getMinutes();
+                    const timeVal = h * 100 + m;
+                    
+                    if (isWeekend) return true; // Show pre-market/results on weekend
+                    
+                    // Hide after 09:30, Show after 15:00
+                    if (timeVal >= 930 && timeVal < 1500) return false;
+                    return true;
+                },
+                showIntraday() {
+                    // Show Intraday if 09:30 <= time < 15:00
+                    const now = new Date();
+                    const day = now.getDay();
+                    const isWeekend = (day === 0 || day === 6);
+                    const h = now.getHours();
+                    const m = now.getMinutes();
+                    const timeVal = h * 100 + m;
+                    
+                    if (window.innerWidth < 768) return this.activeTab === 'intra';
+                    
+                    // Desktop logic: Hide after 15:00 or on weekends
+                    if (isWeekend || timeVal >= 1500) return false;
+                    return true;
+                },
+                // Left Column: Aggressive Strategy
+                aggressiveStocks() {
+                    return this.stocks
+                        .filter(s => s.strategy === 'Aggressive' && this.checkBoardVisibility(s.code))
+                        .sort((a, b) => b.initial_score - a.initial_score);
+                },
+                // Right Column: LimitUp Strategy
+                limitUpStocks() {
+                    return this.stocks
+                        .filter(s => s.strategy === 'LimitUp' && this.checkBoardVisibility(s.code)) 
+                        // Hide if already limit up (sealed)
+                        .filter(s => !s.is_limit_up)
+                        .map(stock => {
+                            const momentumScore = stock.change_percent; 
+                            const total = (stock.initial_score * 0.4) + (momentumScore * 0.6);
+                            return { ...stock, total_score: total };
+                        })
+                        .sort((a, b) => b.total_score - a.total_score);
+                },
+                // Manual Strategy (Favorites)
+                manualStocks() {
+                    return this.stocks
+                        .filter(s => s.is_favorite) // Removed checkBoardVisibility to ensure favorites are always visible
+                        // Sort by added_time desc (newest first), then score
+                        .sort((a, b) => {
+                            const timeA = a.added_time || 0;
+                            const timeB = b.added_time || 0;
+                            if (timeA !== timeB) return timeB - timeA;
+                            return b.initial_score - a.initial_score;
+                        });
+                },
+                // Discarded Stocks
+                discardedStocks() {
+                    return this.stocks
+                        .filter(s => s.strategy === 'Discarded' && this.checkBoardVisibility(s.code))
+                        .sort((a, b) => b.change_percent - a.change_percent);
+                },
+                filteredLimitUpPool() {
+                    return this.limitUpPool.filter(s => this.checkBoardVisibility(s.code));
+                },
+                filteredBrokenLimitPool() {
+                    return this.brokenLimitPool.filter(s => this.checkBoardVisibility(s.code));
+                },
+                isDataIncomplete() {
+                    if (!this.marketSentiment || !this.marketSentiment.stats) return true;
+                    const s = this.marketSentiment.stats;
+                    // If total volume is 0 or undefined, or if up+down counts are 0
+                    return (s.total_volume === 0 || (s.up_count === 0 && s.down_count === 0));
+                }
+            },
+            watch: {
+                // Removed resize logic as panel is now overlay
+            },
+            methods: {
+                async openNewsCenter() {
+                    this.showNewsModal = true;
+                    try {
+                        const res = await fetch('/api/news_history');
+                        const data = await res.json();
+                        if (data.status === 'success') {
+                            // Group by date
+                            const grouped = {};
+                            const today = new Date().toDateString();
+                            const yesterday = new Date(new Date().setDate(new Date().getDate() - 1)).toDateString();
+                            
+                            data.data.forEach(item => {
+                                const d = new Date(item.timestamp * 1000);
+                                let dateKey = d.toDateString();
+                                if (dateKey === today) dateKey = '今天';
+                                else if (dateKey === yesterday) dateKey = '昨天';
+                                else dateKey = d.toLocaleDateString();
+                                
+                                if (!grouped[dateKey]) grouped[dateKey] = [];
+                                grouped[dateKey].push(item);
+                            });
+                            
+                            // Convert to array for v-for
+                            this.newsList = Object.keys(grouped).map(key => ({
+                                date: key,
+                                items: grouped[key]
+                            }));
+                        }
+                    } catch (e) {
+                        console.error("Failed to fetch news history", e);
+                    }
+                },
+                async clearNewsHistory(range = 'all') {
+                    const labels = {
+                        'all': '全部',
+                        'before_today': '今天以前',
+                        'before_3d': '3天以前',
+                        'before_7d': '7天以前'
+                    };
+                    if (!confirm(`确定要清空 ${labels[range] || range} 的新闻历史吗？`)) return;
+                    try {
+                        const res = await fetch(`/api/news_history/clear?range=${range}`);
+                        const data = await res.json();
+                        if (data.status === 'success') {
+                            // Refresh news list
+                            await this.openNewsCenter();
+                        }
+                    } catch (e) {
+                        console.error("Failed to clear news history", e);
+                    }
+                },
+                showReason(stock) {
+                    this.currentReasonStock = stock;
+                    this.showReasonModal = true;
+                },
+                handleSearchBlur() {
+                    setTimeout(() => {
+                        this.isSearchFocused = false;
+                    }, 200);
+                },
+                async fetchLHBConfig() {
+                    try {
+                        const response = await fetch('/api/lhb/config');
+                        const data = await response.json();
+                        this.lhbConfig = {
+                            enabled: data.enabled,
+                            days: data.days,
+                            min_amount_wan: data.min_amount / 10000
+                        };
+                    } catch (e) {
+                        console.error('Failed to fetch LHB config:', e);
+                    }
+                },
+                async syncLHB() {
+                    if (this.isSyncingLHB) return;
+                    this.isSyncingLHB = true;
+                    // Save config first
+                    try {
+                        await fetch('/api/lhb/config', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                enabled: this.lhbConfig.enabled,
+                                days: this.lhbConfig.days,
+                                min_amount: this.lhbConfig.min_amount_wan * 10000
+                            })
+                        });
+                        
+                        // Trigger sync
+                        const response = await fetch('/api/lhb/sync', { method: 'POST' });
+                        const result = await response.json();
+                        if (result.status === 'ok') {
+                            alert('已触发后台同步，请留意日志窗口。');
+                        } else {
+                            alert(result.message);
+                        }
+                    } catch (e) {
+                        alert('同步请求失败');
+                    } finally {
+                        // Don't set false immediately, let polling handle it or just timeout
+                        // Actually, for better UX, we should poll status
+                        this.checkLHBStatus();
+                    }
+                },
+                async checkLHBStatus() {
+                    try {
+                        const response = await fetch('/api/lhb/status');
+                        const data = await response.json();
+                        this.isSyncingLHB = data.is_syncing;
+                    } catch (e) {
+                        console.error(e);
+                    }
+                },
+                async fetchConfig() {
+                    try {
+                        const response = await fetch('/api/config');
+                        const data = await response.json();
+                        this.systemConfig = data;
+                    } catch (e) {
+                        console.error('Failed to fetch config:', e);
+                    }
+                },
+                async saveConfig() {
+                    try {
+                        const response = await fetch('/api/config', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                auto_analysis_enabled: this.systemConfig.auto_analysis_enabled,
+                                use_smart_schedule: this.systemConfig.use_smart_schedule,
+                                fixed_interval_minutes: this.systemConfig.fixed_interval_minutes,
+                                schedule_plan: this.systemConfig.schedule_plan,
+                                news_auto_clean_enabled: this.systemConfig.news_auto_clean_enabled,
+                                news_auto_clean_days: this.systemConfig.news_auto_clean_days
+                            })
+                        });
+                        const data = await response.json();
+                        this.systemConfig = data.config;
+                        this.showSettingsModal = false;
+                        // Show toast or notification if needed
+                    } catch (e) {
+                        console.error('Failed to save config:', e);
+                        alert('保存设置失败');
+                    }
+                },
+                formatTime(timestamp) {
+                    if (!timestamp) return '无';
+                    const date = new Date(timestamp * 1000);
+                    return date.toLocaleString('zh-CN', { 
+                        month: '2-digit', 
+                        day: '2-digit', 
+                        hour: '2-digit', 
+                        minute: '2-digit',
+                        second: '2-digit'
+                    });
+                },
+                toggleConcept(stock) {
+                    stock.showFullConcept = !stock.showFullConcept;
+                },
+                checkBoardVisibility(code) {
+                    // Remove prefix if exists
+                    const rawCode = code.replace(/^(sh|sz|bj)/, '');
+                    
+                    // BSE: Starts with 8, 4, 92
+                    if (rawCode.startsWith('8') || rawCode.startsWith('4') || rawCode.startsWith('92')) {
+                        return this.filterSettings.showBSE;
+                    }
+                    // STAR: Starts with 68
+                    if (rawCode.startsWith('68')) {
+                        return this.filterSettings.showStar;
+                    }
+                    // ChiNext: Starts with 30
+                    if (rawCode.startsWith('30')) {
+                        return this.filterSettings.showChiNext;
+                    }
+                    // Main Board: Starts with 60, 00
+                    return this.filterSettings.showMainBoard;
+                },
+                saveFilterSettings() {
+                    localStorage.setItem('filterSettings', JSON.stringify(this.filterSettings));
+                },
+                saveApiKey() {
+                    localStorage.setItem('deepseek_api_key', this.apiKey);
+                },
+                toggleTheme() {
+                    this.isDark = !this.isDark;
+                    this.applyTheme();
+                    localStorage.setItem('theme', this.isDark ? 'dark' : 'light');
+                },
+                applyTheme() {
+                    if (this.isDark) {
+                        document.documentElement.classList.add('dark');
+                    } else {
+                        document.documentElement.classList.remove('dark');
+                    }
+                },
+                // Search Methods
+                onSearchInput() {
+                    if (this.searchTimeout) clearTimeout(this.searchTimeout);
+                    this.searchTimeout = setTimeout(async () => {
+                        if (!this.searchQuery || this.searchQuery.length < 2) {
+                            this.searchResults = [];
+                            return;
+                        }
+                        try {
+                            const response = await fetch(`/api/search?q=${this.searchQuery}`);
+                            this.searchResults = await response.json();
+                        } catch (e) {
+                            console.error(e);
+                        }
+                    }, 300);
+                },
+                async addStockFromSearch(item) {
+                    this.searchQuery = '';
+                    this.searchResults = [];
+                    await this.addStock(item.code);
+                },
+                
+                connectWebSocket() {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
+                    const ws = new WebSocket(wsUrl);
+                    
+                    ws.onopen = () => {
+                        this.wsConnected = true;
+                        this.addLog('系统连接成功');
+                    };
+                    
+                    ws.onmessage = (event) => {
+                        this.addLog(event.data);
+                    };
+                    
+                    ws.onclose = () => {
+                        this.wsConnected = false;
+                        setTimeout(this.connectWebSocket, 3000); // Reconnect
+                    };
+                },
+                addLog(msg) {
+                    const time = new Date().toLocaleTimeString();
+                    this.logs.push({ time, msg });
+                    if (this.logs.length > 100) this.logs.shift();
+                    // Auto scroll
+                    this.$nextTick(() => {
+                        const container = this.$refs.logContainer;
+                        if (container) container.scrollTop = container.scrollHeight;
+                    });
+                },
+                async runAnalysis(mode) {
+                    this.isAnalyzing = true;
+                    try {
+                        const response = await fetch(`/api/analyze?mode=${mode}`, { method: 'POST' });
+                        const result = await response.json();
+                        if (result.status === 'success') {
+                            // await this.fetchData(); // WebSocket will tell us when done
+                        } else {
+                            alert('分析失败: ' + result.message);
+                        }
+                    } catch (error) {
+                        console.error('Analysis error:', error);
+                        alert('请求错误');
+                    } finally {
+                        this.isAnalyzing = false;
+                    }
+                },
+                async addStock(code) {
+                    if (!code) return;
+                    
+                    try {
+                        // Use new API endpoint
+                        const response = await fetch(`/api/add_watchlist?code=${code}&name=手动添加`, { method: 'GET' });
+                        const result = await response.json();
+                        if (result.status === 'ok') {
+                            await this.fetchData();
+                        } else {
+                            alert('添加失败: ' + result.msg);
+                        }
+                    } catch (error) {
+                        alert('添加错误');
+                    }
+                },
+                async fetchData() {
+                    try {
+                        const response = await fetch('/api/stocks');
+                        const data = await response.json();
+                        
+                        const now = Date.now();
+                        data.forEach(stock => {
+                            const prev = this.previousPrices[stock.code];
+                            if (prev) {
+                                const speed = ((stock.current - prev) / prev) * 100;
+                                stock.speed = speed.toFixed(2);
+                            } else {
+                                stock.speed = "0.00";
+                            }
+                            this.previousPrices[stock.code] = stock.current;
+                        });
+
+                        this.stocks = data;
+                        this.lastUpdated = new Date().toLocaleTimeString();
+                    } catch (error) {
+                        console.error('Data fetch failed:', error);
+                    }
+                },
+                async fetchIndices() {
+                    try {
+                        const response = await fetch('/api/indices');
+                        const data = await response.json();
+                        if (data && data.length > 0) {
+                            // Update indices in marketSentiment object to reflect in UI
+                            if (!this.marketSentiment) this.marketSentiment = {};
+                            this.marketSentiment.indices = data;
+                        }
+                    } catch (error) {
+                        console.error('Indices fetch failed:', error);
+                    }
+                },
+                async fetchLimitUpPool() {
+                    try {
+                        const response = await fetch('/api/limit_up_pool');
+                        const data = await response.json();
+                        if (data.limit_up) {
+                            this.limitUpPool = data.limit_up;
+                            this.brokenLimitPool = data.broken || [];
+                        } else {
+                            this.limitUpPool = data;
+                            this.brokenLimitPool = [];
+                        }
+                    } catch (error) {
+                        console.error('Limit Up Pool fetch failed:', error);
+                    }
+                },
+                async fetchMarketSentiment() {
+                    this.sentimentLoading = true;
+                    try {
+                        const response = await fetch('/api/market_sentiment');
+                        this.marketSentiment = await response.json();
+                        this.sentimentLastUpdate = new Date().toLocaleTimeString();
+                    } catch (error) {
+                        console.error('Market Sentiment fetch failed:', error);
+                    } finally {
+                        this.sentimentLoading = false;
+                    }
+                },
+                getSeatName(stock) {
+                    if (stock.likely_seats && stock.likely_seats.length > 0) {
+                        return stock.likely_seats[0].name;
+                    }
+                    return '-';
+                },
+                getSeatTooltip(stock) {
+                    if (stock.likely_seats && stock.likely_seats.length > 0) {
+                        const s = stock.likely_seats[0];
+                        return `特征匹配度 ${s.similarity}% (${s.desc})`;
+                    }
+                    return '';
+                },
+                getColorClass(percent) {
+                    if (percent > 0) return 'text-red-600 dark:text-red-400';
+                    if (percent < 0) return 'text-green-600 dark:text-green-400';
+                    return 'text-gray-500 dark:text-gray-400';
+                },
+                getRowHighlightClass(stock) {
+                    // Stop blinking if market is closed (after 15:00)
+                    const now = new Date();
+                    const hours = now.getHours();
+                    const isMarketClosed = hours >= 15;
+
+                    if (stock.strategy === 'LimitUp' && stock.change_percent > 8 && !isMarketClosed) {
+                        return 'bg-red-900/40 animate-pulse border-red-500';
+                    }
+                    return 'border-gray-800';
+                },
+                renderMarkdown(text) {
+                    if (!text) return '';
+                    try {
+                        return marked.parse(text);
+                    } catch (e) {
+                        console.error('Markdown parsing error:', e);
+                        return text;
+                    }
+                },
+                async removeStock(stock, listType = 'all') {
+                    if (!confirm(`确定要删除 ${stock.name} (${stock.code}) 吗？`)) return;
+                    
+                    try {
+                        const response = await fetch('/api/watchlist/remove', { 
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ code: stock.code, type: listType })
+                        });
+                        const result = await response.json();
+                        if (result.status === 'success') {
+                            // Refresh data to reflect changes (stock might still exist in other list)
+                            await this.fetchData();
+                        } else {
+                            alert('删除失败: ' + result.message);
+                        }
+                    } catch (error) {
+                        console.error('Remove error:', error);
+                        alert('删除请求错误');
+                    }
+                },
+                startTypewriter(text) {
+                    if (this.typewriterInterval) clearInterval(this.typewriterInterval);
+                    this.displayedAnalysisResult = '';
+                    let i = 0;
+                    // Faster speed: 5ms
+                    this.typewriterInterval = setInterval(() => {
+                        if (i < text.length) {
+                            // Append a chunk of characters to make it faster and smoother
+                            const chunk = text.slice(i, i + 5);
+                            this.displayedAnalysisResult += chunk;
+                            i += 5;
+                        } else {
+                            clearInterval(this.typewriterInterval);
+                            this.displayedAnalysisResult = text; // Ensure full text
+                        }
+                    }, 10);
+                },
+                async analyzeStock(stock, promptType = 'default') {
+                    // [Fix] Check if already analyzing
+                    if (this.analyzingStocks && this.analyzingStocks[stock.code]) {
+                        // Just open modal, don't re-fetch
+                        this.analyzingStockName = stock.name;
+                        this.currentAnalysisStock = stock;
+                        this.currentPromptType = promptType;
+                        this.showAnalysisModal = true;
+                        this.isAnalyzingStock = true;
+                        this.analysisLoading = true;
+                        this.analysisResult = '正在分析中，请稍候...';
+                        this.displayedAnalysisResult = this.analysisResult;
+                        return;
+                    }
+
+                    this.analyzingStockName = stock.name;
+                    this.currentAnalysisStock = stock;
+                    this.currentPromptType = promptType; // Store prompt type
+                    this.showAnalysisModal = true;
+                    this.isAnalyzingStock = true;
+                    this.analysisLoading = true;
+                    this.analysisResult = '';
+                    this.displayedAnalysisResult = '';
+                    this.isReanalyzing = false;
+                    
+                    // Set analyzing flag
+                    if (!this.analyzingStocks) this.analyzingStocks = {};
+                    this.analyzingStocks[stock.code] = true;
+                    
+                    try {
+                        const payload = {
+                            code: stock.code,
+                            name: stock.name,
+                            current: stock.current,
+                            change_percent: stock.change_percent,
+                            concept: stock.concept,
+                            turnover: stock.turnover,
+                            circulation_value: stock.circulation_value,
+                            metrics: {
+                                seal_rate: stock.seal_rate,
+                                broken_rate: stock.broken_rate,
+                                next_day_premium: stock.next_day_premium,
+                                limit_up_days: stock.limit_up_days,
+                                speed: stock.speed,
+                                turnover: stock.turnover,
+                                circulation_value: stock.circulation_value
+                            },
+                            promptType: promptType,
+                            force: false, // Default use cache
+                            apiKey: this.apiKey // Pass API Key
+                        };
+                        
+                        const response = await fetch('/api/analyze_stock', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        
+                        const result = await response.json();
+                        
+                        // Race condition check
+                        if (this.currentAnalysisStock.code !== stock.code) return;
+                        
+                        if (result.status === 'success') {
+                            this.analysisResult = result.analysis;
+                            this.startTypewriter(result.analysis);
+                        } else {
+                            this.analysisResult = '分析失败: ' + result.message;
+                            this.displayedAnalysisResult = this.analysisResult;
+                        }
+                        this.isAnalyzingStock = false; // Stop loading spinner
+                    } catch (error) {
+                        if (this.currentAnalysisStock.code === stock.code) {
+                            this.analysisResult = '请求错误: ' + error.message;
+                            this.displayedAnalysisResult = this.analysisResult;
+                            this.isAnalyzingStock = false; // Stop loading spinner
+                        }
+                    } finally {
+                        // Clear analyzing flag
+                        if (this.analyzingStocks) this.analyzingStocks[stock.code] = false;
+                        
+                        if (this.currentAnalysisStock.code === stock.code) {
+                            this.analysisLoading = false;
+                            this.isReanalyzing = false;
+                        }
+                    }
+                },
+                async reAnalyzeStock() {
+                    if (!this.currentAnalysisStock) return;
+                    const stock = this.currentAnalysisStock;
+                    const promptType = this.currentPromptType || 'default';
+                    
+                    // [Fix] Check if already analyzing
+                    if (this.analyzingStocks && this.analyzingStocks[stock.code]) {
+                        return;
+                    }
+
+                    this.analysisLoading = true;
+                    this.isReanalyzing = true;
+                    // Do NOT clear analysisResult here to keep text visible
+                    
+                    // Set analyzing flag
+                    if (!this.analyzingStocks) this.analyzingStocks = {};
+                    this.analyzingStocks[stock.code] = true;
+
+                    try {
+                        const payload = {
+                            code: stock.code,
+                            name: stock.name,
+                            current: stock.current,
+                            change_percent: stock.change_percent,
+                            concept: stock.concept,
+                            turnover: stock.turnover,
+                            circulation_value: stock.circulation_value,
+                            metrics: {
+                                seal_rate: stock.seal_rate,
+                                broken_rate: stock.broken_rate,
+                                next_day_premium: stock.next_day_premium,
+                                limit_up_days: stock.limit_up_days,
+                                speed: stock.speed,
+                                turnover: stock.turnover,
+                                circulation_value: stock.circulation_value
+                            },
+                            promptType: promptType,
+                            force: true, // Force re-analysis
+                            apiKey: this.apiKey // Pass API Key
+                        };
+                        
+                        const response = await fetch('/api/analyze_stock', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(payload)
+                        });
+                        
+                        const result = await response.json();
+                        
+                        if (this.currentAnalysisStock.code === stock.code) {
+                            if (result.status === 'success') {
+                                this.analysisResult = result.analysis;
+                                this.startTypewriter(result.analysis);
+                            } else {
+                                this.analysisResult = '分析失败: ' + result.message;
+                                this.displayedAnalysisResult = this.analysisResult;
+                            }
+                            this.isAnalyzingStock = false; // Stop loading spinner
+                        }
+                    } catch (error) {
+                        if (this.currentAnalysisStock.code === stock.code) {
+                            this.analysisResult = '请求错误: ' + error.message;
+                            this.displayedAnalysisResult = this.analysisResult;
+                            this.isAnalyzingStock = false; // Stop loading spinner
+                        }
+                    } finally {
+                        // Clear analyzing flag
+                        if (this.analyzingStocks) this.analyzingStocks[stock.code] = false;
+
+                        if (this.currentAnalysisStock.code === stock.code) {
+                            this.analysisLoading = false;
+                            this.isReanalyzing = false;
+                        }
+                    }
+                },
+                closeAnalysisModal() {
+                    this.showAnalysisModal = false;
+                    this.currentAnalysisStock = null;
+                    if (this.typewriterInterval) clearInterval(this.typewriterInterval);
+                },
+                openChart(stock) {
+                    this.currentStock = stock;
+                    this.showChartModal = true;
+                    this.aiAnalysisResult = null;
+                    this.chartType = '1min';
+                    this.loadingChart = true;
+                    this.currentAISignals = []; // Reset signals
+                    this.currentKlineData = []; // Reset data
+                    this.$nextTick(() => {
+                        this.initChart();
+                        this.fetchKline('1min');
+                        this.fetchAIMarkers();
+                    });
+                },
+                closeChartModal() {
+                    this.showChartModal = false;
+                    this.loadingChart = false;
+                    this.currentAISignals = [];
+                    if (this.chartInstance) {
+                        this.chartInstance.dispose();
+                        this.chartInstance = null;
+                    }
+                    if (this._resizeHandler) {
+                        window.removeEventListener('resize', this._resizeHandler);
+                        this._resizeHandler = null;
+                    }
+                },
+                initChart() {
+                    const chartDom = document.getElementById('klineChart');
+                    if (chartDom) {
+                        if (this.chartInstance) {
+                            this.chartInstance.dispose();
+                        }
+                        this.chartInstance = echarts.init(chartDom);
+                        
+                        // Add blank area click listener to close AI analysis
+                        this.chartInstance.getZr().on('click', (params) => {
+                            if (!params.target) {
+                                this.aiAnalysisResult = null;
+                            }
+                        });
+
+                        // Remove existing resize listener if any (to prevent leaks)
+                        if (this._resizeHandler) {
+                            window.removeEventListener('resize', this._resizeHandler);
+                        }
+                        this._resizeHandler = () => {
+                            this.chartInstance && this.chartInstance.resize();
+                        };
+                        window.addEventListener('resize', this._resizeHandler);
+                    }
+                },
+                async switchChartType(type) {
+                    if (this.chartType === type) return;
+                    this.chartType = type;
+                    this.currentAISignals = []; // Clear signals to prevent bleeding
+                    this.aiAnalysisResult = null; // Clear analysis text
+                    this.loadingChart = true;
+                    
+                    // Fetch both kline and markers for the new type
+                    await Promise.all([
+                        this.fetchKline(type),
+                        this.fetchAIMarkers()
+                    ]);
+                },
+                async fetchKline(type) {
+                    const code = this.currentStock.code;
+                    // this.chartType = type; // Already set in switchChartType
+                    this.loadingChart = true;
+                    if (this.chartInstance) {
+                        this.chartInstance.clear();
+                        this.chartInstance.showLoading({
+                            text: '加载中...',
+                            color: '#ef4444',
+                            textColor: '#ef4444',
+                            maskColor: 'rgba(255, 255, 255, 0.8)',
+                            zlevel: 0
+                        });
+                    }
+                    try {
+                        const res = await fetch(`/api/stock/kline?code=${code}&type=${type}`);
+                        
+                        if (!this.showChartModal || this.currentStock.code !== code) return;
+
+                        const data = await res.json();
+                        if (data.status === 'success' && Array.isArray(data.data)) {
+                            this.renderChart(data.data);
+                        } else {
+                            console.error(data.message || 'Invalid data format');
+                        }
+                    } catch (e) {
+                        console.error(e);
+                    } finally {
+                        if (this.showChartModal && this.currentStock.code === code) {
+                            this.loadingChart = false;
+                            if (this.chartInstance) this.chartInstance.hideLoading();
+                        }
+                    }
+                },
+                renderChart(data) {
+                    if (!this.chartInstance || this.chartInstance.isDisposed()) return;
+                    if (!data || !Array.isArray(data) || data.length === 0) return;
+                    
+                    this.currentKlineData = data;
+                    const aiSignals = this.currentAISignals || [];
+
+                    // 1. Strict Data Sanitization
+                    const cleanData = [];
+                    for (let i = 0; i < data.length; i++) {
+                        const item = data[i];
+                        const date = String(item.date || item.时间);
+                        const open = parseFloat(item.open || item.开盘);
+                        const close = parseFloat(item.close || item.收盘);
+                        const low = parseFloat(item.low || item.最低);
+                        const high = parseFloat(item.high || item.最高);
+                        const vol = parseFloat(item.volume || item.成交量 || 0);
+
+                        // Ensure valid numbers and date
+                        if (date && !isNaN(open) && !isNaN(close) && !isNaN(low) && !isNaN(high)) {
+                            cleanData.push({ date, values: [open, close, low, high, vol] });
+                        }
+                    }
+
+                    if (cleanData.length === 0) return;
+
+                    const isDay = this.chartType === 'day';
+                    const dates = cleanData.map(d => d.date);
+                    const values = cleanData.map(d => d.values);
+                    const volumes = values.map((item, i) => [i, item[4], item[0] > item[1] ? -1 : 1]);
+
+                    // Calculate MA for Day chart
+                    const calculateMA = (dayCount) => {
+                        var result = [];
+                        for (var i = 0, len = values.length; i < len; i++) {
+                            if (i < dayCount) {
+                                result.push('-');
+                                continue;
+                            }
+                            var sum = 0;
+                            for (var j = 0; j < dayCount; j++) {
+                                sum += values[i - j][1];
+                            }
+                            result.push((sum / dayCount).toFixed(2));
+                        }
+                        return result;
+                    };
+
+                    // VWAP Calculation (Intraday)
+                    const calculateVWAP = () => {
+                        let cumTPV = 0;
+                        let cumVol = 0;
+                        return values.map(item => {
+                            const open = item[0];
+                            const close = item[1];
+                            const low = item[2];
+                            const high = item[3];
+                            const vol = item[4];
+                            // Use average of OHLC as typical price approximation
+                            const typicalPrice = (open + close + high + low) / 4;
+                            cumTPV += typicalPrice * vol;
+                            cumVol += vol;
+                            return cumVol === 0 ? 0 : cumTPV / cumVol;
+                        });
+                    };
+
+                    // Calculate TD11 (11-Turn)
+                    const calculateTD11 = () => {
+                        const points = [];
+                        let buySetup = 0;
+                        let sellSetup = 0;
+                        
+                        for (let i = 0; i < values.length; i++) {
+                            if (i < 4) continue;
+                            const close = values[i][1];
+                            const close4 = values[i-4][1];
+                            
+                            if (close < close4) {
+                                buySetup++;
+                                sellSetup = 0;
+                            } else if (close > close4) {
+                                sellSetup++;
+                                buySetup = 0;
+                            } else {
+                                buySetup = 0;
+                                sellSetup = 0;
+                            }
+                            
+                            if (buySetup === 11) {
+                                points.push({ 
+                                    coord: [i, values[i][2]], 
+                                    value: 'B11',
+                                    itemStyle: { color: '#ef4444' },
+                                    label: { color: '#fff', fontWeight: 'bold', fontSize: 10 }
+                                });
+                            } else if (sellSetup === 11) {
+                                points.push({ 
+                                    coord: [i, values[i][3]], 
+                                    value: 'S11',
+                                    itemStyle: { color: '#22c55e' },
+                                    label: { color: '#fff', fontWeight: 'bold', fontSize: 10 }
+                                });
+                            }
+                        }
+                        return points;
+                    };
+
+                    let markPointsData = isDay ? calculateTD11() : [];
+
+                    // Add AI Signals
+                    if (aiSignals && aiSignals.length > 0) {
+                        // Filter duplicate signals for same date/time to avoid clutter
+                        const uniqueSignals = [];
+                        const seenDates = new Set();
+                        
+                        aiSignals.forEach(s => {
+                            if (!s.date) return;
+                            // Normalize date key
+                            const key = String(s.date).substring(0, 16);
+                            if (!seenDates.has(key)) {
+                                seenDates.add(key);
+                                uniqueSignals.push(s);
+                            }
+                        });
+
+                        uniqueSignals.forEach(signal => {
+                            if (!signal.date) return;
+                            
+                            let idx = -1;
+                            const signalDate = String(signal.date);
+                            
+                            // 1. Exact match
+                            idx = dates.indexOf(signalDate);
+                            
+                            // 2. Day match (YYYY-MM-DD)
+                            if (idx === -1) {
+                                const shortDate = signalDate.split(' ')[0];
+                                // Find first occurrence of this date
+                                idx = dates.findIndex(d => d === shortDate || d.startsWith(shortDate));
+                            }
+                            
+                            // 3. Fuzzy match for intraday (HH:MM)
+                            if (idx === -1 && !isDay) {
+                                // signalDate might be "2025-12-24 09:32:00"
+                                // dates might be "2025-12-24 09:32"
+                                const signalTime = signalDate.substring(0, 16); // "2025-12-24 09:32"
+                                idx = dates.findIndex(d => d.startsWith(signalTime));
+                            }
+                            
+                            if (idx !== -1) {
+                                // Check for overlap with existing points (TD11 or others)
+                                const existingPoints = markPointsData.filter(p => p.coord[0] === idx);
+                                const overlapCount = existingPoints.length;
+                                
+                                // Calculate offset: If overlap, move up/down
+                                // Base offset is 0. Each overlap adds vertical distance.
+                                // If signal is 'buy' (below), move lower (positive y offset).
+                                // If signal is 'sell' (above), move higher (negative y offset).
+                                // Note: symbolOffset is [x, y]. Positive y moves down.
+                                
+                                let yOffset = 0;
+                                if (overlapCount > 0) {
+                                    // Check if existing is same type to stack, or different to separate?
+                                    // Simple strategy: Just stack them outwards.
+                                    // If buy, move down by 50 * count
+                                    // If sell, move up by 50 * count
+                                    yOffset = (signal.type === 'buy' ? 1 : -1) * (overlapCount * 50);
+                                }
+
+                                markPointsData.push({
+                                    coord: [idx, signal.price || values[idx][1]],
+                                    value: signal.type === 'buy' ? 'AI买' : 'AI卖',
+                                    itemStyle: { color: signal.type === 'buy' ? '#ef4444' : '#22c55e' },
+                                    symbolOffset: [0, yOffset], // Apply offset
+                                    label: { 
+                                        formatter: function(params) {
+                                            return params.data.value;
+                                        },
+                                        fontSize: 10,
+                                        fontWeight: 'bold',
+                                        color: '#fff'
+                                    },
+                                    // Store reason in data for click handler
+                                    reason: signal.reason
+                                });
+                            }
+                        });
+                    }
+
+                    const option = {
+                        animation: false,
+                        tooltip: {
+                            trigger: 'axis',
+                            triggerOn: window.innerWidth < 768 ? 'click' : 'mousemove', // Click for mobile, hover for PC
+                            confine: true, // Keep tooltip inside chart
+                            enterable: true, // Allow mouse to enter tooltip
+                            axisPointer: { type: 'cross' },
+                            borderWidth: 1,
+                            borderColor: '#ccc',
+                            padding: 10,
+                            textStyle: { color: '#333' },
+                            position: function (pos, params, el, elRect, size) {
+                                const obj = { top: 10 };
+                                obj[['left', 'right'][+(pos[0] < size.viewSize[0] / 2)]] = 30;
+                                return obj;
+                            }
+                        },
+                        axisPointer: {
+                            link: [{ xAxisIndex: 'all' }],
+                            label: { backgroundColor: '#777' }
+                        },
+                        visualMap: {
+                            show: false,
+                            seriesIndex: 1, // Volume series
+                            dimension: 2,
+                            pieces: [
+                                { value: 1, color: '#ef4444' },
+                                { value: -1, color: '#22c55e' }
+                            ]
+                        },
+                        grid: [
+                            {
+                                left: '5%',
+                                right: '5%',
+                                height: '60%',
+                                top: '10%'
+                            },
+                            {
+                                left: '5%',
+                                right: '5%',
+                                top: '75%',
+                                height: '15%'
+                            }
+                        ],
+                        xAxis: [
+                            {
+                                type: 'category',
+                                data: dates,
+                                scale: true,
+                                boundaryGap: false,
+                                axisLine: { onZero: false },
+                                splitLine: { show: false },
+                                min: 'dataMin',
+                                max: 'dataMax',
+                                axisPointer: { z: 100 }
+                            },
+                            {
+                                type: 'category',
+                                gridIndex: 1,
+                                data: dates,
+                                scale: true,
+                                boundaryGap: false,
+                                axisLine: { onZero: false },
+                                axisTick: { show: false },
+                                splitLine: { show: false },
+                                axisLabel: { show: false },
+                                axisPointer: { label: { show: false } }, // Hide duplicate date label
+                                min: 'dataMin',
+                                max: 'dataMax'
+                            }
+                        ],
+                        yAxis: [
+                            {
+                                scale: true,
+                                splitArea: { show: true }
+                            },
+                            {
+                                scale: true,
+                                gridIndex: 1,
+                                splitNumber: 2,
+                                axisLabel: { show: false },
+                                axisLine: { show: false },
+                                axisTick: { show: false },
+                                splitLine: { show: false }
+                            }
+                        ],
+                        dataZoom: [
+                            { 
+                                type: 'inside', 
+                                xAxisIndex: [0, 1], 
+                                start: isDay ? (values.length > 60 ? 100 - (60 / values.length * 100) : 0) : 0, 
+                                end: 100,
+                                filterMode: 'filter'
+                            }
+                        ],
+                        series: [
+                            {
+                                name: 'K线',
+                                type: 'candlestick',
+                                data: values.map(item => item.slice(0, 4)),
+                                itemStyle: {
+                                    color: '#ef4444',
+                                    color0: '#22c55e',
+                                    borderColor: '#ef4444',
+                                    borderColor0: '#22c55e'
+                                },
+                                markPoint: {
+                                    data: markPointsData,
+                                    symbol: 'pin',
+                                    symbolSize: 40,
+                                    label: { show: true, fontSize: 10, color: '#fff' },
+                                    itemStyle: {
+                                        opacity: 0.9
+                                    },
+                                    tooltip: {
+                                        show: true,
+                                        formatter: function(params) {
+                                            return params.data.reason || params.name;
+                                        }
+                                    }
+                                }
+                            },
+                            {
+                                name: '成交量',
+                                type: 'bar',
+                                xAxisIndex: 1,
+                                yAxisIndex: 1,
+                                data: volumes
+                            }
+                        ]
+                    };
+
+                    if (isDay) {
+                        option.series.push(
+                            { name: 'MA5', type: 'line', data: calculateMA(5), smooth: true, symbol: 'none', lineStyle: { opacity: 0.5, color: '#f59e0b' } },
+                            { name: 'MA10', type: 'line', data: calculateMA(10), smooth: true, symbol: 'none', lineStyle: { opacity: 0.5, color: '#3b82f6' } },
+                            { name: 'MA20', type: 'line', data: calculateMA(20), smooth: true, symbol: 'none', lineStyle: { opacity: 0.5, color: '#ec4899' } }
+                        );
+                    } else {
+                        // Add VWAP for minute charts
+                        option.series.push(
+                            { name: 'VWAP', type: 'line', data: calculateVWAP(), smooth: true, symbol: 'none', lineStyle: { opacity: 0.8, color: '#eab308', width: 2 } }
+                        );
+                    }
+                    
+                    this.chartInstance.setOption(option, true);
+                    
+                    // Add click handler for markPoints
+                    this.chartInstance.off('click'); // Remove old listeners
+                    
+                    // Robust click handler for both PC and Mobile
+                    const handlePointClick = (params) => {
+                        // Check if it's a markPoint OR if the data has a reason property (more robust)
+                        if ((params.componentType === 'markPoint' || params.data?.reason) && params.data) {
+                            if (params.data.reason) {
+                                // Show reason in AI Analysis Result area
+                                this.aiAnalysisResult = `### ${params.data.value}点位分析\n\n${params.data.reason}`;
+                            } else if (params.data.value && (params.data.value.includes('AI') || params.data.value.includes('买') || params.data.value.includes('卖'))) {
+                                // Fallback: Try to find matching signal in currentAISignals by index
+                                const dataIndex = params.data.coord ? params.data.coord[0] : -1;
+                                if (dataIndex !== -1 && this.currentAISignals) {
+                                    this.aiAnalysisResult = `### ${params.data.value}点位分析\n\n(暂无详细分析内容，请重新分析)`;
+                                }
+                            }
+                        }
+                    };
+
+                    this.chartInstance.on('click', handlePointClick);
+                    
+                    // Extra safety: Listen to ZRender clicks to catch clicks that might be swallowed
+                    // This is a lower-level event listener
+                    this.chartInstance.getZr().on('click', (params) => {
+                        if (!params.target) {
+                            // Clicked on blank area -> Close analysis
+                            this.aiAnalysisResult = null;
+                        } else {
+                            // Check if the target belongs to a markPoint
+                            // ECharts internals: target.dataIndex, target.seriesIndex might be available on the shape
+                            // But usually the high-level 'click' event is better.
+                            // If high-level click failed, we might try to find the element here.
+                            // However, for now, let's trust the high-level click with the 'mousemove' trigger fix.
+                        }
+                    });
+                },
+                async triggerAIAnalysis() {
+                    this.analyzingAI = true;
+                    try {
+                        // Refresh K-line data first to ensure AI gets the latest market info
+                        await this.fetchKline(this.chartType);
+
+                        let klineData = [];
+                        if (this.currentKlineData && this.currentKlineData.length > 0) {
+                            // Limit data size to avoid token overflow, but ensure enough context
+                            // For minute chart (240 points max), send all. For day chart, send last 100.
+                            const limit = this.chartType === 'day' ? 100 : 300;
+                            klineData = this.currentKlineData.slice(-limit);
+                        }
+
+                        const promptType = this.chartType === 'day' ? 'day_trading_signal' : 'min_trading_signal';
+
+                        const res = await fetch('/api/stock/analyze', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                code: this.currentStock.code,
+                                name: this.currentStock.name,
+                                turnover: this.currentStock.turnover,
+                                circulation_value: this.currentStock.circulation_value,
+                                promptType: promptType,
+                                force: true,
+                                kline_data: klineData
+                            })
+                        });
+                        if (!res.ok) throw new Error(res.statusText);
+                        const data = await res.json();
+                        if (data.status === 'success') {
+                            let result = data.result;
+                            let signals = [];
+                            let summary = "";
+
+                            if (typeof result === 'string') {
+                                try {
+                                    const jsonStr = result.replace(/```json\n?|\n?```/g, '');
+                                    const parsed = JSON.parse(jsonStr);
+                                    if (parsed.signals && Array.isArray(parsed.signals)) signals = parsed.signals;
+                                    summary = parsed.summary || result;
+                                } catch (e) {
+                                    summary = result;
+                                }
+                            } else {
+                                if (result.signals && Array.isArray(result.signals)) signals = result.signals;
+                                summary = result.summary || JSON.stringify(result, null, 2);
+                            }
+                            
+                            this.aiAnalysisResult = summary;
+                            this.currentAISignals = signals;
+                            this.renderChart(this.currentKlineData);
+                        }
+                    } catch (e) {
+                        console.error(e);
+                        this.aiAnalysisResult = "分析请求失败，请稍后重试。";
+                    } finally {
+                        this.analyzingAI = false;
+                    }
+                },
+                async fetchAIMarkers() {
+                    try {
+                        const res = await fetch(`/api/stock/ai_markers?code=${this.currentStock.code}&type=${this.chartType}`);
+                        if (!res.ok) return;
+                        const contentType = res.headers.get("content-type");
+                        if (!contentType || !contentType.includes("application/json")) return;
+                        
+                        const data = await res.json();
+                        if (data.status === 'success' && data.markers.length > 0) {
+                            const latest = data.markers[0];
+                            let signals = [];
+                            let summary = "";
+
+                            if (latest.data && typeof latest.data === 'object') {
+                                if (latest.data.signals) signals = latest.data.signals;
+                                summary = latest.data.summary || JSON.stringify(latest.data);
+                            } else if (typeof latest.data === 'string') {
+                                try {
+                                    const jsonStr = latest.data.replace(/```json\n?|\n?```/g, '');
+                                    const parsed = JSON.parse(jsonStr);
+                                    if (parsed.signals) signals = parsed.signals;
+                                    summary = parsed.summary || latest.data;
+                                } catch(e) {
+                                    summary = latest.data;
+                                }
+                            }
+                            
+                            this.aiAnalysisResult = summary;
+                            this.currentAISignals = signals;
+                            if (this.currentKlineData && this.currentKlineData.length > 0) {
+                                this.renderChart(this.currentKlineData);
+                            }
+                        }
+                    } catch (e) {
+                        console.error(e);
+                    }
+                },
+                },
+            mounted() {
+                this.fetchConfig();
+                this.fetchLHBConfig();
+                setInterval(this.fetchConfig, 10000); // Poll config every 10s
+                
+                // Initialize Theme
+                const savedTheme = localStorage.getItem('theme');
+                if (savedTheme) {
+                    this.isDark = savedTheme === 'dark';
+                } else {
+                    this.isDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+                }
+                this.applyTheme();
+
+                // Initialize Filter Settings
+                const savedFilters = localStorage.getItem('filterSettings');
+                if (savedFilters) {
+                    try {
+                        this.filterSettings = { ...this.filterSettings, ...JSON.parse(savedFilters) };
+                    } catch (e) {
+                        console.error('Failed to parse filter settings', e);
+                    }
+                }
+                
+                // Initialize API Key
+                const savedApiKey = localStorage.getItem('deepseek_api_key');
+                if (savedApiKey) {
+                    this.apiKey = savedApiKey;
+                }
+
+                // Initialize activeTab based on time for Mobile
+                const now = new Date();
+                const day = now.getDay();
+                const h = now.getHours();
+                const m = now.getMinutes();
+                const timeVal = h * 100 + m;
+                const isWeekend = (day === 0 || day === 6);
+                
+                // Update isMobile on mount to be sure
+                this.isMobile = window.innerWidth < 768;
+
+                // Check Market Status first
+                fetch('/api/status')
+                    .then(res => res.json())
+                    .then(data => {
+                        if (data.status === 'success') {
+                            const isMarketOpenDay = data.is_market_open_day;
+                            
+                            if (this.isMobile) {
+                                if (isMarketOpenDay && timeVal >= 930 && timeVal < 1500) {
+                                    this.activeTab = 'intra';
+                                } else {
+                                    this.activeTab = 'pre';
+                                }
+                            } else {
+                                // Desktop: If holiday/closed, maybe show Aggressive panel by default?
+                                // Current logic: showAggressivePanel = false if trading hours
+                                if (!isMarketOpenDay) {
+                                    this.showAggressivePanel = true;
+                                }
+                            }
+                            
+                            // Add visual indicator for holiday if needed
+                            if (!isMarketOpenDay) {
+                                console.log("Today is a holiday/closed market day.");
+                            }
+                        }
+                    })
+                    .catch(e => {
+                        console.error("Failed to check market status", e);
+                        // Fallback to local logic
+                        if (this.isMobile) {
+                            if (!isWeekend && timeVal >= 930 && timeVal < 1500) {
+                                this.activeTab = 'intra';
+                            } else {
+                                this.activeTab = 'pre';
+                            }
+                        }
+                    });
+
+                this.fetchData();
+                this.fetchLimitUpPool();
+                this.fetchMarketSentiment();
+                this.fetchIndices(); // Initial fetch
+                this.connectWebSocket();
+                
+                // Intelligent Polling
+                setInterval(() => {
+                    const now = new Date();
+                    const day = now.getDay();
+                    // Weekend check (0=Sun, 6=Sat)
+                    if (day === 0 || day === 6) return;
+
+                    const h = now.getHours();
+                    const m = now.getMinutes();
+                    const timeVal = h * 100 + m;
+                    const isTrading = (timeVal >= 915 && timeVal <= 1130) || (timeVal >= 1300 && timeVal <= 1500);
+                    
+                    // 1. Stocks Data & Indices: 3s during trading
+                    if (isTrading) {
+                        this.fetchData();
+                        this.fetchIndices(); // Fast update for indices
+                    }
+                }, 3000);
+
+                // Poll LHB Status
+                setInterval(this.checkLHBStatus, 5000);
+
+                setInterval(() => {
+                    const now = new Date();
+                    const day = now.getDay();
+                    if (day === 0 || day === 6) return;
+
+                    const h = now.getHours();
+                    const m = now.getMinutes();
+                    const timeVal = h * 100 + m;
+                    const isTrading = (timeVal >= 915 && timeVal <= 1130) || (timeVal >= 1300 && timeVal <= 1500);
+
+                    // 2. Limit Up Pool: 10s during trading
+                    if (isTrading) {
+                        this.fetchLimitUpPool();
+                    } else {
+                        // if (now.getSeconds() < 10) this.fetchLimitUpPool();
+                    }
+                }, 10000);
+
+                // 3. Market Sentiment: 60s always (or just trading?)
+                // User said "1 minute refresh is fine"
+                setInterval(this.fetchMarketSentiment, 60000); 
+
+                // Update time every minute for visibility logic
+                setInterval(() => {
+                    this.currentTime = new Date();
+                }, 60000);
+                
+                // Initialize visibility based on time
+                // Reuse time variables calculated above
+                const isTradingHours = timeVal >= 930 && timeVal < 1500;
+                if (!isWeekend && isTradingHours) {
+                    this.showAggressivePanel = false;
+                }
+
+                window.addEventListener('resize', () => {
+                    this.isMobile = window.innerWidth < 768;
+                });
+            }
+        }).mount('#app')
+    </script>
+
+    <style>
+        /* List Transition Animation */
+        .list-move,
+        .list-enter-active,
+        .list-leave-active {
+            transition: all 0.5s ease;
+        }
+        .list-enter-from,
+        .list-leave-to {
+            opacity: 0;
+            transform: translateX(30px);
+        }
+        .list-leave-active {
+            position: absolute;
+        }
+        
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: #f3f4f6; 
+        }
+        html.dark ::-webkit-scrollbar-track {
+            background: #1f2937; 
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #d1d5db; 
+            border-radius: 3px;
+        }
+        html.dark ::-webkit-scrollbar-thumb {
+            background: #4b5563; 
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #9ca3af; 
+        }
+        html.dark ::-webkit-scrollbar-thumb:hover {
+            background: #6b7280; 
+        }
+    </style>
+</body>
+</html>
