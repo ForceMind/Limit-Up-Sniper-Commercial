@@ -19,12 +19,10 @@ if not exist "venv" (
 if exist "config.bat" (
     call config.bat
 ) else (
-    echo [警告] 未找到 config.bat。
-    set /p API_KEY="请输入您的 Deepseek API 密钥 (按回车跳过): "
-    if not "%API_KEY%"=="" (
-        set DEEPSEEK_API_KEY=%API_KEY%
-        echo set DEEPSEEK_API_KEY=%API_KEY%> config.bat
-    )
+    echo [错误] 未找到 config.bat。
+    echo 请先运行 install.bat 进行初始化配置。
+    pause
+    exit /b 1
 )
 
 :: 激活虚拟环境并运行

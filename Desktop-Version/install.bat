@@ -31,14 +31,16 @@ pip install -r ..\requirements.txt
 
 :: 4. 设置 API 密钥
 echo [3/3] 正在配置 API 密钥...
-if not exist "config.bat" (
-    set /p API_KEY="请输入您的 Deepseek API 密钥: "
-    echo set DEEPSEEK_API_KEY=%API_KEY%> config.bat
-    echo 配置已保存到 config.bat
-) else (
+if exist "config.bat" (
     echo config.bat 已存在，跳过配置。
+    goto :API_DONE
 )
 
+set /p API_KEY="请输入您的 Deepseek API 密钥: "
+echo set DEEPSEEK_API_KEY=%API_KEY%> config.bat
+echo 配置已保存到 config.bat
+
+:API_DONE
 echo.
 echo =========================================
 echo   安装完成！
