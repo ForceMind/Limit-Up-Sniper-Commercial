@@ -27,7 +27,7 @@ if not exist "venv" (
 echo [2/3] 正在安装依赖项...
 call venv\Scripts\activate
 pip install --upgrade pip
-pip install -r ..\requirements.txt
+pip install -r ..\backend\requirements.txt
 
 :: 4. 设置 API 密钥
 echo [3/3] 正在配置 API 密钥...

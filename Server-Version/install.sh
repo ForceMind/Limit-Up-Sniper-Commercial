@@ -81,7 +81,7 @@ fi
 source venv/bin/activate
 echo "正在安装 Python 依赖 (这可能需要几分钟)..."
 pip install --upgrade pip -q
-pip install -r "$PROJECT_ROOT/requirements.txt" -q
+pip install -r "$PROJECT_ROOT/backend/requirements.txt" -q
 
 # 4. 配置 API Key
 echo -e "${YELLOW}[3/6] 配置 Deepseek API...${NC}"

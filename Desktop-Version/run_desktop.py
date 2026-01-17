@@ -5,10 +5,16 @@ import time
 import sys
 import os
 import socket
+import http.server
+import socketserver
+from functools import partial
 
-# Add root directory to path so we can import app
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Add root directory to path
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(ROOT_DIR)
+sys.path.append(os.path.join(ROOT_DIR, "backend"))
 
+# Import backend app
 from app.main import app
 
 def find_free_port():
@@ -17,23 +23,52 @@ def find_free_port():
         s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         return s.getsockname()[1]
 
-def start_browser(url):
-    time.sleep(1.5) # Wait for server to start
-    webbrowser.open(url)
+def run_backend(host, port):
+    uvicorn.run(app, host=host, port=port, log_level="error")
+
+def run_frontend(host, port, directory):
+    handler = partial(http.server.SimpleHTTPRequestHandler, directory=directory)
+    # Allow address reuse
+    socketserver.TCPServer.allow_reuse_address = True
+    try:
+        with socketserver.TCPServer((host, port), handler) as httpd:
+            print(f"前端服务启动于: http://{host}:{port}")
+            httpd.serve_forever()
+    except Exception as e:
+        print(f"前端服务启动失败: {e}")
 
 def main():
-    port = find_free_port()
+    backend_port = 8000 # Fixed port for config.js
+    frontend_port = find_free_port()
     host = "127.0.0.1"
-    url = f"http://{host}:{port}"
     
-    print(f"正在启动涨停狙击手，地址：{url}")
-    print("按下 Ctrl+C 退出程序")
+    frontend_dir = os.path.join(ROOT_DIR, "frontend")
     
-    # Start browser in a separate thread
-    threading.Thread(target=start_browser, args=(url,), daemon=True).start()
+    print(f"正在启动涨停狙击手商业版...")
+    print(f"后端端口: {backend_port}")
+    print(f"前端端口: {frontend_port}")
     
-    # Start server
-    uvicorn.run(app, host=host, port=port, log_level="info")
+    # Start Backend
+    t_backend = threading.Thread(target=run_backend, args=(host, backend_port), daemon=True)
+    t_backend.start()
+    
+    # Start Frontend
+    t_frontend = threading.Thread(target=run_frontend, args=(host, frontend_port, frontend_dir), daemon=True)
+    t_frontend.start()
+    
+    # Open Browser
+    url = f"http://{host}:{frontend_port}/index.html"
+    print(f"即将打开浏览器: {url}")
+    time.sleep(3) 
+    webbrowser.open(url)
+    
+    # Keep main thread alive
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("停止服务...")
+        sys.exit(0)
 
 if __name__ == "__main__":
     main()

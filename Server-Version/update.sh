@@ -30,7 +30,7 @@ echo -e "${YELLOW}[1/3] 准备更新代码...${NC}"
 # 2.1 备份本地数据
 BACKUP_DIR="._data_backup"
 # Data is in root, we are in Server-Version
-DATA_DIR="../data"
+DATA_DIR="../backend/data"
 
 if [ -d "$DATA_DIR" ]; then
     echo -e "${YELLOW}正在备份 data 目录...${NC}"
@@ -102,7 +102,7 @@ fi
 echo -e "${YELLOW}[2/3] 更新 Python 依赖...${NC}"
 if [ -d "venv" ]; then
     source venv/bin/activate
-    pip install -r ../requirements.txt -q --timeout 100
+    pip install -r ../backend/requirements.txt -q --timeout 100
 else
     echo "未找到虚拟环境，跳过依赖更新。"
 fi

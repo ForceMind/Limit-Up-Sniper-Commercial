@@ -27,9 +27,7 @@ if exist "config.bat" (
 
 :: 激活虚拟环境并运行
 call venv\Scripts\activate
-set PYTHONPATH=..;%PYTHONPATH%
-echo 正在启动 涨停狙击手...
-echo 访问地址: http://127.0.0.1:8000
-python -m uvicorn app.main:app --reload --port 8000
+echo 正在启动 涨停狙击手(商业版)...
+python run_desktop.py
 
 pause

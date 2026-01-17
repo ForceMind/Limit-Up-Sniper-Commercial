@@ -4,8 +4,8 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>涨停狙击手 (Limit-Up Sniper)</title>
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
-    <link rel="manifest" href="/static/manifest.json">
+    <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
+    <link rel="manifest" href="static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -15,6 +15,8 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script src="https://openfpcdn.io/fingerprintjs/v3"></script>
+    <script src="config.js"></script>
     <style>
         /* Prevent font scaling on mobile */
         html {
@@ -56,7 +58,6 @@
     </style>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-mono h-screen p-2 md:p-4 overflow-hidden flex flex-col transition-colors duration-300">
-    {% raw %}
     <div id="app" class="container mx-auto max-w-full flex-1 flex flex-col overflow-hidden">
         <!-- Header -->
         <header class="flex flex-col md:flex-row justify-between items-center mb-2 md:mb-4 border-b border-gray-200 dark:border-gray-700 pb-2 px-2 md:px-4 shrink-0 gap-2">
@@ -66,7 +67,7 @@
                     <h1 class="text-sm md:text-xl font-bold tracking-wider text-red-600 dark:text-red-500 whitespace-nowrap">涨停狙击手 <span class="hidden md:inline text-xs text-gray-500 ml-2">指挥中心</span></h1>
                     
                     <!-- LHB Button -->
-                    <a href="/lhb" class="flex items-center gap-1 text-[10px] md:text-xs font-bold text-red-600 dark:text-red-400 hover:text-red-700 bg-red-50 dark:bg-red-900/30 px-1.5 md:px-3 py-0.5 md:py-1 rounded border border-red-200 dark:border-red-800 transition-colors shrink-0" title="查看龙虎榜">
+                    <a href="lhb.html" class="flex items-center gap-1 text-[10px] md:text-xs font-bold text-red-600 dark:text-red-400 hover:text-red-700 bg-red-50 dark:bg-red-900/30 px-1.5 md:px-3 py-0.5 md:py-1 rounded border border-red-200 dark:border-red-800 transition-colors shrink-0" title="查看龙虎榜">
                         <span>🐲</span><span class="hidden sm:inline">龙虎榜</span>
                     </a>
                     
@@ -87,10 +88,9 @@
             
             <div class="flex items-center gap-2 md:gap-4 w-full md:w-auto justify-between md:justify-end flex-wrap transition-all duration-300">
                 <!-- Settings Button (Merged Filter & Config) -->
-                <button v-if="!isSearchFocused || !isMobile" @click="showSettingsModal = true" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors" title="系统设置">
+                <button v-if="!isSearchFocused || !isMobile" @click="showSettingsModal = true" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors" title="过滤设置">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
                     </svg>
                 </button>
 
@@ -830,7 +830,7 @@
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-md flex flex-col max-h-[90vh]">
                 <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
                     <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                        ⚙️ 系统设置
+                        🛠️ 过滤器配置
                     </h3>
                     <button @click="showSettingsModal = false" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -877,171 +877,17 @@
                         </div>
                     </div>
 
-                    <!-- 2. Automation Settings -->
-                    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
-                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
-                            <span>🤖</span> 自动化配置
-                        </h4>
-                        <div class="space-y-3 pl-2">
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">启用自动复盘</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="systemConfig.auto_analysis_enabled" class="sr-only peer">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-green-600"></div>
-                                </label>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">智能调度 (Smart Schedule)</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="systemConfig.use_smart_schedule" class="sr-only peer">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-green-600"></div>
-                                </label>
-                            </div>
-                            <div v-if="!systemConfig.use_smart_schedule" class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">固定间隔 (分钟)</span>
-                                <input type="number" v-model.number="systemConfig.fixed_interval_minutes" class="w-16 px-2 py-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600">
-                            </div>
+                    <!-- Automation Settings Removed -->
 
-                            <!-- Status Info -->
-                            <div class="bg-gray-100 dark:bg-gray-900 p-3 rounded text-xs space-y-1 font-mono text-gray-600 dark:text-gray-400 mt-2">
-                                <div class="flex justify-between">
-                                    <span>当前状态:</span>
-                                    <span :class="{'text-green-600': systemConfig.current_status.startsWith('Running'), 'text-gray-500': systemConfig.current_status === 'Idle'}">{{ systemConfig.current_status }}</span>
-                                </div>
-                                <div class="flex justify-between">
-                                    <span>上次运行:</span>
-                                    <span>{{ formatTime(systemConfig.last_run_time) }}</span>
-                                </div>
-                                <div class="flex justify-between">
-                                    <span>下次预计:</span>
-                                    <span>{{ formatTime(systemConfig.next_run_time) }}</span>
-                                </div>
-                            </div>
-
-                            <!-- Schedule Plan Editor -->
-                            <div v-if="systemConfig.use_smart_schedule && systemConfig.schedule_plan" class="mt-3 space-y-2">
-                                <div class="text-xs font-bold text-gray-700 dark:text-gray-300 mb-1 flex justify-between items-center">
-                                    <span>调度计划表</span>
-                                    <span class="text-[10px] text-gray-400 font-normal">修改后请保存</span>
-                                </div>
-                                <div class="bg-gray-50 dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700 overflow-hidden">
-                                    <div class="grid grid-cols-12 gap-1 p-2 bg-gray-100 dark:bg-gray-800 text-[10px] font-bold text-gray-500">
-                                        <div class="col-span-3">时间段</div>
-                                        <div class="col-span-3">模式</div>
-                                        <div class="col-span-2">间隔(分)</div>
-                                        <div class="col-span-4">说明</div>
-                                    </div>
-                                    <div v-for="(rule, index) in systemConfig.schedule_plan" :key="index" class="grid grid-cols-12 gap-1 p-2 border-t border-gray-200 dark:border-gray-700 text-[10px] items-center hover:bg-gray-100 dark:hover:bg-gray-800/50" :class="{'bg-blue-50 dark:bg-blue-900/20 border-l-4 border-l-blue-500': index === systemConfig.active_rule_index}">
-                                        <div class="col-span-3 flex flex-col gap-1">
-                                            <input type="time" v-model="rule.start" class="bg-transparent border-none p-0 h-4 w-full focus:ring-0 text-gray-700 dark:text-gray-300">
-                                            <input type="time" v-model="rule.end" class="bg-transparent border-none p-0 h-4 w-full focus:ring-0 text-gray-700 dark:text-gray-300">
-                                        </div>
-                                        <div class="col-span-3">
-                                            <select v-model="rule.mode" class="bg-transparent border border-gray-300 dark:border-gray-600 rounded p-0 w-full focus:ring-0 text-[10px] h-6 text-gray-700 dark:text-gray-300">
-                                                <option value="intraday">盘中</option>
-                                                <option value="after_hours">盘后</option>
-                                                <option value="none">暂停</option>
-                                            </select>
-                                        </div>
-                                        <div class="col-span-2">
-                                            <input type="number" v-model.number="rule.interval" class="bg-transparent border border-gray-300 dark:border-gray-600 rounded px-1 w-full text-center h-6 text-gray-700 dark:text-gray-300">
-                                        </div>
-                                        <div class="col-span-4">
-                                            <input type="text" v-model="rule.desc" class="bg-transparent border-none p-0 w-full focus:ring-0 text-gray-500 h-6">
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="text-[10px] text-gray-400 mt-1">
-                                    * 时间段重叠时优先匹配上面的规则
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- 3. LHB Settings -->
-                    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
-                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
-                            <span>🐉</span> 龙虎榜数据配置
-                        </h4>
-                        <div class="space-y-3 pl-2">
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">启用龙虎榜抓取</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="lhbConfig.enabled" class="sr-only peer">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-orange-600"></div>
-                                </label>
-                            </div>
-                            <div class="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                * 每日 18:00 自动同步当天数据
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">抓取周期 (天)</span>
-                                <input type="number" v-model.number="lhbConfig.days" class="w-20 px-2 py-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600">
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">最小买入额 (万)</span>
-                                <div class="flex items-center gap-1">
-                                    <input type="number" v-model.number="lhbConfig.min_amount_wan" class="w-20 px-2 py-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600">
-                                </div>
-                            </div>
-                            <div class="flex justify-end pt-2">
-                                <button @click="syncLHB" :disabled="!lhbConfig.enabled || isSyncingLHB" 
-                                        class="px-3 py-1 text-xs bg-orange-100 dark:bg-orange-900/30 text-orange-600 dark:text-orange-400 rounded border border-orange-200 dark:border-orange-700 hover:bg-orange-200 dark:hover:bg-orange-800/50 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1">
-                                    <span v-if="isSyncingLHB" class="w-3 h-3 border-2 border-current border-t-transparent rounded-full animate-spin"></span>
-                                    {{ isSyncingLHB ? '同步中...' : '立即同步数据' }}
-                                </button>
-                            </div>
-                            <p class="text-[10px] text-gray-400">
-                                * 数据将保存在本地 data 目录，包含龙虎榜记录及对应日期的1分钟K线。
-                            </p>
-                        </div>
-                    </div>
-
-                    <!-- 4. News Settings -->
-                    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
-                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
-                            <span>📰</span> 新闻中心配置
-                        </h4>
-                        <div class="space-y-3 pl-2">
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">自动清理历史</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="systemConfig.news_auto_clean_enabled" class="sr-only peer">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                                </label>
-                            </div>
-                            <div v-if="systemConfig.news_auto_clean_enabled" class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">保留天数</span>
-                                <input type="number" v-model.number="systemConfig.news_auto_clean_days" class="w-20 px-2 py-1 text-sm border rounded dark:bg-gray-700 dark:border-gray-600">
-                            </div>
-                            <p class="text-[10px] text-gray-400">
-                                * 开启后，系统在保存新抓取的新闻时会自动删除超过保留天数的旧记录。
-                            </p>
-                        </div>
-                    </div>
-
-                    <!-- 5. API Key Setting -->
-                    <div class="pt-4 border-t border-gray-200 dark:border-gray-700">
-                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
-                            <span>🔑</span> API 设置
-                        </h4>
-                        <div class="space-y-2 pl-2">
-                            <label class="block text-xs text-gray-500 dark:text-gray-400">DeepSeek API Key</label>
-                            <input type="password" v-model="apiKey" @change="saveApiKey" placeholder="sk-..." 
-                                   class="w-full px-3 py-2 bg-gray-50 dark:bg-gray-900 border border-gray-300 dark:border-gray-600 rounded text-sm text-gray-900 dark:text-gray-100 focus:ring-blue-500 focus:border-blue-500">
-                            <p class="text-[10px] text-gray-400">仅在本地独立运行时需要填写。服务器版本请忽略。</p>
-                        </div>
-                    </div>
-                </div>
 
                 <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 rounded-b-lg flex justify-end gap-2">
-                    <button @click="showSettingsModal = false" class="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">取消</button>
-                    <button @click="saveConfig" class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors">保存设置</button>
+                    <button @click="showSettingsModal = false" class="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">关闭</button>
+                    <!-- <button @click="saveConfig" class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors">保存设置</button> -->
                 </div>
                 
                 <!-- Help Link -->
                 <div class="px-6 pb-4 text-center">
-                    <a href="/help" target="_blank" class="text-xs text-blue-500 hover:underline flex items-center justify-center gap-1">
+                    <a href="help.html" target="_blank" class="text-xs text-blue-500 hover:underline flex items-center justify-center gap-1">
                         <span>📖</span> 查看使用帮助与功能说明
                     </a>
                 </div>
@@ -1126,15 +972,74 @@
                 </div>
             </div>
         </div>
+        <!-- Activation Modal -->
+        <div v-if="showActivationModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] backdrop-blur-sm">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-96 p-6 space-y-4">
+                <div class="flex items-center gap-2 text-red-600 dark:text-red-500">
+                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
+                    <h3 class="text-lg font-bold">软件授权验证</h3>
+                </div>
+                <p class="text-sm text-gray-600 dark:text-gray-400">该功能需要商业授权。您的设备ID: <br><code class="bg-gray-100 dark:bg-gray-900 px-1 rounded select-all">{{ deviceId }}</code></p>
+                
+                <div class="space-y-2">
+                    <label class="text-xs font-semibold text-gray-500 uppercase">请输入激活码 (License Key)</label>
+                    <input v-model="licenseKey" type="text" class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500" placeholder="XXXX-XXXX-XXXX-XXXX">
+                </div>
+                
+                <div class="flex justify-end gap-2 pt-2">
+                    <button @click="showActivationModal = false" class="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">取消</button>
+                    <button @click="activateLicense" :disabled="activating" class="px-4 py-1.5 text-sm bg-red-600 hover:bg-red-700 text-white rounded shadow transition-colors disabled:opacity-50">
+                        {{ activating ? '激活中...' : '立即激活' }}
+                    </button>
+                </div>
+                <p v-if="activationMsg" :class="activationError ? 'text-red-500' : 'text-green-500'" class="text-xs text-center">{{ activationMsg }}</p>
+            </div>
+        </div>
+
     </div>
-    {% endraw %}
 
     <script>
         const { createApp } = Vue
 
+        // Add global fetch interceptor
+        const originalFetch = window.fetch;
+        window.fetch = async (...args) => {
+            let [resource, config] = args;
+            config = config || {};
+            config.headers = config.headers || {};
+            
+            // Add Device ID
+            const deviceId = localStorage.getItem('sniper_device_id');
+            if (deviceId) {
+                config.headers['X-Device-ID'] = deviceId;
+            }
+            
+            const response = await originalFetch(resource, config);
+            
+            // Handle Auth Errors
+            if (response.status === 401 || response.status === 403) {
+                // Trigger global event or modify Vue app state if reachable
+                // Since we are outside Vue, we can dispatch a custom event
+                window.dispatchEvent(new CustomEvent('auth-error'));
+                
+                // Optional: Don't throw if you want to handle it in UI, but usually we throw or return response
+                // Returning response so UI can see 403 and handle specific logic if needed, 
+                // but the event will open the modal.
+            }
+            return response;
+        };
+
         createApp({
             data() {
                 return {
+                    // License Data
+                    deviceId: '',
+                    showActivationModal: false,
+                    licenseKey: '',
+                    activating: false,
+                    activationMsg: '',
+                    activationError: false,
+
                     // Data
                     newsList: [],
                     showNewsModal: false,
@@ -1306,10 +1211,62 @@
                 // Removed resize logic as panel is now overlay
             },
             methods: {
+                async initFingerprint() {
+                    try {
+                        const fpPromise = import('https://openfpcdn.io/fingerprintjs/v3')
+                            .then(FingerprintJS => FingerprintJS.load())
+                        const fp = await fpPromise
+                        const result = await fp.get()
+                        this.deviceId = result.visitorId
+                        localStorage.setItem('sniper_device_id', this.deviceId)
+                        console.log('Device ID:', this.deviceId)
+                    } catch (e) {
+                        console.error('Fingerprint error:', e)
+                        if (!localStorage.getItem('sniper_device_id')) {
+                             this.deviceId = 'fallback-' + Math.random().toString(36).substring(2, 15)
+                             localStorage.setItem('sniper_device_id', this.deviceId)
+                        } else {
+                            this.deviceId = localStorage.getItem('sniper_device_id')
+                        }
+                    }
+                },
+                async activateLicense() {
+                    if (!this.licenseKey) return
+                    this.activating = true
+                    this.activationMsg = ''
+                    this.activationError = false
+                    
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/auth/activate', {
+                            method: 'POST',
+                            headers: {'Content-Type': 'application/json'},
+                            body: JSON.stringify({
+                                key: this.licenseKey,
+                                device_id: this.deviceId
+                            })
+                        })
+                        const data = await res.json()
+                        if (res.ok) {
+                            this.activationMsg = '激活成功!'
+                            setTimeout(() => {
+                                this.showActivationModal = false
+                                this.activationMsg = ''
+                            }, 1500)
+                        } else {
+                            throw new Error(data.detail || 'Activation failed')
+                        }
+                    } catch (e) {
+                         this.activationError = true
+                         this.activationMsg = e.message
+                    } finally {
+                        this.activating = false
+                    }
+                },
+
                 async openNewsCenter() {
                     this.showNewsModal = true;
                     try {
-                        const res = await fetch('/api/news_history');
+                        const res = await fetch(API_BASE_URL + '/api/news_history');
                         const data = await res.json();
                         if (data.status === 'success') {
                             // Group by date
@@ -1347,7 +1304,7 @@
                     };
                     if (!confirm(`确定要清空 ${labels[range] || range} 的新闻历史吗？`)) return;
                     try {
-                        const res = await fetch(`/api/news_history/clear?range=${range}`);
+                        const res = await fetch(API_BASE_URL + `/api/news_history/clear?range=${range}`);
                         const data = await res.json();
                         if (data.status === 'success') {
                             // Refresh news list
@@ -1368,7 +1325,7 @@
                 },
                 async fetchLHBConfig() {
                     try {
-                        const response = await fetch('/api/lhb/config');
+                        const response = await fetch(API_BASE_URL + '/api/lhb/config');
                         const data = await response.json();
                         this.lhbConfig = {
                             enabled: data.enabled,
@@ -1384,7 +1341,7 @@
                     this.isSyncingLHB = true;
                     // Save config first
                     try {
-                        await fetch('/api/lhb/config', {
+                        await fetch(API_BASE_URL + '/api/lhb/config', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -1395,7 +1352,7 @@
                         });
                         
                         // Trigger sync
-                        const response = await fetch('/api/lhb/sync', { method: 'POST' });
+                        const response = await fetch(API_BASE_URL + '/api/lhb/sync', { method: 'POST' });
                         const result = await response.json();
                         if (result.status === 'ok') {
                             alert('已触发后台同步，请留意日志窗口。');
@@ -1412,7 +1369,7 @@
                 },
                 async checkLHBStatus() {
                     try {
-                        const response = await fetch('/api/lhb/status');
+                        const response = await fetch(API_BASE_URL + '/api/lhb/status');
                         const data = await response.json();
                         this.isSyncingLHB = data.is_syncing;
                     } catch (e) {
@@ -1421,7 +1378,7 @@
                 },
                 async fetchConfig() {
                     try {
-                        const response = await fetch('/api/config');
+                        const response = await fetch(API_BASE_URL + '/api/config');
                         const data = await response.json();
                         this.systemConfig = data;
                     } catch (e) {
@@ -1430,7 +1387,7 @@
                 },
                 async saveConfig() {
                     try {
-                        const response = await fetch('/api/config', {
+                        const response = await fetch(API_BASE_URL + '/api/config', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -1511,7 +1468,7 @@
                             return;
                         }
                         try {
-                            const response = await fetch(`/api/search?q=${this.searchQuery}`);
+                            const response = await fetch(API_BASE_URL + `/api/search?q=${this.searchQuery}`);
                             this.searchResults = await response.json();
                         } catch (e) {
                             console.error(e);
@@ -1556,7 +1513,7 @@
                 async runAnalysis(mode) {
                     this.isAnalyzing = true;
                     try {
-                        const response = await fetch(`/api/analyze?mode=${mode}`, { method: 'POST' });
+                        const response = await fetch(API_BASE_URL + `/api/analyze?mode=${mode}`, { method: 'POST' });
                         const result = await response.json();
                         if (result.status === 'success') {
                             // await this.fetchData(); // WebSocket will tell us when done
@@ -1575,7 +1532,7 @@
                     
                     try {
                         // Use new API endpoint
-                        const response = await fetch(`/api/add_watchlist?code=${code}&name=手动添加`, { method: 'GET' });
+                        const response = await fetch(API_BASE_URL + `/api/add_watchlist?code=${code}&name=手动添加`, { method: 'GET' });
                         const result = await response.json();
                         if (result.status === 'ok') {
                             await this.fetchData();
@@ -1588,7 +1545,7 @@
                 },
                 async fetchData() {
                     try {
-                        const response = await fetch('/api/stocks');
+                        const response = await fetch(API_BASE_URL + '/api/stocks');
                         const data = await response.json();
                         
                         const now = Date.now();
@@ -1611,7 +1568,7 @@
                 },
                 async fetchIndices() {
                     try {
-                        const response = await fetch('/api/indices');
+                        const response = await fetch(API_BASE_URL + '/api/indices');
                         const data = await response.json();
                         if (data && data.length > 0) {
                             // Update indices in marketSentiment object to reflect in UI
@@ -1624,7 +1581,7 @@
                 },
                 async fetchLimitUpPool() {
                     try {
-                        const response = await fetch('/api/limit_up_pool');
+                        const response = await fetch(API_BASE_URL + '/api/limit_up_pool');
                         const data = await response.json();
                         if (data.limit_up) {
                             this.limitUpPool = data.limit_up;
@@ -1640,7 +1597,7 @@
                 async fetchMarketSentiment() {
                     this.sentimentLoading = true;
                     try {
-                        const response = await fetch('/api/market_sentiment');
+                        const response = await fetch(API_BASE_URL + '/api/market_sentiment');
                         this.marketSentiment = await response.json();
                         this.sentimentLastUpdate = new Date().toLocaleTimeString();
                     } catch (error) {
@@ -1691,7 +1648,7 @@
                     if (!confirm(`确定要删除 ${stock.name} (${stock.code}) 吗？`)) return;
                     
                     try {
-                        const response = await fetch('/api/watchlist/remove', { 
+                        const response = await fetch(API_BASE_URL + '/api/watchlist/remove', { 
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ code: stock.code, type: listType })
@@ -1777,7 +1734,7 @@
                             apiKey: this.apiKey // Pass API Key
                         };
                         
-                        const response = await fetch('/api/analyze_stock', {
+                        const response = await fetch(API_BASE_URL + '/api/analyze_stock', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)
@@ -1853,7 +1810,7 @@
                             apiKey: this.apiKey // Pass API Key
                         };
                         
-                        const response = await fetch('/api/analyze_stock', {
+                        const response = await fetch(API_BASE_URL + '/api/analyze_stock', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify(payload)
@@ -1972,7 +1929,7 @@
                         });
                     }
                     try {
-                        const res = await fetch(`/api/stock/kline?code=${code}&type=${type}`);
+                        const res = await fetch(API_BASE_URL + `/api/stock/kline?code=${code}&type=${type}`);
                         
                         if (!this.showChartModal || this.currentStock.code !== code) return;
 
@@ -2381,7 +2338,7 @@
 
                         const promptType = this.chartType === 'day' ? 'day_trading_signal' : 'min_trading_signal';
 
-                        const res = await fetch('/api/stock/analyze', {
+                        const res = await fetch(API_BASE_URL + '/api/stock/analyze', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -2428,7 +2385,7 @@
                 },
                 async fetchAIMarkers() {
                     try {
-                        const res = await fetch(`/api/stock/ai_markers?code=${this.currentStock.code}&type=${this.chartType}`);
+                        const res = await fetch(API_BASE_URL + `/api/stock/ai_markers?code=${this.currentStock.code}&type=${this.chartType}`);
                         if (!res.ok) return;
                         const contentType = res.headers.get("content-type");
                         if (!contentType || !contentType.includes("application/json")) return;
@@ -2465,6 +2422,14 @@
                 },
                 },
             mounted() {
+                this.initFingerprint();
+                
+                // Listen for global auth error event
+                window.addEventListener('auth-error', () => {
+                    this.showActivationModal = true;
+                });
+
+                // --- Existing Logic ---
                 this.fetchConfig();
                 this.fetchLHBConfig();
                 setInterval(this.fetchConfig, 10000); // Poll config every 10s
@@ -2506,7 +2471,7 @@
                 this.isMobile = window.innerWidth < 768;
 
                 // Check Market Status first
-                fetch('/api/status')
+                fetch(API_BASE_URL + '/api/status')
                     .then(res => res.json())
                     .then(data => {
                         if (data.status === 'success') {

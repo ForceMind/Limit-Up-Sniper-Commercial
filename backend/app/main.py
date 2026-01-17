@@ -1,7 +1,6 @@
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query
-from fastapi.templating import Jinja2Templates
 from fastapi.responses import HTMLResponse, StreamingResponse
-from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 import requests
 import json
 import os
@@ -18,21 +17,33 @@ from app.core.stock_utils import calculate_metrics, is_trading_time, is_market_o
 from app.core.data_provider import data_provider
 from app.core.lhb_manager import lhb_manager
 from app.core.ai_cache import ai_cache
+from app.api import auth, admin
+from app.db import database
+from app.dependencies import verify_license, deduct_usage
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
-TEMPLATE_DIR = BASE_DIR / "app" / "templates"
 
 # Ensure data dir exists
 DATA_DIR.mkdir(exist_ok=True)
 
+# Initialize DB Tables
+database.Base.metadata.create_all(bind=database.engine)
+
 app = FastAPI()
 
-# Mount static files
-app.mount("/static", StaticFiles(directory=str(BASE_DIR / "app" / "static")), name="static")
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 
-templates = Jinja2Templates(directory=str(TEMPLATE_DIR))
+# CORS配置
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # 允许所有来源，生产环境应限制为前端域名
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # WebSocket Manager
 class ConnectionManager:
@@ -958,9 +969,14 @@ def thread_logger(msg):
     """线程安全的 logger"""
     log_queue.put(msg)
 
-@app.post("/api/analyze")
-async def run_analysis(background_tasks: BackgroundTasks, mode: str = Query("after_hours")):
+@app.post("/api/analyze", dependencies=[Depends(verify_license)])
+async def run_analysis(background_tasks: BackgroundTasks, mode: str = Query("after_hours"), license_obj = Depends(verify_license), db = Depends(lambda: next(database.get_db()))):
     """触发复盘分析"""
+    # 扣除次数? 只有手动触发才扣除，但是这个API看起来就是手动触发的
+    if mode in ["intraday", "intraday_monitor"]: # 盘中突击
+         # Check if limit reached inside verify_license
+         pass
+         
     # 在后台运行，不阻塞 API
     background_tasks.add_task(execute_analysis, mode)
     return {"status": "success", "message": f"{mode} analysis started in background"}
@@ -1107,7 +1123,7 @@ async def api_limit_up_pool():
         "broken": broken_limit_pool_data
     }
 
-@app.get("/api/intraday_pool")
+@app.get("/api/intraday_pool", dependencies=[Depends(verify_license)])
 async def api_intraday_pool():
     """直接获取盘中打板扫描结果 (优先返回缓存)"""
     global intraday_pool_data
@@ -1141,11 +1157,12 @@ class StockAnalysisRequest(BaseModel):
     force: bool = False # Force re-analysis
     apiKey: Optional[str] = None # Optional API Key for standalone mode
 
-@app.post("/api/analyze_stock")
-async def api_analyze_stock(request: StockAnalysisRequest):
+@app.post("/api/analyze_stock", dependencies=[Depends(verify_license)])
+async def api_analyze_stock(request: StockAnalysisRequest, license_obj = Depends(verify_license), db = Depends(lambda: next(database.get_db()))):
     """
     调用AI分析单个股票 (支持缓存)
     """
+    await deduct_usage(license_obj, db)
     stock_data = request.dict()
     api_key = stock_data.get('apiKey')
     code = stock_data.get('code')
@@ -1210,14 +1227,6 @@ async def api_analyze_stock(request: StockAnalysisRequest):
         
     return {"status": "success", "analysis": result, "cached": False}
 
-@app.get("/", response_class=HTMLResponse)
-async def read_root(request: Request):
-    return templates.TemplateResponse("index.html", {"request": request})
-
-@app.get("/help", response_class=HTMLResponse)
-async def read_help(request: Request):
-    return templates.TemplateResponse("help.html", {"request": request})
-
 # --- LHB API ---
 class LHBConfigRequest(BaseModel):
     enabled: bool
@@ -1247,10 +1256,6 @@ async def sync_lhb_data(background_tasks: BackgroundTasks, days: Optional[int] =
 async def get_lhb_status():
     return {"is_syncing": lhb_manager.is_syncing}
 
-@app.get("/lhb", response_class=HTMLResponse)
-async def read_lhb_page(request: Request):
-    return templates.TemplateResponse("lhb.html", {"request": request})
-
 @app.get("/api/lhb/dates")
 async def get_lhb_dates():
     return lhb_manager.get_available_dates()
@@ -1263,16 +1268,17 @@ class LHBAnalyzeRequest(BaseModel):
     date: str
     force: bool = False
 
-@app.post("/api/lhb/analyze_daily")
-async def analyze_lhb_daily_api(req: LHBAnalyzeRequest):
+@app.post("/api/lhb/analyze_daily", dependencies=[Depends(verify_license)])
+async def analyze_lhb_daily_api(req: LHBAnalyzeRequest, license_obj = Depends(verify_license), db = Depends(lambda: next(database.get_db()))):
     # Run in thread pool
+    await deduct_usage(license_obj, db)
     loop = asyncio.get_event_loop()
     # Fetch data first
     data = lhb_manager.get_daily_data(req.date)
     result = await loop.run_in_executor(None, lambda: analyze_daily_lhb(req.date, data, force_update=req.force))
     return {"status": "ok", "analysis": result}
 
-@app.get("/api/lhb/analysis")
+@app.get("/api/lhb/analysis", dependencies=[Depends(verify_license)])
 async def get_lhb_analysis_api(date: str):
     """获取已有的AI复盘结果 (如有)"""
     cache_key = f"lhb_daily_analysis_{date}"
@@ -1337,9 +1343,12 @@ async def fetch_lhb_data(background_tasks: BackgroundTasks):
     background_tasks.add_task(lhb_manager.fetch_and_update_data, logger=thread_logger, force_days=1)
     return {"status": "success", "message": "龙虎榜数据同步任务已在后台启动"}
 
-@app.post("/api/stock/analyze")
-async def analyze_stock_manual(request: AnalyzeRequest):
+@app.post("/api/stock/analyze", dependencies=[Depends(verify_license)])
+async def analyze_stock_manual(request: AnalyzeRequest, license_obj = Depends(verify_license), db = Depends(lambda: next(database.get_db()))):
     """手动触发个股AI分析"""
+    # 扣除次数
+    await deduct_usage(license_obj, db)
+    
     stock_data = {
         "code": request.code,
         "name": request.name,
@@ -1403,7 +1412,7 @@ async def get_stock_kline(code: str, type: str = "1min"):
     
     return {"status": "error", "message": "No data found"}
 
-@app.get("/api/stock/ai_markers")
+@app.get("/api/stock/ai_markers", dependencies=[Depends(verify_license)])
 async def get_ai_markers(code: str, type: str = None):
     """获取个股的AI分析历史标记"""
     # Determine priority based on type

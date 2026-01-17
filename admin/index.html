@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>狙击手 - 商业版管理后台</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="../frontend/config.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        }
+    </script>
+</head>
+<body class="bg-gray-100 text-gray-800 h-screen flex flex-col">
+    <div id="app" class="flex flex-1 overflow-hidden">
+        <!-- Sidebar -->
+        <div class="w-64 bg-gray-900 text-white flex flex-col">
+            <div class="p-4 bg-gray-800 font-bold text-xl flex items-center gap-2">
+                <span class="text-red-500">🛡️</span> 管理后台
+            </div>
+            
+            <nav class="flex-1 p-4 space-y-2">
+                <button @click="currentView='dashboard'" :class="currentView=='dashboard'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">概览 & 配置</button>
+                <button @click="currentView='licenses'" :class="currentView=='licenses'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">卡密管理</button>
+            </nav>
+            
+            <div class="p-4 border-t border-gray-700 text-xs text-gray-500">
+                System Version 2.0 (Commercial)
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <main class="flex-1 overflow-auto p-8 relative">
+            <!-- Login Overlay -->
+            <div v-if="!token" class="absolute inset-0 bg-gray-100 z-50 flex items-center justify-center">
+                <div class="bg-white p-8 rounded shadow-lg w-96">
+                    <h2 class="text-xl font-bold mb-4">管理员登录</h2>
+                    <input type="password" v-model="inputToken" @keyup.enter="login" class="w-full border p-2 rounded mb-4" placeholder="Admin Token">
+                    <button @click="login" class="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">进入</button>
+                </div>
+            </div>
+
+            <div v-else>
+                <!-- Dashboard & Config -->
+                <div v-if="currentView === 'dashboard'" class="max-w-4xl mx-auto space-y-6">
+                    <h2 class="text-2xl font-bold mb-4">系统设置</h2>
+                    
+                    <div class="bg-white p-6 rounded shadow space-y-6">
+                        <section>
+                            <h3 class="text-lg font-semibold border-b pb-2 mb-4">🤖 AI 分析调度</h3>
+                            <div class="space-y-4">
+                                <label class="flex items-center gap-3">
+                                    <input type="checkbox" v-model="config.auto_analysis_enabled" class="w-5 h-5 text-blue-600">
+                                    <span>启用自动分析</span>
+                                </label>
+                                
+                                <div class="pl-8 space-y-3" :class="{'opacity-50 pointer-events-none': !config.auto_analysis_enabled}">
+                                    <label class="flex items-center gap-3">
+                                        <input type="checkbox" v-model="config.use_smart_schedule" class="w-5 h-5 text-blue-600">
+                                        <span>启用智能调度模式 <span class="text-gray-500 text-sm">(根据盘前/盘中自动调整)</span></span>
+                                    </label>
+                                    
+                                    <div v-if="!config.use_smart_schedule" class="flex items-center gap-2">
+                                        <span class="text-sm">固定间隔(分钟):</span>
+                                        <input type="number" v-model="config.fixed_interval_minutes" class="border rounded px-2 py-1 w-20">
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section>
+                            <h3 class="text-lg font-semibold border-b pb-2 mb-4">🐲 龙虎榜设置</h3>
+                            <div class="space-y-4">
+                                <label class="flex items-center gap-3">
+                                    <input type="checkbox" v-model="config.lhb_enabled" class="w-5 h-5 text-blue-600">
+                                    <span>启用龙虎榜自动同步</span>
+                                </label>
+                                
+                                <div class="grid grid-cols-2 gap-4 pl-8">
+                                    <div>
+                                        <label class="block text-sm text-gray-600 mb-1">同步天数</label>
+                                        <input type="number" v-model="config.lhb_days" class="border rounded w-full px-2 py-1">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm text-gray-600 mb-1">最小上榜金额(万)</label>
+                                        <input type="number" v-model="config.lhb_min_amount" class="border rounded w-full px-2 py-1">
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <div class="flex justify-end pt-4">
+                            <button @click="saveConfig" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700">保存设置</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- License Management -->
+                <div v-if="currentView === 'licenses'" class="max-w-6xl mx-auto">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold">卡密管理</h2>
+                        <button @click="showGenModal = true" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">+ 生成新卡密</button>
+                    </div>
+
+                    <div class="bg-white rounded shadow overflow-hidden">
+                        <table class="w-full text-left">
+                            <thead class="bg-gray-50 border-b">
+                                <tr>
+                                    <th class="p-3 font-semibold text-gray-600">Key</th>
+                                    <th class="p-3 font-semibold text-gray-600">类型</th>
+                                    <th class="p-3 font-semibold text-gray-600">状态</th>
+                                    <th class="p-3 font-semibold text-gray-600">绑定设备</th>
+                                    <th class="p-3 font-semibold text-gray-600">用量</th>
+                                    <th class="p-3 font-semibold text-gray-600">备注</th>
+                                    <th class="p-3 font-semibold text-gray-600">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y text-sm">
+                                <tr v-for="l in licenses" :key="l.key" class="hover:bg-gray-50">
+                                    <td class="p-3 font-mono select-all">{{ l.key }}</td>
+                                    <td class="p-3">{{ l.type }}</td>
+                                    <td class="p-3">
+                                        <span :class="{
+                                            'bg-green-100 text-green-800': l.status=='active',
+                                            'bg-red-100 text-red-800': l.status=='banned',
+                                            'bg-gray-100 text-gray-800': l.status=='unused',
+                                            'bg-yellow-100 text-yellow-800': l.status=='expired'
+                                        }" class="px-2 py-1 rounded-full text-xs">
+                                            {{ l.status }}
+                                        </span>
+                                    </td>
+                                    <td class="p-3 font-mono text-xs text-gray-500" :title="l.device_id">{{ l.device_id ? l.device_id.substring(0,8)+'...' : '-' }}</td>
+                                    <td class="p-3">{{ l.remaining_usage }} rem.</td>
+                                    <td class="p-3 text-gray-500">{{ l.remark }}</td>
+                                    <td class="p-3">
+                                        <button v-if="l.status !== 'banned'" @click="banKey(l.key)" class="text-red-600 hover:text-red-900">封禁</button>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Generate Modal -->
+            <div v-if="showGenModal" class="absolute inset-0 bg-black/50 flex items-center justify-center z-40">
+                <div class="bg-white rounded p-6 w-96 space-y-4">
+                    <h3 class="font-bold text-lg">生成新卡密</h3>
+                    <div>
+                        <label class="block text-sm">类型</label>
+                        <select v-model="newKey.type" class="w-full border rounded p-2">
+                            <option value="standard">Standard</option>
+                            <option value="vip">VIP</option>
+                            <option value="trial">Trial</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm">备注</label>
+                        <input v-model="newKey.remark" class="w-full border rounded p-2">
+                    </div>
+                    <!-- Simplified for now -->
+                    <div class="flex justify-end gap-2">
+                        <button @click="showGenModal=false" class="text-gray-500 px-4">取消</button>
+                        <button @click="generateKey" class="bg-blue-600 text-white px-4 py-2 rounded">生成</button>
+                    </div>
+                </div>
+            </div>
+
+        </main>
+    </div>
+
+    <script>
+        const { createApp } = Vue
+
+        createApp({
+            data() {
+                return {
+                    token: localStorage.getItem('admin_token') || '',
+                    inputToken: '',
+                    currentView: 'dashboard',
+                    config: {},
+                    licenses: [],
+                    showGenModal: false,
+                    newKey: { type: 'standard', remark: '' }
+                }
+            },
+            mounted() {
+                if (this.token) {
+                    this.fetchConfig();
+                    this.fetchLicenses();
+                }
+            },
+            methods: {
+                login() {
+                    this.token = this.inputToken;
+                    localStorage.setItem('admin_token', this.token);
+                    this.fetchConfig();
+                    this.fetchLicenses();
+                },
+                getHeaders() {
+                    return {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Token': this.token
+                    };
+                },
+                async fetchConfig() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/config', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.token = ''; return; }
+                        this.config = await res.json();
+                    } catch(e) { alert(e); }
+                },
+                async saveConfig() {
+                    try {
+                        await fetch(API_BASE_URL + '/api/admin/config', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify(this.config)
+                        });
+                        alert('保存成功');
+                    } catch(e) { alert(e); }
+                },
+                async fetchLicenses() {
+                    if (this.currentView !== 'licenses') return;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/licenses', { headers: this.getHeaders() });
+                        this.licenses = await res.json();
+                    } catch(e) {}
+                },
+                async generateKey() {
+                    try {
+                        await fetch(API_BASE_URL + '/api/admin/licenses/generate', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            params: this.newKey // Actually needs to be query params for this simple implementation or adjust backend to accept body
+                        });
+                        // Fix: backend expects query params for default scalar types if not Pydantic model body
+                        // Let's adjust backend payload or js fetch
+                        
+                        // Revised fetch for this:
+                        const url = new URL(API_BASE_URL + '/api/admin/licenses/generate');
+                        url.searchParams.append('type', this.newKey.type);
+                        if(this.newKey.remark) url.searchParams.append('remark', this.newKey.remark);
+                        
+                        await fetch(url, { method: 'POST', headers: this.getHeaders() });
+                        
+                        this.showGenModal = false;
+                        this.fetchLicenses();
+                    } catch(e) { alert(e); }
+                },
+                async banKey(key) {
+                    if(!confirm('确定封禁?')) return;
+                    await fetch(API_BASE_URL + '/api/admin/licenses/ban', {
+                        method: 'POST',
+                        headers: this.getHeaders(),
+                        body: JSON.stringify({ key: key })
+                    });
+                    this.fetchLicenses();
+                }
+            },
+            watch: {
+                currentView(val) {
+                    if(val === 'licenses') this.fetchLicenses();
+                }
+            }
+        }).mount('#app')
+    </script>
+</body>
+</html>

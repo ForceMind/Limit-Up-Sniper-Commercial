@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>龙虎榜指挥中心 - 涨停狙击手</title>
-    <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+    <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
         tailwind.config = {
@@ -21,14 +21,15 @@
         .markdown-content strong { color: #dc2626; }
         html.dark .markdown-content strong { color: #f87171; }
     </style>
+    <script src="config.js"></script>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-mono h-screen flex flex-col overflow-hidden transition-colors duration-300">
-    {% raw %}
+    
     <div id="app" class="flex flex-col h-full">
         <!-- Header -->
         <header class="bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 p-3 md:p-4 flex flex-wrap justify-between items-center shrink-0 shadow-sm z-10 gap-2">
             <div class="flex items-center gap-2 md:gap-4 mr-auto">
-                <a href="/" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors shrink-0">
+                <a href="index.html" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors shrink-0">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 19l-7-7m0 0l7-7m-7 7h18" />
                     </svg>
@@ -190,7 +191,7 @@
     </div>
 
     </div>
-    {% endraw %}
+    
 
     <script>
         const { createApp } = Vue
@@ -232,7 +233,7 @@
                 },
                 async fetchDates() {
                     try {
-                        const res = await fetch('/api/lhb/dates');
+                        const res = await fetch(API_BASE_URL + '/api/lhb/dates');
                         this.availableDates = await res.json();
                         if (this.availableDates.length > 0) {
                             this.selectedDate = this.availableDates[0];
@@ -249,8 +250,8 @@
                     try {
                         // Parallel fetch: LHB Data and Existing Analysis
                         const [lhbRes, analysisRes] = await Promise.all([
-                            fetch(`/api/lhb/history?date=${this.selectedDate}`),
-                            fetch(`/api/lhb/analysis?date=${this.selectedDate}`)
+                            fetch(API_BASE_URL + `/api/lhb/history?date=${this.selectedDate}`),
+                            fetch(API_BASE_URL + `/api/lhb/analysis?date=${this.selectedDate}`)
                         ]);
 
                         if (!lhbRes.ok) {
@@ -276,7 +277,7 @@
                     this.fetchingLHB = true;
                     this.showLogPanel = true; 
                     try {
-                        const res = await fetch('/api/lhb/fetch', { method: 'POST' });
+                        const res = await fetch(API_BASE_URL + '/api/lhb/fetch', { method: 'POST' });
                         const data = await res.json();
                         if (data.status !== 'success') {
                             this.addLog('错误: ' + data.message);
@@ -326,7 +327,7 @@
                     this.analyzing = true;
                     this.showAnalysisPanel = true;
                     try {
-                        const res = await fetch('/api/lhb/analyze_daily', {
+                        const res = await fetch(API_BASE_URL + '/api/lhb/analyze_daily', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ date: this.selectedDate })

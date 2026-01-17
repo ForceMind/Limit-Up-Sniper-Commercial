@@ -8,9 +8,9 @@ echo =========================================
 
 :: 1. 备份数据
 echo [1/3] 正在备份数据...
-if exist "..\data" (
+if exist "..\backend\data" (
     if exist "._data_backup" rd /s /q "._data_backup"
-    xcopy /E /I /Q /Y "..\data" "._data_backup" >nul
+    xcopy /E /I /Q /Y "..\backend\data" "._data_backup" >nul
     echo 数据已备份到 ._data_backup
 )
 
@@ -44,7 +44,7 @@ if %GIT_EXIT_CODE% neq 0 (
         :: 还原数据
         if exist "._data_backup" (
             echo 正在还原数据...
-            xcopy /E /I /Q /Y "._data_backup" "..\data" >nul
+            xcopy /E /I /Q /Y "._data_backup" "..\backend\data" >nul
         )
     ) else (
         echo.

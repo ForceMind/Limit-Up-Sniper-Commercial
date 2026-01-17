@@ -3,7 +3,9 @@ import os
 import sys
 
 # Add the project root directory to sys.path so that 'app' can be imported
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(ROOT_DIR)
+sys.path.append(os.path.join(ROOT_DIR, "backend"))
 
 if __name__ == "__main__":
     # Use 'app.main:app' string to allow reload to work if needed, 
