@@ -281,7 +281,7 @@ class LHBManager:
                                 })
                                 
                         except Exception as e:
-                            if logger: logger(f"  ! Error fetching detail for {stock_code}: {e}")
+                            if logger: logger(f"  !获取股票详情失败 {stock_code}: {e}")
                             # pass
                         
                         # Sleep between stocks to avoid ban
@@ -319,10 +319,10 @@ class LHBManager:
                             self.generate_daily_report(date_iso, logger)
                             
                         except Exception as save_err:
-                            if logger: logger(f"[LHB] Error saving data for {date_iso}: {save_err}")
+                            if logger: logger(f"[LHB] 保存数据失败 {date_iso}: {save_err}")
 
                 except Exception as e:
-                    if logger: logger(f"[LHB] Error fetching {date_str}: {e}")
+                    if logger: logger(f"[LHB]获取 {date_str} 数据失败: {e}")
 
             # 4. Final Cleanup and K-line Download
             if not existing_df.empty:

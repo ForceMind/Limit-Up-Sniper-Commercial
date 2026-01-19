@@ -877,16 +877,32 @@
                         </div>
                     </div>
 
-                    <!-- Automation Settings Removed -->
+                    <!-- 2. System Info (Read Only) -->
+                    <div class="pt-4 border-t border-gray-100 dark:border-gray-700">
+                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
+                            <span>ℹ️</span> 系统状态
+                        </h4>
+                        <div class="bg-gray-50 dark:bg-gray-900 rounded p-3 text-xs space-y-2 font-mono">
+                            <div class="flex justify-between items-center">
+                                <span class="text-gray-500">定时任务 (Smart Schedule)</span>
+                                <span :class="systemConfig.auto_analysis_enabled ? 'text-green-600' : 'text-gray-400'">
+                                    {{ systemConfig.auto_analysis_enabled ? '运行中 (Running)' : '已停止 (Stopped)' }}
+                                </span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-gray-500">龙虎榜更新 (LHB Update)</span>
+                                <span class="text-gray-700 dark:text-gray-300">{{ lhbConfig.last_update_time || '未更新' }}</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-gray-500">系统版本 (Version)</span>
+                                <span class="text-gray-700 dark:text-gray-300">v2.5.0 Commercial</span>
+                            </div>
+                        </div>
+                    </div>
 
 
-                <div class="p-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 rounded-b-lg flex justify-end gap-2">
-                    <button @click="showSettingsModal = false" class="px-4 py-2 text-sm text-gray-600 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200">关闭</button>
-                    <!-- <button @click="saveConfig" class="px-4 py-2 bg-blue-600 text-white text-sm rounded hover:bg-blue-700 transition-colors">保存设置</button> -->
-                </div>
-                
                 <!-- Help Link -->
-                <div class="px-6 pb-4 text-center">
+                <div class="px-6 pb-4 pt-4 text-center border-t border-gray-100 dark:border-gray-700">
                     <a href="help.html" target="_blank" class="text-xs text-blue-500 hover:underline flex items-center justify-center gap-1">
                         <span>📖</span> 查看使用帮助与功能说明
                     </a>
@@ -993,6 +1009,36 @@
                     </button>
                 </div>
                 <p v-if="activationMsg" :class="activationError ? 'text-red-500' : 'text-green-500'" class="text-xs text-center">{{ activationMsg }}</p>
+            </div>
+        </div>
+
+        <!-- Custom Message Modal -->
+        <div v-if="msgModal.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 pointer-events-none">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl p-4 min-w-[200px] max-w-sm pointer-events-auto border border-gray-100 dark:border-gray-700 transform transition-all animate-[fade_0.2s_ease-out]">
+                <div class="flex items-center gap-3">
+                    <div :class="{
+                        'text-blue-500': msgModal.type === 'info',
+                        'text-green-500': msgModal.type === 'success',
+                        'text-red-500': msgModal.type === 'error'
+                    }">
+                        <svg v-if="msgModal.type === 'success'" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        <svg v-else-if="msgModal.type === 'error'" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <svg v-else class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    </div>
+                    <p class="text-sm font-medium text-gray-800 dark:text-gray-200">{{ msgModal.msg }}</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Custom Confirm Modal -->
+        <div v-if="confirmModal.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-sm p-6 transform transition-all scale-100">
+                <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 mb-2">确认操作</h3>
+                <p class="text-sm text-gray-600 dark:text-gray-400 mb-6">{{ confirmModal.msg }}</p>
+                <div class="flex justify-end gap-3">
+                    <button @click="handleConfirm(false)" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300 transition-colors">取消</button>
+                    <button @click="handleConfirm(true)" class="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded shadow transition-colors">确定</button>
+                </div>
             </div>
         </div>
 
@@ -1124,6 +1170,9 @@
                     analyzingAI: false,
                     loadingChart: false,
                     chartInstance: null,
+                    // Modals
+                    msgModal: { show: false, msg: '', type: 'info' },
+                    confirmModal: { show: false, msg: '', resolve: null },
                 }
             },
             computed: {
@@ -1649,7 +1698,8 @@
                     }
                 },
                 async removeStock(stock, listType = 'all') {
-                    if (!confirm(`确定要删除 ${stock.name} (${stock.code}) 吗？`)) return;
+                    const confirmed = await this.showConfirm(`确定要删除 ${stock.name} (${stock.code}) 吗？`);
+                    if (!confirmed) return;
                     
                     try {
                         const response = await fetch(API_BASE_URL + '/api/watchlist/remove', { 
@@ -1661,12 +1711,13 @@
                         if (result.status === 'success') {
                             // Refresh data to reflect changes (stock might still exist in other list)
                             await this.fetchData();
+                            this.showMsg('删除成功', 'success');
                         } else {
-                            alert('删除失败: ' + result.message);
+                            this.showMsg('删除失败: ' + result.message, 'error');
                         }
                     } catch (error) {
                         console.error('Remove error:', error);
-                        alert('删除请求错误');
+                        this.showMsg('删除请求错误', 'error');
                     }
                 },
                 startTypewriter(text) {
@@ -1862,9 +1913,21 @@
                     this.currentAISignals = []; // Reset signals
                     this.currentKlineData = []; // Reset data
                     this.$nextTick(() => {
-                        this.initChart();
-                        this.fetchKline('1min');
-                        this.fetchAIMarkers();
+                        try {
+                            if (typeof echarts === 'undefined') {
+                                console.error('ECharts is not loaded!');
+                                this.showMsg('图表组件加载失败，请检查网络', 'error');
+                                return;
+                            }
+                            this.initChart();
+                            this.fetchKline('1min');
+                            // Defensive call
+                            if (typeof this.fetchAIMarkers === 'function') {
+                                this.fetchAIMarkers();
+                            }
+                        } catch(e) {
+                            console.error('Open chart error:', e);
+                        }
                     });
                 },
                 closeChartModal() {
@@ -2424,7 +2487,30 @@
                         console.error(e);
                     }
                 },
+                // Custom Message Modal
+                showMsg(msg, type = 'info') {
+                    this.msgModal = { show: true, msg, type };
+                    // Auto close after 3s if info/success
+                    if (type === 'success' || type === 'info') {
+                        setTimeout(() => {
+                           if (this.msgModal.msg === msg) this.msgModal.show = false;
+                        }, 3000);
+                    }
                 },
+                // Custom Confirm Modal
+                showConfirm(msg) {
+                    return new Promise((resolve) => {
+                        this.confirmModal = { show: true, msg, resolve };
+                    });
+                },
+                handleConfirm(result) {
+                    this.confirmModal.show = false;
+                    if (this.confirmModal.resolve) {
+                        this.confirmModal.resolve(result);
+                        this.confirmModal.resolve = null;
+                    }
+                }
+            },
             mounted() {
                 this.initFingerprint();
                 

@@ -702,9 +702,9 @@ async def run_initial_scan():
             # Update last run time to prevent immediate re-run by scheduler
             SYSTEM_CONFIG["last_run_time"] = time.time()
         else:
-            print("Startup: Skipping initial scan (Non-trading day or disabled).")
+            print("启动: 跳过初始扫描 (非交易日或已禁用).")
     except Exception as e:
-        print(f"Startup scan error: {e}")
+        print(f"初始扫描错误: {e}")
 
 @app.get("/api/config")
 async def get_config():

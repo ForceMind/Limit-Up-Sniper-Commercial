@@ -165,7 +165,7 @@ def scan_intraday_limit_up(logger=None):
                     }
                     likely_seats = matcher.match(stock_data_for_matcher)
                 except Exception as e:
-                    if logger: logger(f"Matcher Error: {e}")
+                    if logger: logger(f"匹配错误: {e}")
 
             intraday_stocks.append({
                 "code": full_code,
@@ -249,7 +249,7 @@ def scan_limit_up_pool(logger=None):
                 }
                 likely_seats = matcher.match(stock_data_for_matcher)
             except Exception as e:
-                if logger: logger(f"Error matching seats for {name}: {e}")
+                if logger: logger(f"匹配席位失败 {name}: {e}")
 
             found_stocks.append({
                 "code": full_code,

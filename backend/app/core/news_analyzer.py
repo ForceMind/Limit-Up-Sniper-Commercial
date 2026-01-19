@@ -308,7 +308,7 @@ def get_eastmoney_news(hours=12, logger=None):
                         })
                         
     except Exception as e:
-        if logger: logger(f"[!] EastMoney news fetch failed: {e}")
+        if logger: logger(f"[!] 东方财富新闻获取失败: {e}")
         
     # Save history
     for item in news_list:
@@ -945,7 +945,7 @@ def generate_watchlist(logger=None, mode="after_hours", hours=None, update_callb
                     watchlist[item['code']] = item
                     initial_codes.add(item['code'])
         except Exception as e:
-            msg = f"[!] Failed to load existing watchlist: {e}"
+            msg = f"[!] 加载现有关注列表失败: {e}"
             print(msg)
             if logger: logger(msg)
             # If we can't load the existing list, we risk overwriting it with empty data.
@@ -959,7 +959,7 @@ def generate_watchlist(logger=None, mode="after_hours", hours=None, update_callb
         
         # [Fix] If scan returns empty (e.g. network error), do NOT clear existing data
         if not intraday_stocks and not sealed_stocks:
-            msg = "[!] Intraday scan returned no results. Skipping update to prevent clearing watchlist."
+            msg = "[!] 盘中扫描无结果。为防止清空列表，跳过更新。"
             print(msg)
             if logger: logger(msg)
         else:
