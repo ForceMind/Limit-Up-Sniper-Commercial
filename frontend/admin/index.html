@@ -66,6 +66,42 @@
                                         <span class="text-sm">固定间隔(分钟):</span>
                                         <input type="number" v-model="config.fixed_interval_minutes" class="border rounded px-2 py-1 w-20">
                                     </div>
+                                    
+                                    <!-- Smart Schedule Editor -->
+                                    <div v-if="config.use_smart_schedule" class="mt-4 border rounded p-4 bg-gray-50">
+                                        <h4 class="font-bold text-sm mb-2">📅 智能调度计划</h4>
+                                        <table class="w-full text-sm text-left">
+                                            <thead>
+                                                <tr class="text-gray-500 border-b">
+                                                    <th class="pb-2">开始</th>
+                                                    <th class="pb-2">结束</th>
+                                                    <th class="pb-2">模式 (Mode)</th>
+                                                    <th class="pb-2">间隔 (Min)</th>
+                                                    <th class="pb-2">描述</th>
+                                                    <th class="pb-2">操作</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y">
+                                                <tr v-for="(rule, idx) in config.schedule_plan" :key="idx">
+                                                    <td class="py-2"><input v-model="rule.start" class="w-16 border rounded px-1"></td>
+                                                    <td class="py-2"><input v-model="rule.end" class="w-16 border rounded px-1"></td>
+                                                    <td class="py-2">
+                                                        <select v-model="rule.mode" class="border rounded px-1">
+                                                            <option value="intraday">盘中 (Intraday)</option>
+                                                            <option value="after_hours">盘后 (After Hours)</option>
+                                                            <option value="none">暂停 (None)</option>
+                                                        </select>
+                                                    </td>
+                                                    <td class="py-2"><input type="number" v-model.number="rule.interval" class="w-16 border rounded px-1"></td>
+                                                    <td class="py-2"><input v-model="rule.desc" class="w-24 border rounded px-1"></td>
+                                                    <td class="py-2">
+                                                        <button @click="config.schedule_plan.splice(idx, 1)" class="text-red-500 hover:text-red-700">×</button>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                        <button @click="config.schedule_plan.push({start: '00:00', end: '00:00', mode: 'none', interval: 60, desc: 'New Rule'})" class="mt-2 text-xs bg-gray-200 hover:bg-gray-300 px-2 py-1 rounded">+ 添加规则</button>
+                                    </div>
                                 </div>
                             </div>
                         </section>
@@ -231,23 +267,23 @@
                 },
                 async generateKey() {
                     try {
-                        await fetch(API_BASE_URL + '/api/admin/licenses/generate', {
-                            method: 'POST',
-                            headers: this.getHeaders(),
-                            params: this.newKey // Actually needs to be query params for this simple implementation or adjust backend to accept body
-                        });
-                        // Fix: backend expects query params for default scalar types if not Pydantic model body
-                        // Let's adjust backend payload or js fetch
-                        
-                        // Revised fetch for this:
                         const url = new URL(API_BASE_URL + '/api/admin/licenses/generate');
                         url.searchParams.append('type', this.newKey.type);
                         if(this.newKey.remark) url.searchParams.append('remark', this.newKey.remark);
                         
-                        await fetch(url, { method: 'POST', headers: this.getHeaders() });
+                        // Default values for days and limit if needed, or rely on backend defaults
+                        // url.searchParams.append('days', 30);
+                        
+                        const res = await fetch(url, { 
+                            method: 'POST', 
+                            headers: this.getHeaders() 
+                        });
+                        
+                        if (!res.ok) throw new Error("Create failed");
                         
                         this.showGenModal = false;
                         this.fetchLicenses();
+                        alert("生成成功");
                     } catch(e) { alert(e); }
                 },
                 async banKey(key) {

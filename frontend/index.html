@@ -1482,8 +1482,12 @@
                 },
                 
                 connectWebSocket() {
-                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
+                    // Use API_BASE_URL to determine WS URL
+                    let wsBase = API_BASE_URL.replace(/^http/, 'ws');
+                    // Handle case where API_BASE_URL has no protocol (e.g. relative path, though unlikely in this setup)
+                    if (wsBase.startsWith('//')) wsBase = 'ws:' + wsBase;
+                    
+                    const wsUrl = `${wsBase}/ws/logs`;
                     const ws = new WebSocket(wsUrl);
                     
                     ws.onopen = () => {

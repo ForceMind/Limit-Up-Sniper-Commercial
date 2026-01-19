@@ -57,10 +57,18 @@ def main():
     t_frontend.start()
     
     # Open Browser
-    url = f"http://{host}:{frontend_port}/index.html"
-    print(f"即将打开浏览器: {url}")
+    user_url = f"http://{host}:{frontend_port}/index.html"
+    admin_url = f"http://{host}:{frontend_port}/admin/index.html"
+    
+    print(f"用户界面: {user_url}")
+    print(f"管理后台: {admin_url}")
+    print(f"默认管理员 Token: admin-secret-8888")
+    
     time.sleep(3) 
-    webbrowser.open(url)
+    webbrowser.open(user_url)
+    time.sleep(1)
+    # Automatically open Admin panel for Commercial setup check
+    webbrowser.open(admin_url)
     
     # Keep main thread alive
     try:
