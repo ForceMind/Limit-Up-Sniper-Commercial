@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session
 from app.db import models, schemas, database
 from typing import List, Optional
 import secrets
-from app.main import SYSTEM_CONFIG, save_config
+from app.core.config_manager import SYSTEM_CONFIG, save_config
 from app.core.lhb_manager import lhb_manager
 from pydantic import BaseModel
 

@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 import requests
@@ -17,6 +17,7 @@ from app.core.stock_utils import calculate_metrics, is_trading_time, is_market_o
 from app.core.data_provider import data_provider
 from app.core.lhb_manager import lhb_manager
 from app.core.ai_cache import ai_cache
+from app.core.config_manager import SYSTEM_CONFIG, save_config, DEFAULT_SCHEDULE
 from app.api import auth, admin
 from app.db import database
 from app.dependencies import verify_license, deduct_usage
@@ -704,62 +705,6 @@ async def run_initial_scan():
             print("Startup: Skipping initial scan (Non-trading day or disabled).")
     except Exception as e:
         print(f"Startup scan error: {e}")
-
-# Global Configuration
-DEFAULT_SCHEDULE = [
-    {"start": "09:30", "end": "15:00", "interval": 15, "mode": "intraday", "desc": "盘中交易"},
-    {"start": "15:00", "end": "15:15", "interval": 9999, "mode": "none", "desc": "收盘等待"},
-    {"start": "15:15", "end": "18:00", "interval": 60, "mode": "after_hours", "desc": "盘后复盘"},
-    {"start": "18:00", "end": "23:00", "interval": 180, "mode": "after_hours", "desc": "晚间复盘"},
-    {"start": "23:00", "end": "06:00", "interval": 360, "mode": "after_hours", "desc": "夜间休眠"},
-    {"start": "06:00", "end": "08:30", "interval": 60, "mode": "after_hours", "desc": "早间复盘"},
-    {"start": "08:30", "end": "09:30", "interval": 15, "mode": "after_hours", "desc": "盘前准备"}
-]
-
-SYSTEM_CONFIG = {
-    "auto_analysis_enabled": True,
-    "use_smart_schedule": True,
-    "fixed_interval_minutes": 60,
-    "last_run_time": 0,
-    "next_run_time": 0,
-    "current_status": "空闲中",
-    "active_rule_index": -1,
-    "schedule_plan": DEFAULT_SCHEDULE,
-    "news_auto_clean_enabled": True,
-    "news_auto_clean_days": 14
-}
-
-def load_config():
-    """Load configuration from disk"""
-    global SYSTEM_CONFIG
-    config_path = DATA_DIR / "config.json"
-    if config_path.exists():
-        try:
-            with open(config_path, "r", encoding="utf-8") as f:
-                saved_config = json.load(f)
-                # Update only persistent fields
-                for key in ["auto_analysis_enabled", "use_smart_schedule", "fixed_interval_minutes", "schedule_plan"]:
-                    if key in saved_config:
-                        SYSTEM_CONFIG[key] = saved_config[key]
-        except Exception as e:
-            print(f"Failed to load config: {e}")
-
-def save_config():
-    """Save configuration to disk"""
-    config_path = DATA_DIR / "config.json"
-    try:
-        with open(config_path, "w", encoding="utf-8") as f:
-            json.dump({
-                "auto_analysis_enabled": SYSTEM_CONFIG["auto_analysis_enabled"],
-                "use_smart_schedule": SYSTEM_CONFIG["use_smart_schedule"],
-                "fixed_interval_minutes": SYSTEM_CONFIG["fixed_interval_minutes"],
-                "schedule_plan": SYSTEM_CONFIG.get("schedule_plan", DEFAULT_SCHEDULE)
-            }, f, indent=2, ensure_ascii=False)
-    except Exception as e:
-        print(f"Failed to save config: {e}")
-
-# Load config on startup
-load_config()
 
 @app.get("/api/config")
 async def get_config():

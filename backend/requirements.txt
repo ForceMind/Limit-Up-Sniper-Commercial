@@ -7,4 +7,4 @@ akshare
 pandas
 scipy
 scikit-learn
-numpy
+numpysqlalchemy
