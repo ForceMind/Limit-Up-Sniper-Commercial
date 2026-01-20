@@ -1,10 +1,10 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>狙击手 - 商业版管理后台</title>
-    <link rel="icon" href="../static/favicon.ico">
+    <link rel="icon" href="../static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="../config.js"></script>
@@ -17,14 +17,15 @@
 <body class="bg-gray-100 text-gray-800 h-screen flex flex-col">
     <div id="app" class="flex flex-1 overflow-hidden">
         <!-- Sidebar -->
-        <div class="w-64 bg-gray-900 text-white flex flex-col">
+        <div class="w-64 bg-gray-900 text-white flex flex-col shrink-0">
             <div class="p-4 bg-gray-800 font-bold text-xl flex items-center gap-2">
-                <span class="text-red-500">🛡️</span> 管理后台
+                <span class="text-red-500"></span> 管理后台
             </div>
             
             <nav class="flex-1 p-4 space-y-2">
                 <button @click="currentView='dashboard'" :class="currentView=='dashboard'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">概览 & 配置</button>
-                <button @click="currentView='licenses'" :class="currentView=='licenses'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">卡密管理</button>
+                <button @click="currentView='users'" :class="currentView=='users'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">用户管理</button>
+                <button @click="currentView='orders'" :class="currentView=='orders'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">订单管理</button>
             </nav>
             
             <div class="p-4 border-t border-gray-700 text-xs text-gray-500">
@@ -38,8 +39,10 @@
             <div v-if="!token" class="absolute inset-0 bg-gray-100 z-50 flex items-center justify-center">
                 <div class="bg-white p-8 rounded shadow-lg w-96">
                     <h2 class="text-xl font-bold mb-4">管理员登录</h2>
+                    <p class="text-xs text-gray-500 mb-4">请输入管理员令牌 (查看 backend/data/admin_token.txt)</p>
                     <input type="password" v-model="inputToken" @keyup.enter="login" class="w-full border p-2 rounded mb-4" placeholder="Admin Token">
                     <button @click="login" class="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">进入</button>
+                    <p class="text-xs text-red-400 mt-2 text-center">注意：连续5次错误将被锁定IP</p>
                 </div>
             </div>
 
@@ -50,7 +53,7 @@
                     
                     <div class="bg-white p-6 rounded shadow space-y-6">
                         <section>
-                            <h3 class="text-lg font-semibold border-b pb-2 mb-4">🤖 AI 分析调度</h3>
+                            <h3 class="text-lg font-semibold border-b pb-2 mb-4"> AI 分析调度</h3>
                             <div class="space-y-4">
                                 <label class="flex items-center gap-3">
                                     <input type="checkbox" v-model="config.auto_analysis_enabled" class="w-5 h-5 text-blue-600">
@@ -70,13 +73,13 @@
                                     
                                     <!-- Smart Schedule Editor -->
                                     <div v-if="config.use_smart_schedule" class="mt-4 border rounded p-4 bg-gray-50">
-                                        <h4 class="font-bold text-sm mb-2">📅 智能调度计划</h4>
+                                        <h4 class="font-bold text-sm mb-2"> 智能调度计划</h4>
                                         <table class="w-full text-sm text-left">
                                             <thead>
                                                 <tr class="text-gray-500 border-b">
                                                     <th class="pb-2">开始</th>
                                                     <th class="pb-2">结束</th>
-                                                    <th class="pb-2">模式 (Mode)</th>
+                                                    <th class="pb-2">模式</th>
                                                     <th class="pb-2">间隔 (Min)</th>
                                                     <th class="pb-2">描述</th>
                                                     <th class="pb-2">操作</th>
@@ -88,15 +91,15 @@
                                                     <td class="py-2"><input v-model="rule.end" class="w-16 border rounded px-1"></td>
                                                     <td class="py-2">
                                                         <select v-model="rule.mode" class="border rounded px-1">
-                                                            <option value="intraday">盘中 (Intraday)</option>
-                                                            <option value="after_hours">盘后 (After Hours)</option>
-                                                            <option value="none">暂停 (None)</option>
+                                                            <option value="intraday">盘中</option>
+                                                            <option value="after_hours">盘后</option>
+                                                            <option value="none">暂停</option>
                                                         </select>
                                                     </td>
                                                     <td class="py-2"><input type="number" v-model.number="rule.interval" class="w-16 border rounded px-1"></td>
                                                     <td class="py-2"><input v-model="rule.desc" class="w-24 border rounded px-1"></td>
                                                     <td class="py-2">
-                                                        <button @click="config.schedule_plan.splice(idx, 1)" class="text-red-500 hover:text-red-700">×</button>
+                                                        <button @click="config.schedule_plan.splice(idx, 1)" class="text-red-500 hover:text-red-700"></button>
                                                     </td>
                                                 </tr>
                                             </tbody>
@@ -108,7 +111,7 @@
                         </section>
 
                         <section>
-                            <h3 class="text-lg font-semibold border-b pb-2 mb-4">🐲 龙虎榜设置</h3>
+                            <h3 class="text-lg font-semibold border-b pb-2 mb-4"> 龙虎榜设置</h3>
                             <div class="space-y-4">
                                 <label class="flex items-center gap-3">
                                     <input type="checkbox" v-model="config.lhb_enabled" class="w-5 h-5 text-blue-600">
@@ -127,83 +130,145 @@
                                 </div>
                             </div>
                         </section>
-
-                        <div class="flex justify-end pt-4">
+                        <section class="mt-8">
+                            <h3 class="text-lg font-semibold border-b pb-2 mb-4">邮件通知设置</h3>
+                            <div class="space-y-4">
+                                <label class="flex items-center gap-3">
+                                    <input type="checkbox" v-if="config.email_config" v-model="config.email_config.enabled" class="w-5 h-5 text-blue-600">
+                                    <span>启用邮件通知 (有新订单时通知管理员)</span>
+                                </label>
+                                
+                                <div v-if="config.email_config && config.email_config.enabled" class="grid grid-cols-2 gap-4 pl-8 bg-gray-50 p-4 rounded">
+                                    <div class="col-span-2">
+                                        <label class="block text-sm text-gray-600 mb-1">接收通知邮箱</label>
+                                        <input type="email" v-model="config.email_config.recipient_email" class="border rounded w-full px-2 py-1" placeholder="admin@example.com">
+                                    </div>
+                                    
+                                    <div>
+                                        <label class="block text-sm text-gray-600 mb-1">SMTP服务器</label>
+                                        <input type="text" v-model="config.email_config.smtp_server" class="border rounded w-full px-2 py-1" placeholder="smtp.qq.com">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm text-gray-600 mb-1">SMTP端口</label>
+                                        <input type="number" v-model.number="config.email_config.smtp_port" class="border rounded w-full px-2 py-1" placeholder="465">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm text-gray-600 mb-1">发送邮箱账号</label>
+                                        <input type="email" v-model="config.email_config.smtp_user" class="border rounded w-full px-2 py-1">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm text-gray-600 mb-1">发送邮箱密码/授权码</label>
+                                        <input type="password" v-model="config.email_config.smtp_password" class="border rounded w-full px-2 py-1">
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+<div class="flex justify-end pt-4">
                             <button @click="saveConfig" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700">保存设置</button>
                         </div>
                     </div>
                 </div>
 
-                <!-- License Management -->
-                <div v-if="currentView === 'licenses'" class="max-w-6xl mx-auto">
+                <!-- User Management -->
+                <div v-if="currentView === 'users'" class="max-w-6xl mx-auto">
                     <div class="flex justify-between items-center mb-6">
-                        <h2 class="text-2xl font-bold">卡密管理</h2>
-                        <button @click="showGenModal = true" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700">+ 生成新卡密</button>
+                        <h2 class="text-2xl font-bold">用户管理</h2>
+                        <button @click="fetchUsers" class="text-blue-500 hover:text-blue-700">刷新</button>
                     </div>
 
                     <div class="bg-white rounded shadow overflow-hidden">
                         <table class="w-full text-left">
                             <thead class="bg-gray-50 border-b">
                                 <tr>
-                                    <th class="p-3 font-semibold text-gray-600">Key</th>
-                                    <th class="p-3 font-semibold text-gray-600">类型</th>
+                                    <th class="p-3 font-semibold text-gray-600">ID</th>
+                                    <th class="p-3 font-semibold text-gray-600">设备指纹</th>
+                                    <th class="p-3 font-semibold text-gray-600">版本</th>
                                     <th class="p-3 font-semibold text-gray-600">状态</th>
-                                    <th class="p-3 font-semibold text-gray-600">绑定设备</th>
-                                    <th class="p-3 font-semibold text-gray-600">用量</th>
-                                    <th class="p-3 font-semibold text-gray-600">备注</th>
+                                    <th class="p-3 font-semibold text-gray-600">过期时间</th>
+                                    <th class="p-3 font-semibold text-gray-600">用量 (AI/突/复)</th>
                                     <th class="p-3 font-semibold text-gray-600">操作</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y text-sm">
-                                <tr v-for="l in licenses" :key="l.key" class="hover:bg-gray-50">
-                                    <td class="p-3 font-mono select-all">{{ l.key }}</td>
-                                    <td class="p-3">{{ l.type }}</td>
+                                <tr v-for="u in users" :key="u.id" class="hover:bg-gray-50">
+                                    <td class="p-3">{{ u.id }}</td>
+                                    <td class="p-3 font-mono text-xs select-all">{{ u.device_id }}</td>
                                     <td class="p-3">
                                         <span :class="{
-                                            'bg-green-100 text-green-800': l.status=='active',
-                                            'bg-red-100 text-red-800': l.status=='banned',
-                                            'bg-gray-100 text-gray-800': l.status=='unused',
-                                            'bg-yellow-100 text-yellow-800': l.status=='expired'
-                                        }" class="px-2 py-1 rounded-full text-xs">
-                                            {{ l.status }}
-                                        </span>
+                                            'text-gray-500': u.version==='trial',
+                                            'text-blue-500 font-bold': u.version==='basic',
+                                            'text-purple-500 font-bold': u.version==='advanced',
+                                            'text-red-500 font-bold': u.version==='flagship'
+                                        }">{{ u.version }}</span>
                                     </td>
-                                    <td class="p-3 font-mono text-xs text-gray-500" :title="l.device_id">{{ l.device_id ? l.device_id.substring(0,8)+'...' : '-' }}</td>
-                                    <td class="p-3">{{ l.remaining_usage }} rem.</td>
-                                    <td class="p-3 text-gray-500">{{ l.remark }}</td>
                                     <td class="p-3">
-                                        <button v-if="l.status !== 'banned'" @click="banKey(l.key)" class="text-red-600 hover:text-red-900">封禁</button>
+                                        <span v-if="u.is_expired" class="bg-red-100 text-red-800 px-2 py-1 rounded-full text-xs">过期</span>
+                                        <span v-else class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs">正常</span>
+                                    </td>
+                                    <td class="p-3 text-xs">{{ u.expires_at ? new Date(u.expires_at).toLocaleString() : '永久' }}</td>
+                                    <td class="p-3 text-xs font-mono">
+                                        {{ u.daily_ai_count }} / {{ u.daily_raid_count }} / {{ u.daily_review_count }}
+                                    </td>
+                                    <td class="p-3">
+                                        <button @click="openAddTime(u)" class="text-blue-500 hover:text-blue-700 text-xs border border-blue-500 rounded px-2 py-1">增加时长</button>
                                     </td>
                                 </tr>
                             </tbody>
                         </table>
                     </div>
                 </div>
-            </div>
 
-            <!-- Generate Modal -->
-            <div v-if="showGenModal" class="absolute inset-0 bg-black/50 flex items-center justify-center z-40">
-                <div class="bg-white rounded p-6 w-96 space-y-4">
-                    <h3 class="font-bold text-lg">生成新卡密</h3>
-                    <div>
-                        <label class="block text-sm">类型</label>
-                        <select v-model="newKey.type" class="w-full border rounded p-2">
-                            <option value="standard">Standard</option>
-                            <option value="vip">VIP</option>
-                            <option value="trial">Trial</option>
-                        </select>
+                <!-- Order Management -->
+                <div v-if="currentView === 'orders'" class="max-w-6xl mx-auto">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold">订单管理</h2>
+                        <button @click="fetchOrders" class="text-blue-500 hover:text-blue-700">刷新</button>
                     </div>
-                    <div>
-                        <label class="block text-sm">备注</label>
-                        <input v-model="newKey.remark" class="w-full border rounded p-2">
-                    </div>
-                    <!-- Simplified for now -->
-                    <div class="flex justify-end gap-2">
-                        <button @click="showGenModal=false" class="text-gray-500 px-4">取消</button>
-                        <button @click="generateKey" class="bg-blue-600 text-white px-4 py-2 rounded">生成</button>
+
+                    <div class="bg-white rounded shadow overflow-hidden">
+                        <table class="w-full text-left">
+                            <thead class="bg-gray-50 border-b">
+                                <tr>
+                                    <th class="p-3 font-semibold text-gray-600">订单号 (口令)</th>
+                                    <th class="p-3 font-semibold text-gray-600">金额</th>
+                                    <th class="p-3 font-semibold text-gray-600">版本</th>
+                                    <th class="p-3 font-semibold text-gray-600">时长</th>
+                                    <th class="p-3 font-semibold text-gray-600">状态</th>
+                                    <th class="p-3 font-semibold text-gray-600">时间</th>
+                                    <th class="p-3 font-semibold text-gray-600">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y text-sm">
+                                <tr v-for="o in orders" :key="o.id" class="hover:bg-gray-50">
+                                    <td class="p-3 font-mono font-bold select-all">{{ o.order_code }}</td>
+                                    <td class="p-3 text-red-600 font-bold">{{ o.amount }}</td>
+                                    <td class="p-3">{{ o.target_version }}</td>
+                                    <td class="p-3">{{ o.duration_days }} 天</td>
+                                    <td class="p-3">
+                                        <span :class="{
+                                            'bg-gray-100': o.status==='pending',
+                                            'bg-blue-100 text-blue-800 animate-pulse': o.status==='waiting_verification',
+                                            'bg-green-100 text-green-800': o.status==='completed',
+                                            'bg-red-100 text-red-800': o.status==='rejected'
+                                        }" class="px-2 py-1 rounded-full text-xs uppercase">
+                                            {{ o.status }}
+                                        </span>
+                                    </td>
+                                    <td class="p-3 text-xs text-gray-500">{{ new Date(o.created_at).toLocaleString() }}</td>
+                                    <td class="p-3">
+                                        <div v-if="o.status === 'waiting_verification'" class="flex gap-2">
+                                            <button @click="processOrder(o, 'approve')" class="text-green-600 hover:text-green-800 font-bold border border-green-200 px-2 rounded">通过</button>
+                                            <button @click="processOrder(o, 'reject')" class="text-red-500 hover:text-red-700 border border-red-200 px-2 rounded">拒绝</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
                     </div>
                 </div>
+
             </div>
+        </main>
 
         <!-- Custom Message Modal -->
         <div v-if="msgModal.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 pointer-events-none">
@@ -223,7 +288,7 @@
             </div>
         </div>
 
-        <!-- Custom Confirm Modal -->
+        <!-- Confirm Modal -->
         <div v-if="confirmModal.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
             <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 transform transition-all scale-100">
                 <h3 class="text-lg font-bold text-gray-900 mb-2">确认操作</h3>
@@ -235,7 +300,28 @@
             </div>
         </div>
 
-        </main>
+        <!-- Add Time Modal -->
+        <div v-if="addTimeModal.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 transform transition-all scale-100">
+                <h3 class="text-lg font-bold text-gray-900 mb-2">增加时长</h3>
+                <p class="text-sm text-gray-600 mb-4">用户: <span class="font-mono">{{ addTimeModal.user?.device_id }}</span></p>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">增加分钟数</label>
+                    <input type="number" v-model.number="addTimeModal.minutes" class="w-full border rounded p-2 focus:ring-2 focus:ring-blue-500 outline-none">
+                    <div class="flex gap-2 mt-2">
+                        <button @click="addTimeModal.minutes = 60" class="text-xs bg-gray-100 px-2 py-1 rounded hover:bg-gray-200">1小时</button>
+                        <button @click="addTimeModal.minutes = 1440" class="text-xs bg-gray-100 px-2 py-1 rounded hover:bg-gray-200">1天</button>
+                        <button @click="addTimeModal.minutes = 43200" class="text-xs bg-gray-100 px-2 py-1 rounded hover:bg-gray-200">30天</button>
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-3">
+                    <button @click="addTimeModal.show = false" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">取消</button>
+                    <button @click="submitAddTime" class="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded shadow transition-colors">确定</button>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -248,17 +334,25 @@
                     inputToken: '',
                     currentView: 'dashboard',
                     config: {},
-                    licenses: [],
-                    showGenModal: false,
-                    newKey: { type: 'standard', remark: '' },
+                    users: [],
+                    orders: [],
                     msgModal: { show: false, msg: '', type: 'info' },
                     confirmModal: { show: false, msg: '', resolve: null },
+                    addTimeModal: { show: false, user: null, minutes: 60 },
                 }
             },
             mounted() {
                 if (this.token) {
                     this.fetchConfig();
-                    this.fetchLicenses();
+                    // Pre-fetch
+                    this.fetchUsers();
+                    this.fetchOrders();
+                }
+            },
+            watch: {
+                currentView(val) {
+                    if (val === 'users') this.fetchUsers();
+                    if (val === 'orders') this.fetchOrders();
                 }
             },
             methods: {
@@ -284,7 +378,8 @@
                     this.token = this.inputToken;
                     localStorage.setItem('admin_token', this.token);
                     this.fetchConfig();
-                    this.fetchLicenses();
+                    this.fetchUsers();
+                    this.fetchOrders();
                 },
                 getHeaders() {
                     return {
@@ -309,51 +404,82 @@
                         this.showMsg('保存成功', 'success');
                     } catch(e) { this.showMsg(e.message, 'error'); }
                 },
-                async fetchLicenses() {
-                    if (this.currentView !== 'licenses') return;
+                
+                // Users
+                async fetchUsers() {
                     try {
-                        const res = await fetch(API_BASE_URL + '/api/admin/licenses', { headers: this.getHeaders() });
-                        this.licenses = await res.json();
-                    } catch(e) {}
+                        const res = await fetch(API_BASE_URL + '/api/admin/users', { headers: this.getHeaders() });
+                        this.users = await res.json();
+                    } catch(e) { console.error(e); }
                 },
-                async generateKey() {
+                
+                // Orders
+                async fetchOrders() {
                     try {
-                        const url = new URL(API_BASE_URL + '/api/admin/licenses/generate');
-                        url.searchParams.append('type', this.newKey.type);
-                        if(this.newKey.remark) url.searchParams.append('remark', this.newKey.remark);
-                        
-                        // Default values for days and limit if needed, or rely on backend defaults
-                        // url.searchParams.append('days', 30);
-                        
-                        const res = await fetch(url, { 
-                            method: 'POST', 
-                            headers: this.getHeaders() 
+                        const res = await fetch(API_BASE_URL + '/api/admin/orders', { headers: this.getHeaders() });
+                        this.orders = await res.json();
+                    } catch(e) { console.error(e); }
+                },
+
+                openAddTime(user) {
+                    this.addTimeModal.user = user;
+                    this.addTimeModal.minutes = 60;
+                    this.addTimeModal.show = true;
+                },
+                async submitAddTime() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/users/add_time', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                user_id: this.addTimeModal.user.id,
+                                minutes: this.addTimeModal.minutes
+                            })
                         });
-                        
-                        if (!res.ok) throw new Error("Create failed");
-                        
-                        this.showGenModal = false;
-                        this.fetchLicenses();
-                        this.showMsg("生成成功", 'success');
-                    } catch(e) { this.showMsg(e.message, 'error'); }
+                        const data = await res.json();
+                        if (res.ok) {
+                            this.showMsg('时长增加成功', 'success');
+                            this.addTimeModal.show = false;
+                            this.fetchUsers();
+                        } else {
+                            this.showMsg(data.detail, 'error');
+                        }
+                    } catch (e) {
+                        this.showMsg(e.message, 'error');
+                    }
                 },
-                async banKey(key) {
-                    const confirmed = await this.showConfirm('确定封禁?');
-                    if(!confirmed) return;
-                    await fetch(API_BASE_URL + '/api/admin/licenses/ban', {
-                        method: 'POST',
-                        headers: this.getHeaders(),
-                        body: JSON.stringify({ key: key })
-                    });
-                    this.fetchLicenses();
-                }
-            },
-            watch: {
-                currentView(val) {
-                    if(val === 'licenses') this.fetchLicenses();
+                
+                async processOrder(order, action) {
+                    const confirmed = await this.showConfirm(action === 'approve' ? '确定验证通过该订单?' : '确定拒绝该订单?');
+                    if (!confirmed) return;
+                    
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/orders/approve', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                order_code: order.order_code,
+                                action: action
+                            })
+                        });
+                        const data = await res.json();
+                        if (data.status === 'success' || data.status === 'rejected') {
+                            this.showMsg('操作成功', 'success');
+                            this.fetchOrders();
+                            this.fetchUsers(); // Refresh users too as one might have updated
+                        } else {
+                            this.showMsg(data.detail || '操作失败', 'error');
+                        }
+                    } catch (e) {
+                         this.showMsg(e.message, 'error');
+                    }
                 }
             }
         }).mount('#app')
     </script>
 </body>
 </html>
+
+
+
+

@@ -1,7 +1,16 @@
 from fastapi import Header, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db import database, models
+from app.core import user_service
 from datetime import datetime
+
+class QuotaLimitExceeded(HTTPException):
+    def __init__(self, detail="Quota exceeded"):
+        super().__init__(status_code=403, detail=detail)
+
+class UpgradeRequired(HTTPException):
+    def __init__(self, detail="Upgrade required"):
+        super().__init__(status_code=403, detail=detail)
 
 def get_db():
     db = database.SessionLocal()
@@ -10,48 +19,43 @@ def get_db():
     finally:
         db.close()
 
-async def verify_license(x_device_id: str = Header(..., alias="X-Device-ID"), db: Session = Depends(get_db)):
-    """
-    Dependency to verify license for protected endpoints.
-    Requires 'X-Device-ID' header.
-    """
+async def get_current_user(x_device_id: str = Header(..., alias="X-Device-ID"), db: Session = Depends(get_db)):
     if not x_device_id:
-        raise HTTPException(status_code=400, detail="Missing Device Fingerprint")
+        raise HTTPException(status_code=400, detail="Missing Device ID")
+    return user_service.get_or_create_user(db, x_device_id)
 
-    # 查找该设备绑定的有效License
-    license_obj = db.query(models.License).filter(
-        models.License.device_id == x_device_id,
-        models.License.is_active == True
-    ).first()
+async def check_ai_permission(user: models.User = Depends(get_current_user)):
+    """Check if user can use AI analysis"""
+    # 1. Check if trial expired (10 min hard limit for Trial)
+    if user.expires_at and user.expires_at < datetime.utcnow():
+        raise UpgradeRequired(detail="License expired")
 
-    if not license_obj:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="设备未激活，请购买卡密"
-        )
-
-    # 检查过期
-    if license_obj.expires_at and license_obj.expires_at < datetime.now():
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="订阅已过期，请续费"
-        )
+    # 2. Check Daily Quota
+    if not user_service.check_quota(user, 'ai'):
+         raise QuotaLimitExceeded(detail=f"Daily AI analysis limit reached for {user.version} version")
     
-    # 检查次数限制 (如果有)
-    if license_obj.total_usage != -1:
-        if license_obj.used_usage >= license_obj.total_usage:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="使用次数已耗尽"
-            )
+    return user
 
-    return license_obj
+async def check_raid_permission(user: models.User = Depends(get_current_user)):
+    """Check if user can use Mid-day Raid"""
+    if user.version in ['trial', 'basic']:
+        raise UpgradeRequired(detail="Raid feature requires Advanced version or above")
+    
+    if user.expires_at and user.expires_at < datetime.utcnow():
+        raise UpgradeRequired(detail="License expired")
+        
+    if not user_service.check_quota(user, 'raid'):
+         raise QuotaLimitExceeded(detail="Daily Raid limit reached")
+    return user
 
-async def deduct_usage(license_obj: models.License, db: Session):
-    """
-    Helper to deduct usage after successful operation.
-    Only if total_usage != -1
-    """
-    if license_obj.total_usage != -1:
-        license_obj.used_usage += 1
-        db.commit()
+async def check_review_permission(user: models.User = Depends(get_current_user)):
+    """Check if user can use Post-market Review"""
+    if user.version in ['trial', 'basic']:
+        raise UpgradeRequired(detail="Review feature requires Advanced version or above")
+        
+    if user.expires_at and user.expires_at < datetime.utcnow():
+        raise UpgradeRequired(detail="License expired")
+        
+    if not user_service.check_quota(user, 'review'):
+         raise QuotaLimitExceeded(detail="Daily Review limit reached")
+    return user

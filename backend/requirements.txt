@@ -7,4 +7,6 @@ akshare
 pandas
 scipy
 scikit-learn
-numpysqlalchemy
+numpy
+sqlalchemy
+aiofiles

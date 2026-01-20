@@ -87,6 +87,22 @@
             </div>
             
             <div class="flex items-center gap-2 md:gap-4 w-full md:w-auto justify-between md:justify-end flex-wrap transition-all duration-300">
+                <!-- User Profile -->
+                <div @click="openSubscription()" class="cursor-pointer text-xs flex flex-col items-end mr-2 bg-gray-50 dark:bg-gray-800 p-1 px-2 rounded border border-gray-200 dark:border-gray-700">
+                    <div class="font-bold" :class="{
+                        'text-gray-500': userInfo.version==='trial',
+                        'text-blue-500': userInfo.version==='basic',
+                        'text-purple-500': userInfo.version==='advanced',
+                        'text-red-500': userInfo.version==='flagship'
+                    }">
+                        {{ features[userInfo.version]?.desc || userInfo.version }}
+                        <span v-if="userInfo.is_expired" class="text-red-500 text-[10px]">(已过期)</span>
+                    </div>
+                    <div class="text-[10px] text-gray-400">
+                        AI:{{userInfo.remaining_ai}} | 突:{{userInfo.remaining_raid}} | 复:{{userInfo.remaining_review}}
+                    </div>
+                </div>
+
                 <!-- Settings Button (Merged Filter & Config) -->
                 <button v-if="!isSearchFocused || !isMobile" @click="showSettingsModal = true" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors" title="过滤设置">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -120,13 +136,13 @@
                     </div>
                 </div>
 
-                <button @click="runAnalysis('after_hours')" :disabled="isAnalyzing || isSyncingLHB" 
+                <button @click="checkPermission('review') && runAnalysis('after_hours')" :disabled="isAnalyzing || isSyncingLHB" 
                         class="px-3 py-1 text-xs font-bold rounded border transition-colors flex items-center gap-2 whitespace-nowrap"
                         :class="(isAnalyzing || isSyncingLHB) ? 'bg-gray-200 dark:bg-gray-700 text-gray-500 border-gray-300 dark:border-gray-600 cursor-not-allowed' : 'bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 border-purple-300 dark:border-purple-500/50 hover:bg-purple-200 dark:hover:bg-purple-800/50'">
                     <span v-if="isAnalyzing" class="w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full animate-spin"></span>
                     {{ isAnalyzing ? '分析中...' : '🌙 盘后复盘' }}
                 </button>
-                <button @click="runAnalysis('intraday')" :disabled="isAnalyzing || isSyncingLHB" 
+                <button @click="checkPermission('raid') && runAnalysis('intraday')" :disabled="isAnalyzing || isSyncingLHB" 
                         class="px-3 py-1 text-xs font-bold rounded border transition-colors flex items-center gap-2 whitespace-nowrap"
                         :class="(isAnalyzing || isSyncingLHB) ? 'bg-gray-200 dark:bg-gray-700 text-gray-500 border-gray-300 dark:border-gray-600 cursor-not-allowed' : 'bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 border-red-300 dark:border-red-500/50 hover:bg-red-200 dark:hover:bg-red-800/50'">
                     <span v-if="isAnalyzing" class="w-3 h-3 border-2 border-gray-500 border-t-transparent rounded-full animate-spin"></span>
@@ -988,27 +1004,89 @@
                 </div>
             </div>
         </div>
-        <!-- Activation Modal -->
-        <div v-if="showActivationModal" class="fixed inset-0 bg-black/50 flex items-center justify-center z-[60] backdrop-blur-sm">
-            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-96 p-6 space-y-4">
-                <div class="flex items-center gap-2 text-red-600 dark:text-red-500">
-                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z"></path></svg>
-                    <h3 class="text-lg font-bold">软件授权验证</h3>
-                </div>
-                <p class="text-sm text-gray-600 dark:text-gray-400">该功能需要商业授权。您的设备ID: <br><code class="bg-gray-100 dark:bg-gray-900 px-1 rounded select-all">{{ deviceId }}</code></p>
-                
-                <div class="space-y-2">
-                    <label class="text-xs font-semibold text-gray-500 uppercase">请输入激活码 (License Key)</label>
-                    <input v-model="licenseKey" type="text" class="w-full bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500" placeholder="XXXX-XXXX-XXXX-XXXX">
-                </div>
-                
-                <div class="flex justify-end gap-2 pt-2">
-                    <button @click="showActivationModal = false" class="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 dark:hover:text-gray-300">取消</button>
-                    <button @click="activateLicense" :disabled="activating" class="px-4 py-1.5 text-sm bg-red-600 hover:bg-red-700 text-white rounded shadow transition-colors disabled:opacity-50">
-                        {{ activating ? '激活中...' : '立即激活' }}
+        <!-- Subscription Modal -->
+        <div v-if="showSubscriptionModal" class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+                <!-- Header -->
+                <div class="flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-700">
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">
+                        {{ purchaseStep === 1 ? '升级会员' : (purchaseStep === 2 ? '支付订单' : '等待验证') }}
+                    </h3>
+                    <button @click="showSubscriptionModal = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                        <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
                     </button>
                 </div>
-                <p v-if="activationMsg" :class="activationError ? 'text-red-500' : 'text-green-500'" class="text-xs text-center">{{ activationMsg }}</p>
+
+                <!-- Step 1: Selection -->
+                <div v-if="purchaseStep === 1" class="p-4 overflow-y-auto">
+                    <!-- Version Tabs -->
+                    <div class="flex gap-2 mb-4 overflow-x-auto pb-2">
+                        <button v-for="(feat, ver) in features" :key="ver" 
+                            v-if="ver !== 'trial'"
+                            @click="selectedVersion = ver"
+                            class="flex-1 min-w-[80px] py-2 px-1 rounded border-2 text-center transition-all"
+                            :class="selectedVersion === ver ? 'border-red-500 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400' : 'border-gray-200 dark:border-gray-700 text-gray-500'">
+                            <div class="text-xs font-bold">{{ ver === 'basic' ? '初级版' : (ver === 'advanced' ? '高级版' : '旗舰版') }}</div>
+                            <div class="text-[10px] scale-90">{{ feat.desc }}</div>
+                        </button>
+                    </div>
+
+                    <!-- Features List -->
+                    <div class="bg-gray-50 dark:bg-gray-900 rounded p-3 mb-4 text-xs space-y-2 border border-gray-100 dark:border-gray-700">
+                        <div class="flex justify-between"><span>🤖 AI分析:</span> <span class="font-bold">{{ features[selectedVersion]?.ai }}</span></div>
+                        <div class="flex justify-between"><span>⚡ 盘中突击:</span> <span class="font-bold">{{ features[selectedVersion]?.raid }}</span></div>
+                        <div class="flex justify-between"><span>📊 盘后复盘:</span> <span class="font-bold">{{ features[selectedVersion]?.review }}</span></div>
+                    </div>
+
+                    <!-- Duration Selection -->
+                    <div class="mb-4">
+                        <label class="block text-xs text-gray-500 mb-2">选择时长</label>
+                        <div class="grid grid-cols-3 gap-2">
+                            <button v-for="(opt, key) in pricingOptions[selectedVersion]" :key="key"
+                                @click="selectedDuration = key"
+                                class="p-2 rounded border text-center relative"
+                                :class="selectedDuration === key ? 'border-red-500 bg-red-50 dark:bg-red-900/10' : 'border-gray-200 dark:border-gray-700'">
+                                <div class="text-xs">{{ opt.label }}</div>
+                                <div class="text-red-600 font-bold">¥{{ opt.price }}</div>
+                            </button>
+                        </div>
+                    </div>
+
+                    <button @click="createOrder" :disabled="purchaseLoading" class="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded font-bold shadow-lg disabled:opacity-50">
+                        {{ purchaseLoading ? '生成中...' : '立即购买 ¥' + (pricingOptions[selectedVersion]?.[selectedDuration]?.price || '...') }}
+                    </button>
+                </div>
+
+                <!-- Step 2: Payment -->
+                <div v-if="purchaseStep === 2" class="p-6 flex flex-col items-center text-center">
+                    <div class="bg-yellow-50 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200 p-3 rounded text-xs mb-4 w-full text-left">
+                        1. 复制下方口令<br>2. 打开支付宝 -> 红包 -> 口令红包<br>3. 粘贴口令，输入金额 <span class="font-bold text-red-500">{{ currentOrder?.amount }} 元</span><br>4. 塞钱进红包
+                    </div>
+                    
+                    <div class="w-full bg-gray-100 dark:bg-gray-900 p-4 rounded mb-4 flex items-center justify-between border-2 border-dashed border-gray-300 dark:border-gray-600">
+                        <span class="text-xl font-mono font-bold tracking-widest">{{ currentOrder?.order_code }}</span>
+                        <button @click="copyCode" class="text-blue-500 text-sm font-bold">复制</button>
+                    </div>
+                    
+                    <div class="text-xs text-gray-400 mb-6">
+                        请确保金额准确为 ¥{{ currentOrder?.amount }}，数量填 1 个。<br>否则无法自动验证。
+                    </div>
+                    
+                    <div class="flex gap-3 w-full">
+                         <button @click="purchaseStep = 1" class="flex-1 py-3 text-gray-500 border border-gray-200 rounded">重新填写</button>
+                         <button @click="confirmPaid" :disabled="purchaseLoading" class="flex-1 bg-red-600 text-white py-3 rounded font-bold">
+                            {{ purchaseLoading ? '提交中...' : '我已正确支付' }}
+                         </button>
+                    </div>
+                </div>
+                
+                <!-- Step 3: Waiting -->
+                <div v-if="purchaseStep === 3" class="p-8 flex flex-col items-center text-center">
+                    <div class="w-16 h-16 bg-blue-100 text-blue-500 rounded-full flex items-center justify-center mb-4 text-3xl">⏳</div>
+                    <h4 class="text-lg font-bold mb-2">等待验证中...</h4>
+                    <p class="text-sm text-gray-500 mb-6">工作人员将在 1-10 分钟内完成验证 (8:00-22:00)。<br>验证通过后您的权益将自动激活。</p>
+                    <button @click="showSubscriptionModal = false" class="text-blue-500 text-sm">先逛逛列表 (部分功能受限)</button>
+                </div>
             </div>
         </div>
 
@@ -1173,6 +1251,28 @@
                     // Modals
                     msgModal: { show: false, msg: '', type: 'info' },
                     confirmModal: { show: false, msg: '', resolve: null },
+
+                    // --- New User & Subscription Data ---
+                    userInfo: {
+                        version: 'trial', 
+                        is_expired: false,
+                        remaining_ai: 0,
+                        remaining_raid: 0,
+                        remaining_review: 0
+                    },
+                    showSubscriptionModal: false,
+                    purchaseStep: 1, // 1: Pricing, 2: Payment, 3: Completed/Waiting
+                    pricingOptions: {},
+                    selectedVersion: 'basic',
+                    selectedDuration: '1m',
+                    currentOrder: null,
+                    purchaseLoading: false,
+                    features: {
+                        'trial': { ai: '每天1次', raid: '无权限', review: '无权限', desc: '10分钟体验' },
+                        'basic': { ai: '每天5次', raid: '无权限', review: '无权限', desc: '入门首选' },
+                        'advanced': { ai: '每天10次', raid: '每天3次', review: '每天1次', desc: '进阶利器' },
+                        'flagship': { ai: '每天1000次', raid: '每天50次', review: '每天5次', desc: '专业游资' }
+                    }
                 }
             },
             computed: {
@@ -1259,7 +1359,195 @@
             watch: {
                 // Removed resize logic as panel is now overlay
             },
+                // --- User Timers ---
+                this.startUserTimers();
+            },
+            beforeUnmount() {
+                if(this.trialTimer) clearTimeout(this.trialTimer);
+                if(this.expiryTimer) clearInterval(this.expiryTimer);
+            },
             methods: {
+                startUserTimers() {
+                    // Check every 10 seconds for expiry
+                    this.expiryTimer = setInterval(() => {
+                        if (this.userInfo.version === 'trial' && !this.userInfo.is_expired) {
+                            // Check local calculated expiry
+                            if (this.userInfo.expires_at) {
+                                const exp = new Date(this.userInfo.expires_at).getTime();
+                                const now = new Date().getTime();
+                                if (now > exp) {
+                                    this.userInfo.is_expired = true;
+                                    this.showMsg('试用时间已结束', 'info');
+                                    this.openSubscription('basic');
+                                }
+                            }
+                        }
+                    }, 10000);
+
+                    // 30 Seconds Popup for Trial (Only once per session/device?)
+                    // Req: "试用版... 第一次打开时... 试用30秒后... 弹出"
+                    // Use a flag in localStorage to avoid popping up every reload if they dismissed it?
+                    // Req says "30 seconds after trial... popup... User can continue or buy".
+                    // If they continue, maybe don't show again this session?
+                    if (this.userInfo.version === 'trial' && !localStorage.getItem('trial_popup_shown')) {
+                        this.trialTimer = setTimeout(() => {
+                            if (this.userInfo.version === 'trial' && !this.userInfo.is_expired && !this.showSubscriptionModal) {
+                                // "弹出需要购买会员的弹窗" -> "我要购买" or "继续试用"
+                                if(confirm("🔥 试用倒计时提示 🔥\n您的试用时间仅剩几分钟。\n\n现在购买享折扣，是否查看详情？")) {
+                                    this.openSubscription('basic');
+                                }
+                                localStorage.setItem('trial_popup_shown', 'true');
+                            }
+                        }, 30000); // 30s
+                    }
+                },
+                // --- User & Auth Methods ---
+                async initUser() {
+                    let deviceId = localStorage.getItem('sniper_device_id');
+                    if (!deviceId) {
+                        const fpPromise = import('https://openfpcdn.io/fingerprintjs/v3')
+                            .then(FingerprintJS => FingerprintJS.load());
+                        
+                        try {
+                            const fp = await fpPromise;
+                            const result = await fp.get();
+                            deviceId = result.visitorId;
+                            localStorage.setItem('sniper_device_id', deviceId);
+                        } catch (e) {
+                            console.error("FPJS Error:", e);
+                            deviceId = 'device_' + Math.random().toString(36).substr(2, 9);
+                            localStorage.setItem('sniper_device_id', deviceId);
+                        }
+                    }
+                    this.deviceId = deviceId;
+                    this.login();
+                },
+                
+                async login() {
+                    try {
+                        const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ device_id: this.deviceId })
+                        });
+                        const data = await res.json();
+                        this.userInfo = data;
+                        
+                        if (this.userInfo.version === 'trial' && this.userInfo.is_expired) {
+                            this.showMsg('试用已结束，请购买会员', 'info');
+                            this.openSubscription('basic');
+                        }
+                    } catch (e) {
+                        console.error("Login failed", e);
+                    }
+                },
+                
+                checkPermission(type) { 
+                    if (this.userInfo.is_expired) {
+                        if (type === 'view') return true; 
+                        this.showMsg('会员已过期，请续费', 'error');
+                        this.openSubscription();
+                        return false;
+                    }
+
+                    if (type === 'ai' && this.userInfo.remaining_ai <= 0) {
+                        this.showMsg('今日AI分析次数已用完', 'error');
+                        this.openSubscription();
+                        return false;
+                    }
+                    if (type === 'raid') {
+                        if (this.userInfo.remaining_raid <= 0) {
+                             this.showMsg('今日盘中突击次数已用完', 'error');
+                             return false;
+                        }
+                        if (['trial', 'basic'].includes(this.userInfo.version)) {
+                            this.showMsg('您的版本不支持盘中突击，请升级', 'error');
+                            this.openSubscription('advanced');
+                            return false;
+                        }
+                    }
+                    if (type === 'review') {
+                        if (this.userInfo.remaining_review <= 0) {
+                             this.showMsg('今日盘后复盘次数已用完', 'error');
+                             return false;
+                        }
+                        if (['trial', 'basic'].includes(this.userInfo.version)) {
+                            this.showMsg('您的版本不支持盘后复盘，请升级', 'error');
+                            this.openSubscription('advanced');
+                            return false;
+                        }
+                    }
+                    return true;
+                },
+
+                async openSubscription(targetVer) {
+                    this.showSubscriptionModal = true;
+                    this.purchaseStep = 1;
+                    if (targetVer) this.selectedVersion = targetVer;
+                    try {
+                        const res = await fetch(`${API_BASE_URL}/api/payment/pricing`);
+                        this.pricingOptions = await res.json();
+                    } catch (e) { console.error(e); }
+                },
+
+                async createOrder() {
+                    const priceInfo = this.pricingOptions[this.selectedVersion]?.[this.selectedDuration];
+                    if (!priceInfo) return;
+                    this.purchaseLoading = true;
+                    let dm = 1;
+                    if (this.selectedDuration === '3d') dm = 0;
+                    else if (this.selectedDuration === '3m') dm = 3;
+                    else if (this.selectedDuration === '6m') dm = 6;
+                    else if (this.selectedDuration === '12m') dm = 12;
+
+                    try {
+                        const res = await fetch(`${API_BASE_URL}/api/payment/create_order`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                target_version: this.selectedVersion,
+                                duration_months: dm,
+                                x_device_id: this.deviceId
+                            })
+                        });
+                        const data = await res.json();
+                        if (data.order_code) {
+                            this.currentOrder = data;
+                            this.purchaseStep = 2;
+                        }
+                    } catch(e) {
+                        this.showMsg('创建订单失败: ' + e, 'error');
+                    } finally {
+                        this.purchaseLoading = false;
+                    }
+                },
+
+                async confirmPaid() {
+                    if (!confirm("请确认您已经支付了口令红包，否则会员将无法到账！")) return;
+                    try {
+                        this.purchaseLoading = true;
+                        const res = await fetch(`${API_BASE_URL}/api/payment/confirm_payment`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ order_code: this.currentOrder.order_code })
+                        });
+                        this.purchaseStep = 3;
+                    } catch(e) {
+                        this.showMsg('提交失败', 'error');
+                    } finally {
+                        this.purchaseLoading = false;
+                    }
+                },
+
+                copyCode() {
+                    if (this.currentOrder) {
+                        navigator.clipboard.writeText(this.currentOrder.order_code).then(() => {
+                            this.showMsg('口令已复制，请去支付宝发红包', 'success');
+                        });
+                    }
+                },
+
+                test() {},
                 async initFingerprint() {
                     try {
                         const fpPromise = import('https://openfpcdn.io/fingerprintjs/v3')
@@ -1738,6 +2026,8 @@
                     }, 10);
                 },
                 async analyzeStock(stock, promptType = 'default') {
+                    if (!this.checkPermission('ai')) return;
+
                     // [Fix] Check if already analyzing
                     if (this.analyzingStocks && this.analyzingStocks[stock.code]) {
                         // Just open modal, don't re-fetch
@@ -1825,6 +2115,7 @@
                     }
                 },
                 async reAnalyzeStock() {
+                    if (!this.checkPermission('ai')) return;
                     if (!this.currentAnalysisStock) return;
                     const stock = this.currentAnalysisStock;
                     const promptType = this.currentPromptType || 'default';
@@ -2512,6 +2803,13 @@
                 }
             },
             mounted() {
+                // Init User
+                this.initUser();
+                
+                // Event listener for auth errors
+                window.addEventListener('auth-error', () => {
+                    this.openSubscription();
+                });
                 this.initFingerprint();
                 
                 // Listen for global auth error event

@@ -31,7 +31,15 @@ SYSTEM_CONFIG = {
     "active_rule_index": -1,
     "schedule_plan": DEFAULT_SCHEDULE,
     "news_auto_clean_enabled": True,
-    "news_auto_clean_days": 14
+    "news_auto_clean_days": 14,
+    "email_config": {
+        "enabled": False,
+        "smtp_server": "",
+        "smtp_port": 465,
+        "smtp_user": "",
+        "smtp_password": "",
+        "recipient_email": ""
+    }
 }
 
 def load_config():
@@ -43,7 +51,8 @@ def load_config():
             with open(config_path, "r", encoding="utf-8") as f:
                 saved_config = json.load(f)
                 # Update only persistent fields
-                for key in ["auto_analysis_enabled", "use_smart_schedule", "fixed_interval_minutes", "schedule_plan", "news_auto_clean_enabled", "news_auto_clean_days"]:
+                for key in ["auto_analysis_enabled", "use_smart_schedule", "fixed_interval_minutes", 
+                           "schedule_plan", "news_auto_clean_enabled", "news_auto_clean_days", "email_config"]:
                     if key in saved_config:
                         SYSTEM_CONFIG[key] = saved_config[key]
         except Exception as e:
@@ -60,7 +69,15 @@ def save_config():
                 "fixed_interval_minutes": SYSTEM_CONFIG["fixed_interval_minutes"],
                 "schedule_plan": SYSTEM_CONFIG.get("schedule_plan", DEFAULT_SCHEDULE),
                 "news_auto_clean_enabled": SYSTEM_CONFIG.get("news_auto_clean_enabled", True),
-                "news_auto_clean_days": SYSTEM_CONFIG.get("news_auto_clean_days", 14)
+                "news_auto_clean_days": SYSTEM_CONFIG.get("news_auto_clean_days", 14),
+                "email_config": SYSTEM_CONFIG.get("email_config", {
+                    "enabled": False, 
+                    "smtp_server": "", 
+                    "smtp_port": 465,
+                    "smtp_user": "",
+                    "smtp_password": "",
+                    "recipient_email": ""
+                })
             }, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"Failed to save config: {e}")

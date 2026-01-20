@@ -1,5 +1,6 @@
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 import requests
 import json
@@ -18,9 +19,10 @@ from app.core.data_provider import data_provider
 from app.core.lhb_manager import lhb_manager
 from app.core.ai_cache import ai_cache
 from app.core.config_manager import SYSTEM_CONFIG, save_config, DEFAULT_SCHEDULE
-from app.api import auth, admin
+from app.api import auth, admin, payment
 from app.db import database
-from app.dependencies import verify_license, deduct_usage
+from app.dependencies import get_current_user, check_ai_permission, check_raid_permission, check_review_permission, QuotaLimitExceeded, UpgradeRequired
+from app.core import user_service
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -36,6 +38,7 @@ app = FastAPI()
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(payment.router, prefix="/api/payment", tags=["payment"])
 
 # CORS配置
 app.add_middleware(
@@ -914,16 +917,45 @@ def thread_logger(msg):
     """线程安全的 logger"""
     log_queue.put(msg)
 
-@app.post("/api/analyze", dependencies=[Depends(verify_license)])
-async def run_analysis(background_tasks: BackgroundTasks, mode: str = Query("after_hours"), license_obj = Depends(verify_license), db = Depends(lambda: next(database.get_db()))):
+# Global Cache Timer
+LAST_ANALYSIS_TIME = {
+    "mid_day": datetime.min,
+    "after_hours": datetime.min
+}
+
+@app.post("/api/analyze")
+async def run_analysis(
+    background_tasks: BackgroundTasks, 
+    mode: str = Query("after_hours"), 
+    user: models.User = Depends(get_current_user), 
+    db: Session = Depends(lambda: next(database.get_db()))
+):
     """触发复盘分析"""
-    # 扣除次数? 只有手动触发才扣除，但是这个API看起来就是手动触发的
-    if mode in ["intraday", "intraday_monitor"]: # 盘中突击
-         # Check if limit reached inside verify_license
-         pass
-         
-    # 在后台运行，不阻塞 API
+    
+    # 1. 权限检查 & 扣费
+    limit_type = 'raid' if mode in ["intraday", "intraday_monitor"] else 'review'
+    
+    if limit_type == 'raid':
+        await check_raid_permission(user)
+    else:
+        await check_review_permission(user)
+        
+    user_service.consume_quota(db, user, limit_type)
+    
+    # 2. 缓存检查 (5分钟)
+    # Map mode string
+    cache_key = "mid_day" if limit_type == 'raid' else "after_hours"
+    last_time = LAST_ANALYSIS_TIME.get(cache_key, datetime.min)
+    
+    if (datetime.now() - last_time).total_seconds() < 300:
+        return {"status": "success", "message": f"Returning cached {mode} data (updated {int((datetime.now() - last_time).total_seconds())}s ago)"}
+
+    # 3. 执行新的分析
+    LAST_ANALYSIS_TIME[cache_key] = datetime.now()
+    
+    # Run in background to avoid blocking
     background_tasks.add_task(execute_analysis, mode)
+    
     return {"status": "success", "message": f"{mode} analysis started in background"}
 
 def execute_analysis(mode="after_hours", hours=None):
@@ -1068,8 +1100,8 @@ async def api_limit_up_pool():
         "broken": broken_limit_pool_data
     }
 
-@app.get("/api/intraday_pool", dependencies=[Depends(verify_license)])
-async def api_intraday_pool():
+@app.get("/api/intraday_pool")
+async def api_intraday_pool(user: models.User = Depends(get_current_user)):
     """直接获取盘中打板扫描结果 (优先返回缓存)"""
     global intraday_pool_data
     if intraday_pool_data:
@@ -1102,12 +1134,13 @@ class StockAnalysisRequest(BaseModel):
     force: bool = False # Force re-analysis
     apiKey: Optional[str] = None # Optional API Key for standalone mode
 
-@app.post("/api/analyze_stock", dependencies=[Depends(verify_license)])
-async def api_analyze_stock(request: StockAnalysisRequest, license_obj = Depends(verify_license), db = Depends(lambda: next(database.get_db()))):
+@app.post("/api/analyze_stock")
+async def api_analyze_stock(request: StockAnalysisRequest, user: models.User = Depends(get_current_user), db = Depends(lambda: next(database.get_db()))):
     """
     调用AI分析单个股票 (支持缓存)
     """
-    await deduct_usage(license_obj, db)
+    await check_ai_permission(user)
+    user_service.consume_quota(db, user, 'ai')
     stock_data = request.dict()
     api_key = stock_data.get('apiKey')
     code = stock_data.get('code')
@@ -1213,19 +1246,22 @@ class LHBAnalyzeRequest(BaseModel):
     date: str
     force: bool = False
 
-@app.post("/api/lhb/analyze_daily", dependencies=[Depends(verify_license)])
-async def analyze_lhb_daily_api(req: LHBAnalyzeRequest, license_obj = Depends(verify_license), db = Depends(lambda: next(database.get_db()))):
+@app.post("/api/lhb/analyze")
+async def analyze_lhb_daily_api(req: LHBAnalyzeRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     # Run in thread pool
-    await deduct_usage(license_obj, db)
+    await check_review_permission(user)
+    user_service.consume_quota(db, user, 'review')
+    
     loop = asyncio.get_event_loop()
     # Fetch data first
     data = lhb_manager.get_daily_data(req.date)
     result = await loop.run_in_executor(None, lambda: analyze_daily_lhb(req.date, data, force_update=req.force))
-    return {"status": "ok", "analysis": result}
+    return {"status": "ok", "result": result}
 
-@app.get("/api/lhb/analysis", dependencies=[Depends(verify_license)])
-async def get_lhb_analysis_api(date: str):
+@app.get("/api/lhb/analysis")
+async def get_lhb_analysis_api(date: str, user: models.User = Depends(get_current_user)):
     """获取已有的AI复盘结果 (如有)"""
+    await check_review_permission(user)
     cache_key = f"lhb_daily_analysis_{date}"
     cached = ai_cache.get(cache_key)
     return {"status": "ok", "analysis": cached}
@@ -1286,13 +1322,14 @@ async def fetch_lhb_data(background_tasks: BackgroundTasks):
     # [Modified] Use thread_logger to broadcast logs to WebSocket
     # Force sync only 1 day (Today/Latest) for manual trigger
     background_tasks.add_task(lhb_manager.fetch_and_update_data, logger=thread_logger, force_days=1)
-    return {"status": "success", "message": "龙虎榜数据同步任务已在后台启动"}
+    return {"status": "success"}
 
-@app.post("/api/stock/analyze", dependencies=[Depends(verify_license)])
-async def analyze_stock_manual(request: AnalyzeRequest, license_obj = Depends(verify_license), db = Depends(lambda: next(database.get_db()))):
+@app.post("/api/analyze/stock")
+async def analyze_stock_manual(request: AnalyzeRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """手动触发个股AI分析"""
     # 扣除次数
-    await deduct_usage(license_obj, db)
+    await check_ai_permission(user)
+    user_service.consume_quota(db, user, 'ai')
     
     stock_data = {
         "code": request.code,
@@ -1357,8 +1394,8 @@ async def get_stock_kline(code: str, type: str = "1min"):
     
     return {"status": "error", "message": "No data found"}
 
-@app.get("/api/stock/ai_markers", dependencies=[Depends(verify_license)])
-async def get_ai_markers(code: str, type: str = None):
+@app.get("/api/stock/ai_markers")
+async def get_ai_markers(code: str, type: str = None, user: models.User = Depends(get_current_user)):
     """获取个股的AI分析历史标记"""
     # Determine priority based on type
     keys = []
@@ -1404,3 +1441,10 @@ async def get_ai_markers(code: str, type: str = None):
             return {"status": "success", "markers": [{"date": datetime.now().strftime('%Y-%m-%d'), "data": data}]}
             
     return {"status": "success", "markers": []}
+
+# --- Static Files Deployment ---
+# Serve frontend from root URL
+# Must be last to not override API routes
+FRONTEND_DIR = BASE_DIR.parent / "frontend"
+if FRONTEND_DIR.exists():
+    app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")

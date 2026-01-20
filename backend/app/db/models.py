@@ -1,7 +1,48 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, Float, ForeignKey, Date
+from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from .database import Base
 import datetime
+
+class User(Base):
+    __tablename__ = "users"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    device_id = Column(String, unique=True, index=True, nullable=False)
+    version = Column(String, default="trial") # trial, basic, advanced, flagship
+    
+    expires_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    # Daily Quotas
+    last_reset_date = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    daily_ai_count = Column(Integer, default=0)
+    daily_raid_count = Column(Integer, default=0)
+    daily_review_count = Column(Integer, default=0)
+
+    orders = relationship("PurchaseOrder", back_populates="user")
+
+
+class PurchaseOrder(Base):
+    __tablename__ = "purchase_orders"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"))
+    
+    order_code = Column(String, unique=True, index=True, nullable=False) # 12-char mixed
+    amount = Column(Float, nullable=False)
+    
+    target_version = Column(String, nullable=False) # basic, advanced, flagship
+    duration_days = Column(Integer, nullable=False)
+    
+    status = Column(String, default="pending") # pending (user copied), waiting_verification (user confirmed), completed, cancelled
+    
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, onupdate=datetime.datetime.utcnow)
+
+    user = relationship("User", back_populates="orders")
+
 
 class License(Base):
     __tablename__ = "licenses"

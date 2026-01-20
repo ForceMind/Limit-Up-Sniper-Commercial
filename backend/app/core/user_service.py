@@ -1,0 +1,84 @@
+from datetime import datetime
+from sqlalchemy.orm import Session
+from app.db import models
+
+# Quota Configurations
+QUOTAS = {
+    "trial":     {"ai": 1,    "raid": 0,  "review": 0},
+    "basic":     {"ai": 5,    "raid": 0,  "review": 0},
+    "advanced":  {"ai": 10,   "raid": 3,  "review": 1},
+    "flagship":  {"ai": 1000, "raid": 50, "review": 5},
+}
+
+def get_user_quota(version: str):
+    return QUOTAS.get(version, QUOTAS["trial"])
+
+def check_and_reset_daily_stats(user: models.User, db: Session):
+    now = datetime.utcnow()
+    # If last reset was on a different day
+    if user.last_reset_date.date() < now.date():
+        user.daily_ai_count = 0
+        user.daily_raid_count = 0
+        user.daily_review_count = 0
+        user.last_reset_date = now
+        db.commit()
+        db.refresh(user)
+
+def get_or_create_user(db: Session, device_id: str) -> models.User:
+    user = db.query(models.User).filter(models.User.device_id == device_id).first()
+    if not user:
+        # Create Trial User
+        user = models.User(
+            device_id=device_id,
+            version="trial",
+            # Trial expires in 10 minutes from creation? 
+            # Logic: Frontend handles 10 min timer. Backend just checks if created_at + 10min < now for trial users.
+            # But the requirement says "Trial time expires... popup".
+            # Let's set expires_at for consistency if we want to enforce it strictly on backend.
+            # expires_at=datetime.utcnow() + timedelta(minutes=10) # We'll do this calculation dynamically or set it.
+            # For simplicity, let's leave expires_at Null for trial, and compute it on logic or set it.
+            # Actually, robust way: Set it.
+        )
+        # Import timedelta here
+        from datetime import timedelta
+        user.expires_at = datetime.utcnow() + timedelta(minutes=10)
+        
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+    
+    # Check reset
+    check_and_reset_daily_stats(user, db)
+    return user
+
+def check_quota(user: models.User, limit_type: str) -> bool:
+    """
+    limit_type: 'ai', 'raid', 'review'
+    Returns True if user has quota.
+    """
+    # 1. Check Expiry
+    if user.expires_at and user.expires_at < datetime.utcnow():
+        return False
+        
+    # 2. Check Version Quota
+    limits = get_user_quota(user.version)
+    max_limit = limits.get(limit_type, 0)
+    
+    current_usage = 0
+    if limit_type == 'ai':
+        current_usage = user.daily_ai_count
+    elif limit_type == 'raid':
+        current_usage = user.daily_raid_count
+    elif limit_type == 'review':
+        current_usage = user.daily_review_count
+        
+    return current_usage < max_limit
+
+def consume_quota(db: Session, user: models.User, limit_type: str):
+    if limit_type == 'ai':
+        user.daily_ai_count += 1
+    elif limit_type == 'raid':
+        user.daily_raid_count += 1
+    elif limit_type == 'review':
+        user.daily_review_count += 1
+    db.commit()
