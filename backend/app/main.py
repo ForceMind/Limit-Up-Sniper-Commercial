@@ -2,6 +2,8 @@ from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, Background
 from fastapi.responses import HTMLResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy.orm import Session
+from app.db.database import get_db
 import requests
 import json
 import os
@@ -20,7 +22,7 @@ from app.core.lhb_manager import lhb_manager
 from app.core.ai_cache import ai_cache
 from app.core.config_manager import SYSTEM_CONFIG, save_config, DEFAULT_SCHEDULE
 from app.api import auth, admin, payment
-from app.db import database
+from app.db import database, models
 from app.dependencies import get_current_user, check_ai_permission, check_raid_permission, check_review_permission, QuotaLimitExceeded, UpgradeRequired
 from app.core import user_service
 
