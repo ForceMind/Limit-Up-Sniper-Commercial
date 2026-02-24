@@ -1,6 +1,22 @@
 // Determine API Base URL
 // If served from same origin (production), use relative path (empty string)
 // If served from file or different origin (development), use localhost
-const API_BASE_URL = (location.protocol === 'file:' || location.hostname === 'localhost' && location.port !== '8000') 
-    ? 'http://localhost:8000' 
-    : '';
+const getApiBaseUrl = () => {
+    const protocol = location.protocol;
+    const hostname = location.hostname;
+    const port = location.port;
+
+    if (protocol === 'file:') {
+        return 'http://localhost:8000';
+    }
+
+    if (hostname === 'localhost' || hostname === '127.0.0.1') {
+        if (port !== '8000') {
+            return 'http://localhost:8000';
+        }
+    }
+
+    return '';
+};
+
+const API_BASE_URL = getApiBaseUrl();

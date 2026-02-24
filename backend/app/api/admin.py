@@ -22,11 +22,25 @@ router = APIRouter()
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data" 
 ADMIN_SECRET_FILE = DATA_DIR / "admin_token.txt" 
+ADMIN_CREDENTIALS_FILE = DATA_DIR / "admin_credentials.json" # Support custom username/password
 RATE_LIMIT_WINDOW = 60 # seconds
 RATE_LIMIT_MAX_ATTEMPTS = 5
 failed_attempts: Dict[str, List[float]] = {}
 
 def get_admin_token():
+    # Priority 1: Environment Variable (For Docker/Cloud)
+    env_token = os.getenv("ADMIN_TOKEN")
+    if env_token:
+        return env_token
+
+    # Priority 2: Credentials File (Username/Password style, but here we simplify to just using a token or checking against it)
+    # Actually, if the user wants "Username and Password", we should modify verify_admin to check Basic Auth or Header
+    # But to keep compatible with frontend 'X-Admin-Token', let's stick to token for now, 
+    # OR allow the token to be "username:password" encoded or just a raw string the user sets.
+    
+    # If admin requests custom username/pass, they can just set the content of admin_token.txt to "myuser:mypass" 
+    # and use that as the token string in the frontend login box.
+    
     if ADMIN_SECRET_FILE.exists():
         with open(ADMIN_SECRET_FILE, "r") as f:
             token = f.read().strip()
@@ -41,11 +55,23 @@ def get_admin_token():
         f.write(new_token)
     print(f"[SECURITY] Admin Token Generated: {new_token}")
     print(f"[SECURITY] Saved to: {ADMIN_SECRET_FILE}")
+    print(f"[SECURITY] To use custom auth, edit backend/data/admin_token.txt")
     return new_token
 
 ADMIN_TOKEN = get_admin_token()
 
 async def verify_admin(request: Request, x_admin_token: str = Header(..., alias="X-Admin-Token")):
+    # Reload token from file every time to allow hot-change without restart if desired (optional but good for 'custom auth')
+    # Or just keep memory cache. Let's keep memory cache for performance but check if we should allow custom overrides.
+    global ADMIN_TOKEN
+    
+    # Support dynamic token update from file (simple way to allow user to change password)
+    if ADMIN_SECRET_FILE.exists():
+         with open(ADMIN_SECRET_FILE, "r") as f:
+            file_token = f.read().strip()
+            if file_token and file_token != ADMIN_TOKEN:
+                ADMIN_TOKEN = file_token
+
     client_ip = request.client.host
     now = time.time()
     

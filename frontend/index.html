@@ -104,7 +104,7 @@
                 </div>
 
                 <!-- Settings Button (Merged Filter & Config) -->
-                <button v-if="!isSearchFocused || !isMobile" @click="showSettingsModal = true" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors" title="过滤设置">
+                <button v-if="!isSearchFocused || !isMobile" @click.stop="showSettingsModal = true" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors z-10 relative" title="过滤设置">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
                     </svg>
@@ -1022,7 +1022,6 @@
                     <!-- Version Tabs -->
                     <div class="flex gap-2 mb-4 overflow-x-auto pb-2">
                         <button v-for="(feat, ver) in features" :key="ver" 
-                            v-if="ver !== 'trial'"
                             @click="selectedVersion = ver"
                             class="flex-1 min-w-[80px] py-2 px-1 rounded border-2 text-center transition-all"
                             :class="selectedVersion === ver ? 'border-red-500 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400' : 'border-gray-200 dark:border-gray-700 text-gray-500'">
@@ -1359,9 +1358,6 @@
             watch: {
                 // Removed resize logic as panel is now overlay
             },
-                // --- User Timers ---
-                this.startUserTimers();
-            },
             beforeUnmount() {
                 if(this.trialTimer) clearTimeout(this.trialTimer);
                 if(this.expiryTimer) clearInterval(this.expiryTimer);
@@ -1377,8 +1373,11 @@
                                 const now = new Date().getTime();
                                 if (now > exp) {
                                     this.userInfo.is_expired = true;
-                                    this.showMsg('试用时间已结束', 'info');
-                                    this.openSubscription('basic');
+                                    // Fix: Only show message once or make it less intrusive?
+                                    // User complained: "Always shows Membership expired"
+                                    // Maybe just update state, don't spam showMsg?
+                                    // this.showMsg('试用时间已结束', 'info'); 
+                                    // Changing to silent expiry update - let the UI reflect it (red text) without blocking popups
                                 }
                             }
                         }
@@ -1433,9 +1432,12 @@
                         const data = await res.json();
                         this.userInfo = data;
                         
+                        // Fix for recharge window bug: Don't force open subscription on login-check if just expired silent update needed
                         if (this.userInfo.version === 'trial' && this.userInfo.is_expired) {
-                            this.showMsg('试用已结束，请购买会员', 'info');
-                            this.openSubscription('basic');
+                            // this.showMsg('试用已结束，请购买会员', 'info');
+                            // this.openSubscription('basic'); 
+                            // User complained this blocks interaction or is annoying. 
+                            // We just let the UI show "Expired" status in red.
                         }
                     } catch (e) {
                         console.error("Login failed", e);
@@ -2805,12 +2807,13 @@
             mounted() {
                 // Init User
                 this.initUser();
+                this.startUserTimers();
                 
                 // Event listener for auth errors
                 window.addEventListener('auth-error', () => {
                     this.openSubscription();
                 });
-                this.initFingerprint();
+                // this.initFingerprint(); // Removed: Handled in initUser
                 
                 // Listen for global auth error event
                 window.addEventListener('auth-error', () => {
