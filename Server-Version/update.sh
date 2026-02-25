@@ -90,6 +90,11 @@ if [ ! -d "$SOURCE_ROOT/backend" ]; then
     exit 1
 fi
 
+if [ ! -d "$SOURCE_ROOT/frontend" ]; then
+    echo -e "${RED}[错误] 源码目录无效，未找到 frontend 文件夹。${NC}"
+    exit 1
+fi
+
 echo -e "${YELLOW}[1/3] 停止服务...${NC}"
 systemctl stop limit-up-sniper || true
 
@@ -119,8 +124,27 @@ else
     fi
 
     # 覆盖前端
+    echo "正在更新前端文件..."
+    # 先删除旧前端目录以防残留文件干扰
+    rm -rf "$APP_DIR/frontend"
     yes | cp -rf "$SOURCE_ROOT/frontend" "$APP_DIR/"
     
+    # 确保前端有读取权限 (755 allow read/execute for directories, read/execute for files)
+    chmod -R 755 "$APP_DIR/frontend"
+
+    # 验证 index.html 是否存在
+    if [ -f "$APP_DIR/frontend/index.html" ]; then
+        echo "前端 index.html 更新成功。"
+        # 可以尝试输出一些特征行来确认版本 (如 v2.5.1)
+        if grep -q "v2.5.1" "$APP_DIR/frontend/index.html"; then
+             echo -e "${GREEN}版本验证通过: 检测到 v2.5.1${NC}"
+        else
+             echo -e "${YELLOW}警告: 未在 index.html 中检测到 v2.5.1 标识，可能是旧文件?${NC}"
+        fi
+    else
+        echo -e "${RED}[错误] 前端文件更新失败: index.html 丢失!${NC}"
+    fi
+
     # 覆盖脚本
     mkdir -p "$APP_DIR/scripts"
     yes | cp -rf "$SOURCE_ROOT/Server-Version/"*.sh "$APP_DIR/scripts/"
