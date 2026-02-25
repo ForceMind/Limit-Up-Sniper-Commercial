@@ -263,6 +263,14 @@ class AdminConfigUpdate(BaseModel):
 async def get_admin_config(authorized: bool = Depends(verify_admin)):
     # Combine system config and lhb config
     config = SYSTEM_CONFIG.copy()
+    
+    # Fill in environment variables for API keys if configured but empty in config
+    if 'api_keys' not in config:
+        config['api_keys'] = {}
+        
+    if not config['api_keys'].get('deepseek'):
+        config['api_keys']['deepseek'] = os.getenv('DEEPSEEK_API_KEY', '')
+
     config['lhb_enabled'] = lhb_manager.config['enabled']
     config['lhb_days'] = lhb_manager.config['days']
     config['lhb_min_amount'] = lhb_manager.config['min_amount']

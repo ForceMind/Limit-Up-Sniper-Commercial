@@ -1614,6 +1614,17 @@
                         console.error("Login failed", e);
                     }
                 },
+                throttle(func, limit) {
+                    let inThrottle;
+                    return function() {
+                        const args = arguments;
+                        if (!inThrottle) {
+                            func.apply(this, args);
+                            inThrottle = true;
+                            setTimeout(() => inThrottle = false, limit);
+                        }
+                    }
+                },
                 shouldShowMask(tab) {
                     // 游客或过期用户
                     const isMasked = (this.userInfo.version === 'trial' && this.userInfo.trial_duration <= 0) || this.userInfo.is_expired;
