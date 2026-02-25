@@ -1371,6 +1371,7 @@
                     // Modals
                     msgModal: { show: false, msg: '', type: 'info' },
                     confirmModal: { show: false, msg: '', resolve: null },
+                    lastFetchTime: 0,
 
                     // --- New User & Subscription Data ---
                     userInfo: {
@@ -2120,8 +2121,13 @@
                     }
                 },
                 fetchData() {
-                    // Placeholder for limit-up-sniper throttle
-                    if (this._fetchDataImpl) this._fetchDataImpl();
+                    if (!this._fetchDataImpl) return;
+                    
+                    const now = Date.now();
+                    if (this.lastFetchTime && now - this.lastFetchTime < 2000) return;
+                    this.lastFetchTime = now;
+                    
+                    this._fetchDataImpl();
                 },
                 async _fetchDataImpl() {
                     try {
@@ -3097,9 +3103,6 @@
                     this.apiKey = savedApiKey;
                 }
 
-                // --- Initialize Throttled Functions ---
-                this.fetchData = this.throttle(this._fetchDataImpl, 2000); // Max once per 2s
-                
                 // Initialize activeTab based on time for Mobile
                 const now = new Date();
                 const day = now.getDay();
