@@ -88,16 +88,22 @@
             
             <div class="flex items-center gap-2 md:gap-4 w-full md:w-auto justify-between md:justify-end flex-wrap transition-all duration-300">
                 <!-- User Profile (Desktop Only) -->
-                <div @click="openSubscription()" class="hidden md:flex cursor-pointer text-xs flex-col items-end mr-2 bg-gray-50 dark:bg-gray-800 p-1 px-2 rounded border border-gray-200 dark:border-gray-700">
-                    <div class="font-bold" :class="{
-                        'text-gray-500': userInfo.version==='trial',
-                        'text-blue-500': userInfo.version==='basic',
-                        'text-purple-500': userInfo.version==='advanced',
-                        'text-red-500': userInfo.version==='flagship'
-                    }">
-                        {{ features[userInfo.version]?.desc || userInfo.version }}
-                        <span v-if="userInfo.is_expired && userInfo.version !== 'trial'" class="text-red-500 text-[10px]">(已过期)</span>
+                <div class="hidden md:flex items-center gap-2">
+                    <button v-if="!deviceId.startsWith('user_')" @click="showLoginModal = true" class="text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-1 rounded hover:bg-blue-200 transition">登录/注册</button>
+                    <div v-else class="text-xs text-gray-400 font-mono">{{ localStorage.getItem('sniper_username') || 'Member' }}</div>
+                    
+                    <div @click="openSubscription()" class="cursor-pointer text-xs flex flex-col items-end mr-2 bg-gray-50 dark:bg-gray-800 p-1 px-2 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 transition">
+                        <div class="font-bold" :class="{
+                            'text-gray-500': userInfo.version==='trial',
+                            'text-blue-500': userInfo.version==='basic',
+                            'text-purple-500': userInfo.version==='advanced',
+                            'text-red-500': userInfo.version==='flagship'
+                        }">
+                            {{ features[userInfo.version]?.desc || userInfo.version }}
+                            <span v-if="userInfo.is_expired && userInfo.version !== 'trial'" class="text-red-500 text-[10px]">(已过期)</span>
+                        </div>
                     </div>
+                </div>
                     <div class="text-[10px] text-gray-400">
                         AI:{{userInfo.remaining_ai}} | 突:{{userInfo.remaining_raid}} | 复:{{userInfo.remaining_review}}
                     </div>
@@ -1060,7 +1066,48 @@
                 </div>
             </div>
         </div>
-        <!-- Subscription Modal -->
+        <!-- Login/Register Modal -->
+        <div v-if="showLoginModal" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-sm p-6 transform transition-all scale-100 flex flex-col gap-4 relative">
+                <button @click="showLoginModal = false" class="absolute top-4 right-4 text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
+                    <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+                </button>
+                
+                <h3 class="text-xl font-bold text-center text-gray-900 dark:text-gray-100 mb-2">登录 / 注册</h3>
+                <p class="text-xs text-gray-500 text-center mb-4">使用账户同步您的会员权益 (支持多设备)</p>
+                
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">用户名</label>
+                        <input type="text" v-model="loginForm.username" class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white" placeholder="请输入用户名">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">密码</label>
+                        <input type="password" v-model="loginForm.password" class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white" placeholder="请输入密码">
+                    </div>
+                </div>
+                
+                <div class="flex gap-3 mt-2">
+                    <button @click="handleAuth('login')" :disabled="loginLoading" class="flex-1 bg-blue-600 text-white py-2 rounded font-bold hover:bg-blue-700 transition disabled:opacity-50 text-sm">
+                        {{ loginLoading ? '处理中...' : '登录' }}
+                    </button>
+                    <button @click="handleAuth('register')" :disabled="loginLoading" class="flex-1 bg-white border border-gray-300 text-gray-700 py-2 rounded font-bold hover:bg-gray-50 transition disabled:opacity-50 text-sm">
+                        注册
+                    </button>
+                </div>
+                
+                <div class="text-xs text-gray-400 text-center mt-2">
+                    游客将使用临时ID，清除缓存后失效。建议注册账户。
+                </div>
+            </div>
+        </div>
+
+        <!-- Subscription Modal -->flex flex-col items-center justify-center h-40 text-gray-400" v-if="!pricingOptions || !pricingOptions[selectedVersion]">
+                            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mb-2"></div>
+                            <p class="text-xs">加载价格配置中...</p>
+                        </div>
+
+                        <div class="grid grid-cols-3 gap-2" v-else
         <div v-if="showSubscriptionModal" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
                 <!-- Header -->
@@ -1314,6 +1361,11 @@
                     chartType: '1min',
                     aiAnalysisResult: null,
                     analyzingAI: false,
+                    
+                    // LOGIN DATA
+                    showLoginModal: false,
+                    loginForm: { username: '', password: '' },
+                    loginLoading: false,
                     loadingChart: false,
                     chartInstance: null,
                     // Modals
@@ -2056,7 +2108,8 @@
                         this.showMsg('添加错误', 'error');
                     }
                 },
-                async fetchData() {
+                fetchData: null, // Will be throttled
+                async _fetchDataImpl() {
                     try {
                         const response = await fetch(API_BASE_URL + '/api/stocks');
                         const data = await response.json();
@@ -3028,6 +3081,12 @@
                 const savedApiKey = localStorage.getItem('deepseek_api_key');
                 if (savedApiKey) {
                     this.apiKey = savedApiKey;
+                
+                // --- Initialize Throttled Functions ---
+                this.fetchData = this.throttle(this._fetchDataImpl, 2000); // Max once per 2s
+                
+                // ... (rest of mounted)
+                
                 }
 
                 // Initialize activeTab based on time for Mobile
