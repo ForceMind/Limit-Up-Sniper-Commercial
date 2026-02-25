@@ -44,7 +44,7 @@ install_deps() {
     if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
         apt-get update -qq
         apt-get install -y python3 python3-pip python3-venv python3-dev build-essential git nginx curl bc
-    elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]] || [[ "$OS" == *"Alibaba"* ]] || [[ "$OS" == *"Tencent"* ]] || [[ "$OS" == *"Fedora"* ]]; then
+    elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]] || [[ "$OS" == *"Alibaba"* ]] || [[ "$OS" == *"Tencent"* ]] || [[ "$OS" == *"Fedora"* ]] || [[ "$OS" == *"OpenCloudOS"* ]] || [[ "$OS" == *"Rocky"* ]] || [[ "$OS" == *"Alma"* ]]; then
         # CentOS/RHEL 系
         if command -v dnf > /dev/null; then
             PKG_MGR="dnf"
@@ -109,6 +109,43 @@ pip install --upgrade pip -q
 echo "正在安装 Python 依赖库 (可能需要几分钟)..."
 # 使用清华源加速 (可选，视网络情况而定，这里使用默认源以保证兼容)
 pip install -r requirements.txt --no-cache-dir
+
+# 4.1. 配置 API Key (不再写入 Systemd，而是写入配置文件)
+echo -e "${YELLOW}[3.5/5] 配置 API Key...${NC}"
+
+# 尝试读取现有配置
+DATA_DIR="$APP_DIR/backend/data"
+CONFIG_FILE="$DATA_DIR/config.json"
+mkdir -p "$DATA_DIR"
+
+if [ -f "$CONFIG_FILE" ]; then
+    echo "检测到现有配置文件，跳过 API Key 设置。"
+else
+    # 提示用户输入 DeepSeek Key
+    read -p "请输入您的 DeepSeek API Key (如无需配置请直接回车): " DEEPSEEK_KEY
+    
+    if [ ! -z "$DEEPSEEK_KEY" ]; then
+        # 创建默认配置文件
+        cat > $CONFIG_FILE <<EOF
+{
+    "api_keys": {
+        "deepseek": "$DEEPSEEK_KEY",
+        "aliyun": "",
+        "other": ""
+    },
+    "auto_analysis_enabled": false,
+    "use_smart_schedule": true,
+    "fixed_interval_minutes": 60,
+    "lhb_enabled": true,
+    "lhb_days": 3,
+    "lhb_min_amount": 20000000
+}
+EOF
+        echo "API Key 已保存至配置。"
+    else
+        echo "跳过 API Key 配置。您之后可以在后台管理界面设置。"
+    fi
+fi
 
 # 5. 配置 Systemd 服务
 echo -e "${YELLOW}[4/5] 配置系统后台服务...${NC}"
@@ -203,13 +240,22 @@ else
 fi
 
 # 最终输出 - 等待后端生成 Token
-sleep 5
+echo -e "${YELLOW}正在等待后端初始化并生成管理员 Token (最多等待 30 秒)...${NC}"
 ADMIN_TOKEN_FILE="$APP_DIR/backend/data/admin_token.txt"
-ADMIN_TOKEN="请查看文件 $ADMIN_TOKEN_FILE"
+ADMIN_TOKEN="获取失败，请稍后手动查看: cat $ADMIN_TOKEN_FILE"
 
-if [ -f "$ADMIN_TOKEN_FILE" ]; then
-    ADMIN_TOKEN=$(cat "$ADMIN_TOKEN_FILE")
-fi
+# 循环检查 Token 文件 (最多 30 秒)
+for i in {1..15}; do
+    if [ -f "$ADMIN_TOKEN_FILE" ]; then
+        #给予写入完成的一点缓冲时间
+        sleep 1
+        ADMIN_TOKEN=$(cat "$ADMIN_TOKEN_FILE")
+        if [ ! -z "$ADMIN_TOKEN" ]; then
+            break
+        fi
+    fi
+    sleep 2
+done
 
 echo -e "${GREEN}=========================================${NC}"
 echo -e "${GREEN}   ✅ 部署成功!                          ${NC}"
