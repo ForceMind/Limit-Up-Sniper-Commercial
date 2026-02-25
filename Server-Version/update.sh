@@ -22,12 +22,45 @@ echo -e "${GREEN}=== Limit-Up Sniper 商业版 更新程序 ===${NC}"
 # 判断脚本是否是在已安装目录内运行 (/opt/limit-up-sniper/scripts/update.sh)
 if [[ "$SCRIPT_DIR/.." -ef "$APP_DIR" ]]; then
     # 已安装模式
-    # 需要用户提供新源码路径，或者如果项目是 git 克隆的，则可以 git pull
-    # 这里假设用户是通过 上传新文件夹 -> 运行 update.sh 的方式
-    
+    cd "$APP_DIR"
+    if [ -d ".git" ]; then
+         echo -e "${YELLOW}检测到 Git 仓库，正在拉取最新代码...${NC}"
+         git fetch --all
+         git reset --hard origin/main
+         git pull
+         
+         # 已经是最新代码，不需要再复制文件
+         # 直接跳到更新依赖和重启服务
+         echo -e "${YELLOW}[1/3] 停止服务...${NC}"
+         systemctl stop limit-up-sniper || true
+         
+         echo -e "${YELLOW}[2/3] 更新 Python 依赖...${NC}"
+         if [ -f "$APP_DIR/venv/bin/activate" ]; then
+            source "$APP_DIR/venv/bin/activate"
+            pip install -r "$APP_DIR/backend/requirements.txt" --no-cache-dir -q
+         fi
+         
+         # 重新赋予权限
+         chmod +x "$APP_DIR/scripts/"*.sh
+         chmod -R 777 "$APP_DIR/backend/data"
+         touch "$APP_DIR/backend/app.log"
+         chmod 666 "$APP_DIR/backend/app.log"
+         
+         echo "正在重启服务..."
+         systemctl restart limit-up-sniper
+         systemctl restart nginx
+         
+         echo -e "${GREEN}=========================================${NC}"
+         echo -e "${GREEN}   ✅ Git 自动更新完成!                   ${NC}"
+         echo -e "${GREEN}=========================================${NC}"
+         systemctl status limit-up-sniper --no-pager | head -n 5
+         exit 0
+    fi
+
+    # 非 Git 环境，需要用户提供新源码路径
     SOURCE_ROOT="$1"
     if [ -z "$SOURCE_ROOT" ]; then
-        echo -e "${RED}[错误] 请提供新源码的路径。${NC}"
+        echo -e "${RED}[错误] 当前不是 Git 仓库，请提供新源码的路径。${NC}"
         echo "用法: sudo $0 /root/New-Code-Folder"
         exit 1
     fi

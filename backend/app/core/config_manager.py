@@ -45,7 +45,29 @@ SYSTEM_CONFIG = {
         "aliyun": "",
         "other": ""
     },
-    "pricing_config": {} # Will be populated by purchase_manager or loaded
+    "pricing_config": {
+        "basic": {
+            "3d": {"days": 3, "price": 9.9, "label": "3天体验"},
+            "1m": {"days": 30, "price": 58, "label": "1个月"},
+            "3m": {"days": 90, "price": 158, "label": "3个月"},
+            "6m": {"days": 180, "price": 298, "label": "6个月"},
+            "12m": {"days": 365, "price": 518, "label": "12个月"}
+        },
+        "advanced": {
+            "3d": {"days": 3, "price": 29.9, "label": "3天体验"},
+            "1m": {"days": 30, "price": 128, "label": "1个月"},
+            "3m": {"days": 90, "price": 348, "label": "3个月"},
+            "6m": {"days": 180, "price": 648, "label": "6个月"},
+            "12m": {"days": 365, "price": 1088, "label": "12个月"}
+        },
+        "flagship": {
+            "3d": {"days": 3, "price": 59.9, "label": "3天体验"},
+            "1m": {"days": 30, "price": 298, "label": "1个月"},
+            "3m": {"days": 90, "price": 798, "label": "3个月"},
+            "6m": {"days": 180, "price": 1498, "label": "6个月"},
+            "12m": {"days": 365, "price": 2688, "label": "12个月"}
+        }
+    }
 }
 
 def load_config():

@@ -39,7 +39,8 @@ def update_pricing(new_config):
 # Try to load initial from config manager
 try:
     from app.core.config_manager import SYSTEM_CONFIG
-    if "pricing_config" in SYSTEM_CONFIG:
+    # Only override if SYSTEM_CONFIG has meaningful pricing data (not just empty dict from default init if that was the case)
+    if "pricing_config" in SYSTEM_CONFIG and SYSTEM_CONFIG["pricing_config"]:
         PRICING_CONFIG = SYSTEM_CONFIG["pricing_config"]
 except ImportError:
     pass
