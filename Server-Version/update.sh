@@ -1,132 +1,100 @@
 #!/bin/bash
 
-# update.sh - 自动更新代码并重启服务
-# 用法: sudo ./update.sh
+# update.sh - Limit-Up Sniper 商业版 更新脚本
+# 用法: sudo ./update.sh [源码目录]
+# 注意: 如果文件已经在 /opt/limit-up-sniper 内，则默认只是重启或拉取(如使用git)
+# 但此处设计为从上传的源码覆盖更新
 
 set -e
 
+# 默认安装目录
+APP_DIR="/opt/limit-up-sniper"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+
 GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
 RED='\033[0;31m'
+YELLOW='\033[1;33m'
 NC='\033[0m'
 
-echo -e "${GREEN}=== Limit-Up Sniper 更新脚本 ===${NC}"
+echo -e "${GREEN}=== Limit-Up Sniper 商业版 更新程序 ===${NC}"
 
-# 1. 检查 Root 权限
-if [ "$EUID" -ne 0 ]; then 
-  echo -e "${YELLOW}提示: 建议使用 sudo 运行以确保服务重启成功${NC}"
-fi
-
-# 1.1 系统检测 (新增)
-if [ -f /etc/os-release ]; then
-    . /etc/os-release
-    OS=$NAME
-    echo -e "Detected OS: ${GREEN}$OS${NC}"
-fi
-
-# 2. 拉取最新代码
-echo -e "${YELLOW}[1/3] 准备更新代码...${NC}"
-
-# 2.1 备份本地数据
-BACKUP_DIR="._data_backup"
-# Data is in root, we are in Server-Version
-DATA_DIR="../backend/data"
-
-if [ -d "$DATA_DIR" ]; then
-    echo -e "${YELLOW}正在备份 data 目录...${NC}"
-    rm -rf "$BACKUP_DIR"
-    cp -r "$DATA_DIR" "$BACKUP_DIR"
-fi
-
-git config --global --add safe.directory "*"
-
-# 2.2 尝试拉取
-pushd .. > /dev/null
-if ! git pull; then
-    popd > /dev/null
-    echo -e "${RED}------------------------------------------------${NC}"
-    echo -e "${RED}❌ Git pull 失败！请查看上方的错误信息。${NC}"
-    echo -e "${RED}------------------------------------------------${NC}"
+# 1. 检查操作环境
+# 判断脚本是否是在已安装目录内运行 (/opt/limit-up-sniper/scripts/update.sh)
+if [[ "$SCRIPT_DIR/.." -ef "$APP_DIR" ]]; then
+    # 已安装模式
+    # 需要用户提供新源码路径，或者如果项目是 git 克隆的，则可以 git pull
+    # 这里假设用户是通过 上传新文件夹 -> 运行 update.sh 的方式
     
-    # 交互询问
-    echo -e "${YELLOW}常见原因说明：${NC}"
-    echo -e "1. ${YELLOW}网络超时/GnuTLS error${NC} -> 请选择 ${GREEN}n (取消)${NC}，稍后重试。"
-    echo -e "2. ${YELLOW}本地文件冲突${NC} -> 如确需覆盖本地修改，可选择 ${RED}y (强制重置)${NC}。"
-    echo -e "   ${GREEN}(提示: 我们在此前已将数据备份至子目录，强制更新后会自动恢复你的配置文件)${NC}"
-    echo ""
-    
-    read -p "⚠️  是否丢弃本地修改并强制更新? (y/n): " CONFIRM
-    
-    if [ "$CONFIRM" == "y" ]; then
-        echo -e "${YELLOW}正在执行强制重置 (git reset --hard)...${NC}"
-        pushd .. > /dev/null
-        CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-        git fetch --all
-        git reset --hard "origin/$CURRENT_BRANCH"
-        popd > /dev/null
-    else
-        echo -e "${RED}更新已取消。正在恢复数据...${NC}"
-        if [ -d "$BACKUP_DIR" ]; then
-            rm -rf "$DATA_DIR"
-            cp -r "$BACKUP_DIR" "$DATA_DIR"
-            rm -rf "$BACKUP_DIR"
-            echo -e "${GREEN}数据已恢复，服务保持原样。${NC}"
-        fi
+    SOURCE_ROOT="$1"
+    if [ -z "$SOURCE_ROOT" ]; then
+        echo -e "${RED}[错误] 请提供新源码的路径。${NC}"
+        echo "用法: sudo $0 /root/New-Code-Folder"
         exit 1
     fi
 else
-    popd > /dev/null
-    echo -e "${GREEN}✅ Git pull 成功。${NC}"
+    # 源码模式 (直接在新上传的文件夹里运行 Server-Version/update.sh)
+    SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
+    echo "检测到源码目录: $SOURCE_ROOT"
 fi
 
-# 2.3 正常流程的数据恢复
-if [ -d "$BACKUP_DIR" ]; then
-    echo -e "${YELLOW}正在恢复数据...${NC}"
-    mkdir -p "$DATA_DIR"
-    
-    PROTECTED_FILES=("config.json" "lhb_config.json" "watchlist.json" "seat_mappings.json" "vip_seats.json")
-    
-    for file in "${PROTECTED_FILES[@]}"; do
-        if [ -f "$BACKUP_DIR/$file" ]; then
-            cp "$BACKUP_DIR/$file" "$DATA_DIR/$file"
-        fi
-    done
-
-    cp -rn "$BACKUP_DIR"/* "$DATA_DIR/" 2>/dev/null || true
-    
-    rm -rf "$BACKUP_DIR"
-    echo -e "${GREEN}✅ 数据恢复完成。${NC}"
+if [ ! -d "$SOURCE_ROOT/backend" ]; then
+    echo -e "${RED}[错误] 源码目录无效，未找到 backend 文件夹。${NC}"
+    exit 1
 fi
 
-# 3. 更新依赖
-echo -e "${YELLOW}[2/3] 更新 Python 依赖...${NC}"
-if [ -d "venv" ]; then
-    source venv/bin/activate
-    pip install -r ../backend/requirements.txt -q --timeout 100
+echo -e "${YELLOW}[1/3] 停止服务...${NC}"
+systemctl stop limit-up-sniper || true
+
+echo -e "${YELLOW}[2/3] 更新文件...${NC}"
+# 备份配置文件 (如果在 backend/data)
+# data 目录通常保留，不覆盖，除非有 schema 变更。但 cp -r 默认覆盖同名文件。
+# data 里的 config.json, admin_token.txt 等应该保留。
+# 为了安全，我们只复制代码文件，不覆盖 data 目录（除非有新结构需手动处理）
+
+# 复制 backend 代码 (排除 data 文件夹)
+# rsync 是更好的选择，但为了兼容用 cp
+# 先临时移出 data
+if [ -d "$APP_DIR/backend/data" ]; then
+    mv "$APP_DIR/backend/data" "$APP_DIR/backend_data_bak"
+fi
+
+# 覆盖后端
+yes | cp -rf "$SOURCE_ROOT/backend" "$APP_DIR/"
+
+# 还原 data
+if [ -d "$APP_DIR/backend_data_bak" ]; then
+    rm -rf "$APP_DIR/backend/data" # 删除源码自带的空data或其他
+    mv "$APP_DIR/backend_data_bak" "$APP_DIR/backend/data"
 else
-    echo "未找到虚拟环境，跳过依赖更新。"
+    # 首次或意外情况，确保目录存在
+    mkdir -p "$APP_DIR/backend/data"
 fi
 
-# 3.1 检查并修复 Service 文件路径
-SERVICE_FILE="/etc/systemd/system/limit-up-sniper.service"
-if [ -f "$SERVICE_FILE" ]; then
-    if grep -q "uvicorn main:app" "$SERVICE_FILE"; then
-        echo -e "${YELLOW}[Fix] 检测到旧版服务配置，正在更新为 app.main:app...${NC}"
-        sed -i 's/uvicorn main:app/uvicorn app.main:app/g' "$SERVICE_FILE"
-        systemctl daemon-reload
-    fi
+# 覆盖前端
+yes | cp -rf "$SOURCE_ROOT/frontend" "$APP_DIR/"
+
+# 覆盖脚本
+mkdir -p "$APP_DIR/scripts"
+yes | cp -rf "$SOURCE_ROOT/Server-Version/"*.sh "$APP_DIR/scripts/"
+chmod +x "$APP_DIR/scripts/"*.sh
+
+# 确保权限
+chmod -R 777 "$APP_DIR/backend/data"
+touch "$APP_DIR/backend/app.log"
+chmod 666 "$APP_DIR/backend/app.log"
+
+echo -e "${YELLOW}[3/3] 更新依赖环境...${NC}"
+if [ -f "$APP_DIR/venv/bin/activate" ]; then
+    source "$APP_DIR/venv/bin/activate"
+    pip install -r "$APP_DIR/backend/requirements.txt" --no-cache-dir -q
 fi
 
-# 4. 重启服务
-echo -e "${YELLOW}[3/3] 重启服务...${NC}"
-if systemctl is-active --quiet limit-up-sniper; then
-    sudo systemctl restart limit-up-sniper
-    echo -e "${GREEN}服务已重启!${NC}"
-else
-    echo -e "${YELLOW}服务未运行，尝试启动...${NC}"
-    sudo systemctl start limit-up-sniper
-fi
+# 重启服务
+echo "正在重启服务..."
+systemctl restart limit-up-sniper
+systemctl restart nginx
 
-# 5. 检查状态
-echo -e "${GREEN}更新完成! 当前状态:${NC}"
-sudo systemctl status limit-up-sniper --no-pager | head -n 10
+echo -e "${GREEN}=========================================${NC}"
+echo -e "${GREEN}   ✅ 更新完成! (Update Complete)        ${NC}"
+echo -e "${GREEN}=========================================${NC}"
+systemctl status limit-up-sniper --no-pager | head -n 5

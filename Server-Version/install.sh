@@ -1,7 +1,7 @@
 #!/bin/bash
 
-# Limit-Up Sniper 一键部署脚本
-# 适用系统: Ubuntu 20.04/22.04 LTS
+# Limit-Up Sniper 商业版部署脚本
+# 支持系统: Ubuntu/Debian, CentOS/RHEL/Alibaba Cloud Linux/TencentOS
 # 用法: sudo ./install.sh
 
 set -e
@@ -13,121 +13,120 @@ YELLOW='\033[1;33m'
 NC='\033[0m'
 
 echo -e "${GREEN}=========================================${NC}"
-echo -e "${GREEN}   Limit-Up Sniper 一键部署脚本          ${NC}"
+echo -e "${GREEN}   Limit-Up Sniper 商业版一键部署        ${NC}"
 echo -e "${GREEN}=========================================${NC}"
 
 # 1. 检查 Root 权限
 if [ "$EUID" -ne 0 ]; then 
-  echo -e "${RED}[Error] 请使用 sudo 运行此脚本: sudo ./install.sh${NC}"
+  echo -e "${RED}[错误] 请使用 sudo 或 root 权限运行此脚本 (sudo ./install.sh)${NC}"
   exit 1
 fi
 
-# 2. 安装系统依赖
-echo -e "${YELLOW}[1/6] 正在安装系统依赖...${NC}"
-
+# 2. 检测操作系统
 if [ -f /etc/os-release ]; then
     . /etc/os-release
     OS=$NAME
+    VERSION_ID=$VERSION_ID
 fi
 
-if [[ "$OS" == *"Alibaba"* ]] || [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]]; then
-    echo "Detected RedHat/CentOS/Alibaba Cloud Linux..."
-    # 尝试安装更高版本的 Python (Akshare 需要 3.10+)
-    if command -v dnf > /dev/null; then
-        dnf install -y git nginx python3.11 python3.11-pip python3.11-devel || yum install -y git python3 python3-pip nginx
-    else
-        yum install -y git python3 python3-pip nginx
-    fi
-else
-    # Assume Debian/Ubuntu
-    apt update -qq
-    apt install -y python3 python3-pip python3-venv git nginx -qq
-fi
+echo -e "${YELLOW}[1/5] 正在为 $OS 安装系统依赖...${NC}"
 
-# 3. 设置 Python 环境
-echo -e "${YELLOW}[2/6] 配置 Python 虚拟环境...${NC}"
-APP_DIR=$(pwd)
-PROJECT_ROOT=$(dirname "$APP_DIR")
+APP_DIR="/opt/limit-up-sniper"
+# 获取脚本所在目录的绝对路径
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
+# 假设脚本位于 Server-Version/ 目录下，向上寻找项目根目录
+SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
 
-# 寻找合适的 Python 版本 (优先 3.11 > 3.10 > 3.9 > 3)
-PYTHON_EXE="python3"
-if command -v python3.12 > /dev/null; then PYTHON_EXE="python3.12"
-elif command -v python3.11 > /dev/null; then PYTHON_EXE="python3.11"
-elif command -v python3.10 > /dev/null; then PYTHON_EXE="python3.10"
-fi
+echo "检测到源码根目录: $SOURCE_ROOT"
 
-# 检查最终选定的 Python 版本是否满足要求
-PY_VERSION=$($PYTHON_EXE -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')
-echo "Selected Python: $PYTHON_EXE (Version $PY_VERSION)"
-
-if [ $(echo "$PY_VERSION < 3.10" | bc -l) -eq 1 ]; then
-    echo -e "${RED}[Error] Akshare 需要 Python 3.10+, 但当前系统中最高版本为 $PY_VERSION${NC}"
-    echo -e "${YELLOW}建议手动安装: sudo dnf install python3.11 (Alibaba/CentOS) 或 sudo apt install python3.11 (Ubuntu)${NC}"
-    exit 1
-fi
-
-if [ ! -d "venv" ]; then
-    $PYTHON_EXE -m venv venv || {
-        echo -e "${YELLOW}venv 模块缺失，尝试安装...${NC}"
-        if [[ "$OS" == *"Alibaba"* ]] || [[ "$OS" == *"CentOS"* ]]; then
-             # RedHat 系通常不需要单独安装 venv
-             exit 1
+# 安装依赖函数
+install_deps() {
+    if [[ "$OS" == *"Ubuntu"* ]] || [[ "$OS" == *"Debian"* ]]; then
+        apt-get update -qq
+        apt-get install -y python3 python3-pip python3-venv python3-dev build-essential git nginx curl bc
+    elif [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]] || [[ "$OS" == *"Alibaba"* ]] || [[ "$OS" == *"Tencent"* ]] || [[ "$OS" == *"Fedora"* ]]; then
+        # CentOS/RHEL 系
+        if command -v dnf > /dev/null; then
+            PKG_MGR="dnf"
         else
-             apt install -y python3-venv -qq
-             $PYTHON_EXE -m venv venv
+            PKG_MGR="yum"
         fi
-    }
-fi
-source venv/bin/activate
-echo "正在安装 Python 依赖 (这可能需要几分钟)..."
-pip install --upgrade pip -q
-pip install -r "$PROJECT_ROOT/backend/requirements.txt" -q
-
-# 4. 配置 API Key
-echo -e "${YELLOW}[3/6] 配置 Deepseek API...${NC}"
-
-# 尝试从现有服务文件中读取 API Key
-DEFAULT_KEY=""
-SERVICE_FILE="/etc/systemd/system/limit-up-sniper.service"
-if [ -f "$SERVICE_FILE" ]; then
-    # 提取 Key (假设格式为 Environment="DEEPSEEK_API_KEY=sk-...")
-    EXISTING_KEY=$(grep "DEEPSEEK_API_KEY" $SERVICE_FILE | cut -d'=' -f3- | tr -d '"')
-    if [ ! -z "$EXISTING_KEY" ]; then
-        DEFAULT_KEY=$EXISTING_KEY
-        echo "检测到现有 API Key: ${DEFAULT_KEY:0:5}******${DEFAULT_KEY: -4}"
+        
+        $PKG_MGR install -y epel-release || true
+        $PKG_MGR install -y python3 python3-pip python3-devel gcc git nginx curl bc
+    else
+        echo -e "${RED}[错误] 不支持的操作系统: $OS${NC}"
+        echo "尝试通用安装..."
+        if command -v apt > /dev/null; then apt update && apt install -y python3-pip python3-venv git nginx; fi
+        if command -v yum > /dev/null; then yum install -y python3-pip python3-devel git nginx; fi
     fi
-fi
+}
 
-read -p "请输入您的 Deepseek API Key (回车使用现有 Key): " INPUT_KEY
-API_KEY=${INPUT_KEY:-$DEFAULT_KEY}
+install_deps
 
-if [ -z "$API_KEY" ]; then
-    echo -e "${RED}[Error] API Key 不能为空。${NC}"
+# 3. 设置应用目录
+echo -e "${YELLOW}[2/5] 正在配置应用目录 $APP_DIR...${NC}"
+
+# 停止可能存在的旧服务
+systemctl stop limit-up-sniper || true
+
+# 验证源码结构
+if [ ! -d "$SOURCE_ROOT/backend" ] || [ ! -d "$SOURCE_ROOT/frontend" ]; then
+    echo -e "${RED}[错误] 在 $SOURCE_ROOT 下未找到 backend 或 frontend 目录${NC}"
+    echo "请确保您在项目根目录下运行此脚本。"
     exit 1
 fi
+
+mkdir -p "$APP_DIR"
+# 复制文件
+echo "正在复制文件..."
+cp -r "$SOURCE_ROOT/backend" "$APP_DIR/"
+cp -r "$SOURCE_ROOT/frontend" "$APP_DIR/"
+# 复制维护脚本
+mkdir -p "$APP_DIR/scripts"
+cp "$SOURCE_ROOT/Server-Version/"*.sh "$APP_DIR/scripts/"
+chmod +x "$APP_DIR/scripts/"*.sh
+
+cp "$SOURCE_ROOT/backend/requirements.txt" "$APP_DIR/backend/"
+
+# 创建数据目录并设置权限
+mkdir -p "$APP_DIR/backend/data"
+touch "$APP_DIR/backend/app.log"
+# 确保数据目录可写
+chmod -R 777 "$APP_DIR/backend/data"
+chmod 666 "$APP_DIR/backend/app.log"
+
+# 4. 配置 Python 环境
+echo -e "${YELLOW}[3/5] 正在配置 Python 虚拟环境...${NC}"
+
+cd "$APP_DIR/backend"
+if [ ! -d "../venv" ]; then
+    python3 -m venv ../venv
+fi
+
+source ../venv/bin/activate
+pip install --upgrade pip -q
+echo "正在安装 Python 依赖库 (可能需要几分钟)..."
+# 使用清华源加速 (可选，视网络情况而定，这里使用默认源以保证兼容)
+pip install -r requirements.txt --no-cache-dir
 
 # 5. 配置 Systemd 服务
-echo -e "${YELLOW}[4/6] 配置后台服务 (Systemd)...${NC}"
-
-# 确定运行用户
-RUN_USER=$SUDO_USER
-if [ -z "$RUN_USER" ]; then
-    RUN_USER="root"
-fi
+echo -e "${YELLOW}[4/5] 配置系统后台服务...${NC}"
 
 SERVICE_FILE="/etc/systemd/system/limit-up-sniper.service"
+
 cat > $SERVICE_FILE <<EOF
 [Unit]
-Description=Limit-Up Sniper FastAPI Service
+Description=Limit-Up Sniper Commercial Backend
 After=network.target
 
 [Service]
-User=$RUN_USER
-Group=$RUN_USER
-WorkingDirectory=$PROJECT_ROOT
-Environment="PATH=$APP_DIR/venv/bin"
-Environment="DEEPSEEK_API_KEY=$API_KEY"
-ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
+# 为简单起见使用 root 运行，如需更安全请修改为专用用户
+User=root
+Group=root
+WorkingDirectory=$APP_DIR/backend
+Environment="PATH=$APP_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 
 Restart=always
 RestartSec=5
@@ -141,29 +140,34 @@ systemctl enable limit-up-sniper
 systemctl restart limit-up-sniper
 
 # 6. 配置 Nginx
-echo -e "${YELLOW}[5/6] 配置 Nginx 反向代理...${NC}"
+echo -e "${YELLOW}[5/5] 配置 Nginx 反向代理...${NC}"
 
-# 尝试获取公网 IP
-SERVER_IP=$(curl -s ifconfig.me || echo "your_server_ip")
-read -p "请输入服务器 IP 或域名 (默认: $SERVER_IP): " USER_IP
+# 获取公网 IP
+SERVER_IP=$(curl -s ifconfig.me || echo "您的服务器IP")
+read -p "请输入服务器域名或IP (默认为: $SERVER_IP): " USER_IP
 USER_IP=${USER_IP:-$SERVER_IP}
 
-# 根据系统确定 Nginx 配置文件路径
-if [[ "$OS" == *"Alibaba"* ]] || [[ "$OS" == *"CentOS"* ]] || [[ "$OS" == *"Red Hat"* ]]; then
-    # RedHat/Alibaba 系路径
-    NGINX_CONF="/etc/nginx/conf.d/limit-up-sniper.conf"
-    NGINX_TYPE="redhat"
-else
-    # Debian/Ubuntu 系路径
+# Nginx 配置文件路径
+if [ -d "/etc/nginx/sites-available" ]; then
+    # Debian/Ubuntu
     NGINX_CONF="/etc/nginx/sites-available/limit-up-sniper"
-    NGINX_TYPE="debian"
+    NGINX_LINK="/etc/nginx/sites-enabled/limit-up-sniper"
+    mkdir -p /etc/nginx/sites-enabled
+else
+    # CentOS/RHEL
+    NGINX_CONF="/etc/nginx/conf.d/limit-up-sniper.conf"
+    NGINX_LINK=""
 fi
 
+# 写入 Nginx 配置
 cat > $NGINX_CONF <<EOF
 server {
     listen 80;
     server_name $USER_IP;
 
+    client_max_body_size 10M;
+
+    # 代理所有请求到后端 (由 FastAPI 处理静态文件和 API)
     location / {
         proxy_pass http://127.0.0.1:8000;
         proxy_set_header Host \$host;
@@ -172,6 +176,7 @@ server {
         proxy_set_header X-Forwarded-Proto \$scheme;
     }
 
+    # WebSocket 支持
     location /ws {
         proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
@@ -183,28 +188,33 @@ server {
 }
 EOF
 
-if [ "$NGINX_TYPE" == "debian" ]; then
-    mkdir -p /etc/nginx/sites-enabled/
-    ln -sf $NGINX_CONF /etc/nginx/sites-enabled/
-    # 移除默认配置以避免冲突
+if [ ! -z "$NGINX_LINK" ]; then
+    ln -sf $NGINX_CONF $NGINX_LINK
     rm -f /etc/nginx/sites-enabled/default
 fi
 
+# 测试 Nginx
 nginx -t
 if [ $? -eq 0 ]; then
     systemctl restart nginx
-    echo -e "${GREEN}Nginx 配置成功！${NC}"
+    systemctl enable nginx
 else
-    echo -e "${RED}Nginx 配置测试失败，请检查配置文件。${NC}"
+    echo -e "${RED}[错误] Nginx 配置测试失败，请检查日志。${NC}"
 fi
-    systemctl restart nginx
-else
-    echo -e "${RED}[Error] Nginx 配置有误，请检查。${NC}"
-    exit 1
+
+# 最终输出 - 等待后端生成 Token
+sleep 5
+ADMIN_TOKEN_FILE="$APP_DIR/backend/data/admin_token.txt"
+ADMIN_TOKEN="请查看文件 $ADMIN_TOKEN_FILE"
+
+if [ -f "$ADMIN_TOKEN_FILE" ]; then
+    ADMIN_TOKEN=$(cat "$ADMIN_TOKEN_FILE")
 fi
 
 echo -e "${GREEN}=========================================${NC}"
-echo -e "${GREEN}   ✅ 部署成功! (Deployment Success)     ${NC}"
+echo -e "${GREEN}   ✅ 部署成功!                          ${NC}"
 echo -e "${GREEN}=========================================${NC}"
-echo -e "访问地址: http://$USER_IP"
-echo -e "查看日志: sudo journalctl -u limit-up-sniper -f"
+echo -e "前台访问地址: http://$USER_IP/"
+echo -e "后台管理地址: http://$USER_IP/admin/index.html"
+echo -e "管理员 Token: ${YELLOW}$ADMIN_TOKEN${NC} (用于登录后台)"
+echo -e "查看日志命令: journalctl -u limit-up-sniper -f"

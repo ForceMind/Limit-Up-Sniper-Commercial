@@ -26,6 +26,7 @@
                 <button @click="currentView='dashboard'" :class="currentView=='dashboard'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">概览 & 配置</button>
                 <button @click="currentView='users'" :class="currentView=='users'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">用户管理</button>
                 <button @click="currentView='orders'" :class="currentView=='orders'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">订单管理</button>
+                <button @click="currentView='logs'" :class="currentView=='logs'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">系统日志</button>
             </nav>
             
             <div class="p-4 border-t border-gray-700 text-xs text-gray-500">
@@ -130,6 +131,29 @@
                                 </div>
                             </div>
                         </section>
+
+                        <!-- API Configuration -->
+                        <section class="mt-8">
+                            <h3 class="text-lg font-semibold border-b pb-2 mb-4">API Key 配置</h3>
+                            <div class="space-y-4">
+                                <p class="text-sm text-gray-500">配置第三方服务所需的 API 密钥。</p>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pl-8" v-if="config.api_keys">
+                                    <div>
+                                        <label class="block text-sm text-gray-600 mb-1">DeepSeek API Key</label>
+                                        <input type="password" v-model="config.api_keys.deepseek" class="border rounded w-full px-2 py-1" placeholder="sk-...">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm text-gray-600 mb-1">Aliyun API Key</label>
+                                        <input type="password" v-model="config.api_keys.aliyun" class="border rounded w-full px-2 py-1" placeholder="sk-...">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm text-gray-600 mb-1">Other API Key</label>
+                                        <input type="password" v-model="config.api_keys.other" class="border rounded w-full px-2 py-1">
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
                         <section class="mt-8">
                             <h3 class="text-lg font-semibold border-b pb-2 mb-4">邮件通知设置</h3>
                             <div class="space-y-4">
@@ -140,12 +164,13 @@
                                 
                                 <div v-if="config.email_config && config.email_config.enabled" class="grid grid-cols-2 gap-4 pl-8 bg-gray-50 p-4 rounded">
                                     <div class="col-span-2 text-xs text-gray-500 mb-2 p-2 bg-blue-50 rounded border border-blue-100">
-                                        <p class="font-bold">📧 配置说明:</p>
+                                        <p class="font-bold">📧 配置说明 (以QQ邮箱为例):</p>
                                         <ul class="list-disc pl-4 mt-1 space-y-1">
-                                            <li>建议使用QQ邮箱或163邮箱作为发件箱。</li>
-                                            <li><b>SMTP服务器:</b> QQ邮箱为 <code>smtp.qq.com</code> (SSL端口465)</li>
-                                            <li><b>发送邮箱密码:</b> 请使用邮箱设置中生成的<b>授权码</b>，而非登录密码。</li>
-                                            <li>配置完成后，新订单支付等待验证时会发送邮件通知。</li>
+                                            <li>1. 在QQ邮箱设置 -> 账户中开启 <b>IMAP/SMTP服务</b>。</li>
+                                            <li>2. 获取生成的<b>授权码</b> (一串不含空格的字母)。</li>
+                                            <li>3. SMTP服务器填 <code>smtp.qq.com</code>，端口填 <code>465</code>。</li>
+                                            <li>4. 下方需填写您的邮箱账号和刚刚获取的授权码。</li>
+                                            <li>5. 接收通知邮箱可以是同一个，也可以是其他管理员邮箱。</li>
                                         </ul>
                                     </div>
 
@@ -173,9 +198,131 @@
                                 </div>
                             </div>
                         </section>
-<div class="flex justify-end pt-4">
+
+                        <!-- API Configuration -->
+                        <section class="mb-8 border-b pb-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-700">API Key 配置</h3>
+                            <div class="bg-gray-50 border border-gray-200 rounded p-4">
+                                <p class="text-sm text-gray-500 mb-4">配置第三方服务所需的 API 密钥 (保存后生效)</p>
+                                <div v-if="config.api_keys" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-sm font-bold text-gray-700 mb-1">DeepSeek API Key</label>
+                                        <input type="password" v-model="config.api_keys.deepseek" class="w-full border rounded p-2 text-sm font-mono" placeholder="sk-...">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-bold text-gray-700 mb-1">Aliyun API Key</label>
+                                        <input type="password" v-model="config.api_keys.aliyun" class="w-full border rounded p-2 text-sm font-mono" placeholder="sk-...">
+                                    </div>
+                                    <div>
+                                        <label class="block text-sm font-bold text-gray-700 mb-1">其他服务 Key</label>
+                                        <input type="text" v-model="config.api_keys.other" class="w-full border rounded p-2 text-sm">
+                                    </div>
+                                </div>
+                                <div v-else class="text-gray-500 text-sm">加载 API 配置中... (请确保后端已重启)</div>
+                            </div>
+                        </section>
+
+                        <!-- Pricing Configuration -->
+                        <section class="mb-8 border-b pb-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-700">价格配置</h3>
+                            <div class="bg-gray-50 border border-gray-200 rounded p-4">
+                                <p class="text-sm text-gray-500 mb-4">设置不同版本在不同时间的售价 (0表示不启用或免费)</p>
+                                <div v-if="config.pricing_config">
+                                    <div v-for="(plans, version) in config.pricing_config" :key="version" class="mb-6">
+                                        <h4 class="font-bold text-gray-800 capitalize mb-2 border-b">{{ version }}</h4>
+                                        <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+                                            <div v-for="(plan, duration) in plans" :key="duration" class="bg-white p-2 rounded border">
+                                                <div class="text-xs text-gray-500 mb-1">{{ plan.label }} ({{ duration }})</div>
+                                                <div class="flex items-center gap-1">
+                                                    <span class="text-gray-400">¥</span>
+                                                    <input type="number" step="0.1" v-model.number="plan.price" class="w-full text-sm font-bold text-red-600 focus:outline-none border-b border-dashed">
+                                                </div>
+                                                <div class="flex items-center gap-1 mt-1">
+                                                    <span class="text-xs text-gray-400">天数:</span>
+                                                    <input type="number" v-model.number="plan.days" class="w-full text-xs focus:outline-none border-b border-dashed">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div v-else class="text-gray-500 text-sm">加载价格配置中...</div>
+                            </div>
+                        </section>
+
+                        <!-- Admin Account Configuration -->
+                        <section class="mb-8 border-b pb-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-700">管理员账户</h3>
+                            <div class="bg-gray-50 border border-gray-200 rounded p-4">
+                                <p class="text-sm text-gray-500 mb-4">修改管理员登录密码 (Token)</p>
+                                <div class="flex items-end gap-4 max-w-md">
+                                    <div class="flex-1">
+                                        <label class="block text-sm font-bold text-gray-700 mb-1">新密码</label>
+                                        <input type="password" v-model="newAdminPassword" class="w-full border rounded p-2 text-sm" placeholder="至少6位">
+                                    </div>
+                                    <button @click="updateAdminPassword" class="bg-red-600 text-white px-4 py-2 rounded text-sm hover:bg-red-700 whitespace-nowrap">修改密码</button>
+                                </div>
+                                <p class="text-xs text-red-500 mt-2" v-if="passwordMsg">{{ passwordMsg }}</p>
+                            </div>
+                        </section>
+
+                        <div class="flex justify-end pt-4">
                             <button @click="saveConfig" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700">保存设置</button>
                         </div>
+                    </div>
+                </div>
+
+                <!-- Logs View -->
+                <div v-if="currentView === 'logs'" class="h-full flex flex-col p-4 max-w-7xl mx-auto space-y-6">
+                    <!-- Tabs -->
+                    <div class="flex gap-4 border-b border-gray-200 pb-2">
+                        <button @click="activeLogTab='system'; fetchLogs('system')" :class="activeLogTab=='system'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">系统日志 (Stdout)</button>
+                        <button @click="activeLogTab='login'; fetchLogs('login')" :class="activeLogTab=='login'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">登录失败日志</button>
+                        <button @click="activeLogTab='ai_cache'; fetchLogs('ai_cache')" :class="activeLogTab=='ai_cache'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">AI 缓存监控</button>
+                    </div>
+
+                    <!-- System Logs -->
+                    <div v-if="activeLogTab === 'system'" class="flex-1 bg-gray-900 text-green-400 p-4 rounded font-mono text-xs overflow-auto max-h-[70vh]">
+                        <div v-if="sysLogs.length === 0" class="text-gray-500">暂无日志或无法读取日志文件</div>
+                        <div v-for="(line, i) in sysLogs" :key="i" class="whitespace-pre-wrap border-b border-gray-800 pb-1 mb-1">{{ line }}</div>
+                    </div>
+
+                    <!-- Login Logs -->
+                    <div v-if="activeLogTab === 'login'" class="flex-1 bg-white rounded shadow text-sm overflow-auto">
+                        <table class="w-full text-left">
+                            <thead class="bg-gray-50 text-gray-500">
+                                <tr>
+                                    <th class="p-3">时间</th>
+                                    <th class="p-3">IP地址</th>
+                                    <th class="p-3">状态</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y">
+                                <tr v-for="(log, i) in loginLogs" :key="i">
+                                    <td class="p-3">{{ log.time }}</td>
+                                    <td class="p-3 font-mono">{{ log.ip }}</td>
+                                    <td class="p-3 text-red-500 font-bold">{{ log.status }}</td>
+                                </tr>
+                                <tr v-if="loginLogs.length === 0"><td colspan="3" class="p-4 text-center text-gray-400">暂无异常登录记录</td></tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                     <!-- AI Cache -->
+                    <div v-if="activeLogTab === 'ai_cache'" class="flex-1 bg-white rounded shadow p-4 text-sm overflow-auto">
+                        <div class="mb-4 flex gap-4 items-center">
+                            <span class="font-bold text-lg">缓存统计</span>
+                            <span class="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs">Total Items: {{ aiCacheStats.total_keys }}</span>
+                        </div>
+                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
+                             <div v-for="key in aiCacheStats.keys" :key="key" class="border p-2 rounded text-xs truncate bg-gray-50 cursor-pointer hover:bg-gray-100 text-gray-600" :title="key">
+                                {{ key }}
+                             </div>
+                        </div>
+                         <div v-if="!aiCacheStats.keys || aiCacheStats.keys.length === 0" class="text-gray-400">暂无缓存数据</div>
+                    </div>
+
+                    <div class="flex justify-end gap-2">
+                        <button @click="fetchLogs(activeLogTab)" class="bg-blue-50 hover:bg-blue-100 text-blue-600 px-4 py-2 rounded text-sm border border-blue-200 transition">🔄 刷新日志</button>
                     </div>
                 </div>
 
@@ -349,6 +496,14 @@
                     msgModal: { show: false, msg: '', type: 'info' },
                     confirmModal: { show: false, msg: '', resolve: null },
                     addTimeModal: { show: false, user: null, minutes: 60 },
+                    // Logs
+                    activeLogTab: 'system',
+                    sysLogs: [],
+                    loginLogs: [],
+                    aiCacheStats: {},
+                    // Admin Account
+                    newAdminPassword: '',
+                    passwordMsg: ''
                 }
             },
             mounted() {
@@ -363,41 +518,63 @@
                 currentView(val) {
                     if (val === 'users') this.fetchUsers();
                     if (val === 'orders') this.fetchOrders();
+                    if (val === 'logs') this.fetchLogs('system');
                 }
             },
             methods: {
                 showMsg(msg, type = 'info') {
                     this.msgModal = { show: true, msg, type };
-                    if (type === 'success' || type === 'info') {
-                        setTimeout(() => { if (this.msgModal.msg === msg) this.msgModal.show = false; }, 3000);
-                    }
-                },
-                showConfirm(msg) {
-                    return new Promise((resolve) => {
-                        this.confirmModal = { show: true, msg, resolve };
-                    });
-                },
-                handleConfirm(result) {
-                    this.confirmModal.show = false;
-                    if (this.confirmModal.resolve) {
-                        this.confirmModal.resolve(result);
-                        this.confirmModal.resolve = null;
-                    }
-                },
-                login() {
-                    this.token = this.inputToken;
-                    localStorage.setItem('admin_token', this.token);
-                    this.fetchConfig();
-                    this.fetchUsers();
-                    this.fetchOrders();
-                },
-                getHeaders() {
-                    return {
-                        'Content-Type': 'application/json',
-                        'X-Admin-Token': this.token
-                    };
-                },
-                async fetchConfig() {
+                        this.msgModal = { show: true, msg: msg, type: type };
+
+                        if (type === 'success' || type === 'info') {
+                            setTimeout(() => { if (this.msgModal.msg === msg) this.msgModal.show = false; }, 3000);
+                        }
+                    },
+                    showConfirm(msg) {
+                        return new Promise((resolve) => {
+                            this.confirmModal = { show: true, msg: msg, resolve: resolve };
+                        });
+                    },
+                    handleConfirm(result) {
+                        this.confirmModal.show = false;
+                        if (this.confirmModal.resolve) {
+                            this.confirmModal.resolve(result);
+                            this.confirmModal.resolve = null;
+                        }
+                    },
+                    getHeaders() {
+                        return {
+                            'Content-Type': 'application/json',
+                            'X-Admin-Token': this.token
+                        };
+                    },
+                    login() {
+                        this.token = this.inputToken;
+                        localStorage.setItem('admin_token', this.token);
+                        this.fetchConfig();
+                        this.fetchUsers();
+                        this.fetchOrders();
+                    },
+                async fetchLogs(type) {
+                        try {
+                            const headers = { 'X-Admin-Token': this.token };
+                            let url = '';
+                            if (type === 'system') url = '/api/admin/logs/system';
+                            else if (type === 'login') url = '/api/admin/logs/login';
+                            else if (type === 'ai_cache') url = '/api/admin/monitor/ai_cache';
+                            
+                            const res = await fetch(API_BASE_URL + url, { headers: headers });
+                            if (res.status === 403) { this.token = ''; return; }
+                            const data = await res.json();
+                            
+                            if (type === 'system') this.sysLogs = data.logs || [];
+                            else if (type === 'login') this.loginLogs = data;
+                            else if (type === 'ai_cache') this.aiCacheStats = data;
+                        } catch (e) {
+                            console.error("Fetch Logs Error:", e);
+                        }
+                    },
+            async fetchConfig() {
                     try {
                         const res = await fetch(API_BASE_URL + '/api/admin/config', { headers: this.getHeaders() });
                         if (res.status === 403) { this.token = ''; return; }
@@ -410,33 +587,84 @@
                         this.showMsg(e.message, 'error'); 
                     }
                 },
-                async saveConfig() {
+                async updateAdminPassword() {
+                    const pwd = this.newAdminPassword;
+                    if (!pwd || pwd.length < 6) {
+                        this.passwordMsg = "密码至少6位";
+                        setTimeout(() => this.passwordMsg = '', 3000);
+                        return;
+                    }
+                    if (!await this.showConfirm("确定要修改管理员密码吗？修改后需要重新登录。")) return;
+                    
                     try {
-                        await fetch(API_BASE_URL + '/api/admin/config', {
+                        const res = await fetch(API_BASE_URL + '/api/admin/update_password', {
                             method: 'POST',
                             headers: this.getHeaders(),
-                            body: JSON.stringify(this.config)
+                            body: JSON.stringify({
+                                old_password: "", // Not used yet, rely on Token auth
+                                new_password: pwd
+                            })
                         });
-                        this.showMsg('保存成功', 'success');
+                        const data = await res.json();
+                        if (res.ok) {
+                            this.showMsg("密码修改成功，请重新登录", "success");
+                            this.newAdminPassword = '';
+                            setTimeout(() => {
+                                localStorage.removeItem('admin_token');
+                                location.reload();
+                            }, 1500);
+                        } else {
+                            this.passwordMsg = data.detail || "修改失败";
+                        }
+                    } catch (e) {
+                         this.showMsg(e.message, 'error');
+                    }
+                },
+                async saveConfig() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/config', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                auto_analysis_enabled: this.config.auto_analysis_enabled,
+                                use_smart_schedule: this.config.use_smart_schedule,
+                                fixed_interval_minutes: this.config.fixed_interval_minutes,
+                                schedule_plan: this.config.schedule_plan,
+                                lhb_enabled: this.config.lhb_enabled,
+                                lhb_days: this.config.lhb_days,
+                                lhb_min_amount: this.config.lhb_min_amount,
+                                email_config: this.config.email_config,
+                                api_keys: this.config.api_keys,
+                                pricing_config: this.config.pricing_config
+                            })
+                        });
+                        if(res.ok) {
+                            this.showMsg('保存成功', 'success');
+                        } else {
+                            throw new Error("Save Status: " + res.status);
+                        }
                     } catch(e) { this.showMsg(e.message, 'error'); }
                 },
                 
+
                 // Users
                 async fetchUsers() {
                     try {
                         const res = await fetch(API_BASE_URL + '/api/admin/users', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.token = ''; this.showMsg("Session expired, please login again.", "error"); return; }
                         if (!res.ok) throw new Error(`Users Load Failed: ${res.status}`);
                         this.users = await res.json();
-                    } catch(e) { console.error(e); this.showMsg("Users Load Failed", "error"); }
+                    } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
                 },
                 
                 // Orders
                 async fetchOrders() {
                     try {
                         const res = await fetch(API_BASE_URL + '/api/admin/orders', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.token = ''; return; }
                         if (!res.ok) throw new Error(`Orders Load Failed: ${res.status}`);
                         this.orders = await res.json();
-                    } catch(e) { console.error(e); this.showMsg("Orders Load Failed", "error"); }
+                    } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
                 },
 
                 openAddTime(user) {

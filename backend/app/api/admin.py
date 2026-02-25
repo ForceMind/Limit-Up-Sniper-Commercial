@@ -24,7 +24,7 @@ DATA_DIR = BASE_DIR / "data"
 ADMIN_SECRET_FILE = DATA_DIR / "admin_token.txt" 
 ADMIN_CREDENTIALS_FILE = DATA_DIR / "admin_credentials.json" # Support custom username/password
 RATE_LIMIT_WINDOW = 60 # seconds
-RATE_LIMIT_MAX_ATTEMPTS = 5
+RATE_LIMIT_MAX_ATTEMPTS = 50
 failed_attempts: Dict[str, List[float]] = {}
 
 def get_admin_token():
@@ -100,6 +100,36 @@ def get_db():
         db.close()
 
 # --- License Management ---
+
+class UpdatePasswordSchema(BaseModel):
+    old_password: str
+    new_password: str
+
+@router.post("/update_password")
+async def update_admin_password(
+    data: UpdatePasswordSchema,
+    authorized: bool = Depends(verify_admin)
+):
+    global ADMIN_TOKEN
+    
+    # Verify logic is handled by verify_admin, but double check current just in case (though Redundant)
+    # Actually, verify_admin checks the header against current token.
+    # We update the file and memory.
+    
+    if len(data.new_password) < 6:
+        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        
+    try:
+        # Save to file
+        with open(ADMIN_SECRET_FILE, "w") as f:
+            f.write(data.new_password)
+            
+        # Update memory
+        ADMIN_TOKEN = data.new_password
+        
+        return {"status": "success", "message": "Admin password/token updated successfully"}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update password: {str(e)}")
 
 @router.get("/users", response_model=List[schemas.UserInfo])
 async def list_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), authorized: bool = Depends(verify_admin)):
@@ -234,6 +264,10 @@ class AdminConfigUpdate(BaseModel):
     lhb_min_amount: Optional[int] = None
     # Email settings
     email_config: Optional[dict] = None
+    # API Keys
+    api_keys: Optional[dict] = None
+    # Pricing Config
+    pricing_config: Optional[dict] = None
 
 @router.get("/config")
 async def get_admin_config(authorized: bool = Depends(verify_admin)):
@@ -252,19 +286,41 @@ async def get_admin_config(authorized: bool = Depends(verify_admin)):
             "smtp_password": "", 
             "recipient_email": ""
         }
+    if 'api_keys' not in config:
+        config['api_keys'] = {
+            "deepseek": "",
+            "aliyun": "",
+            "other": ""
+        }
+    
+    # Pricing Config
+    from app.core import purchase_manager
+    config['pricing_config'] = purchase_manager.PRICING_CONFIG
+    
     return config
 
 @router.post("/config")
 async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depends(verify_admin)):
     # System Config
-    SYSTEM_CONFIG["auto_analysis_enabled"] = config.auto_analysis_enabled
-    SYSTEM_CONFIG["use_smart_schedule"] = config.use_smart_schedule
-    SYSTEM_CONFIG["fixed_interval_minutes"] = config.fixed_interval_minutes
+    if config.auto_analysis_enabled is not None:
+        SYSTEM_CONFIG["auto_analysis_enabled"] = config.auto_analysis_enabled
+    if config.use_smart_schedule is not None:
+        SYSTEM_CONFIG["use_smart_schedule"] = config.use_smart_schedule
+    if config.fixed_interval_minutes is not None:
+        SYSTEM_CONFIG["fixed_interval_minutes"] = config.fixed_interval_minutes
     if config.schedule_plan:
         SYSTEM_CONFIG["schedule_plan"] = config.schedule_plan
     
     if config.email_config is not None:
         SYSTEM_CONFIG["email_config"] = config.email_config
+        
+    if config.api_keys is not None:
+        SYSTEM_CONFIG["api_keys"] = config.api_keys
+        
+    if config.pricing_config is not None:
+        SYSTEM_CONFIG["pricing_config"] = config.pricing_config
+        from app.core import purchase_manager
+        purchase_manager.update_pricing(config.pricing_config)
     
     save_config()
     
@@ -273,4 +329,46 @@ async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depe
          lhb_manager.update_settings(config.lhb_enabled, config.lhb_days, config.lhb_min_amount)
     
     return {"status": "success"}
+
+# --- Logs & Monitor ---
+
+@router.get("/logs/system")
+async def get_system_logs(lines: int = 100, authorized: bool = Depends(verify_admin)):
+    # Try to read stdout log if captured, or specific app.log
+    # Assuming 'app.log' in root or data
+    log_file = BASE_DIR / "app.log"
+    if not log_file.exists():
+        # Fallback to check if we can return failed_attempts as a log for now or empty
+        return {"logs": ["Log file not found."]}
+    
+    try:
+        # Read last N lines
+        with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+            all_lines = f.readlines()
+            return {"logs": all_lines[-lines:]}
+    except Exception as e:
+        return {"logs": [f"Error reading logs: {str(e)}"]}
+
+@router.get("/logs/login")
+async def get_login_logs(authorized: bool = Depends(verify_admin)):
+    # Return failed attempts from memory
+    logs = []
+    for ip, times in failed_attempts.items():
+        for t in times:
+            logs.append({
+                "ip": ip,
+                "time": datetime.fromtimestamp(t),
+                "status": "Failed"
+            })
+    # Sort by time desc
+    logs.sort(key=lambda x: x["time"], reverse=True)
+    return logs
+
+@router.get("/monitor/ai_cache")
+async def get_ai_cache_stats(authorized: bool = Depends(verify_admin)):
+    from app.core.ai_cache import ai_cache
+    return {
+        "total_keys": len(ai_cache.cache),
+        "keys": list(ai_cache.cache.keys())[-50:] # Limit to last 50 keys to verify
+    }
 

@@ -87,8 +87,8 @@
             </div>
             
             <div class="flex items-center gap-2 md:gap-4 w-full md:w-auto justify-between md:justify-end flex-wrap transition-all duration-300">
-                <!-- User Profile -->
-                <div @click="openSubscription()" class="cursor-pointer text-xs flex flex-col items-end mr-2 bg-gray-50 dark:bg-gray-800 p-1 px-2 rounded border border-gray-200 dark:border-gray-700">
+                <!-- User Profile (Desktop Only) -->
+                <div @click="openSubscription()" class="hidden md:flex cursor-pointer text-xs flex-col items-end mr-2 bg-gray-50 dark:bg-gray-800 p-1 px-2 rounded border border-gray-200 dark:border-gray-700">
                     <div class="font-bold" :class="{
                         'text-gray-500': userInfo.version==='trial',
                         'text-blue-500': userInfo.version==='basic',
@@ -96,7 +96,7 @@
                         'text-red-500': userInfo.version==='flagship'
                     }">
                         {{ features[userInfo.version]?.desc || userInfo.version }}
-                        <span v-if="userInfo.is_expired" class="text-red-500 text-[10px]">(已过期)</span>
+                        <span v-if="userInfo.is_expired && userInfo.version !== 'trial'" class="text-red-500 text-[10px]">(已过期)</span>
                     </div>
                     <div class="text-[10px] text-gray-400">
                         AI:{{userInfo.remaining_ai}} | 突:{{userInfo.remaining_raid}} | 复:{{userInfo.remaining_review}}
@@ -856,6 +856,30 @@
                 </div>
                 
                 <div class="p-6 overflow-y-auto space-y-6">
+                    <!-- 0. User Profile (Mobile Only) -->
+                    <div class="md:hidden p-4 bg-gray-50 dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700 text-center cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition" @click="openSubscription()">
+                        <div class="font-bold text-lg mb-1" :class="{
+                            'text-gray-500': userInfo.version==='trial',
+                            'text-blue-500': userInfo.version==='basic',
+                            'text-purple-500': userInfo.version==='advanced',
+                            'text-red-500': userInfo.version==='flagship'
+                        }">
+                            {{ features[userInfo.version]?.desc || userInfo.version }}
+                            <span v-if="userInfo.is_expired && userInfo.version !== 'trial'" class="text-red-500 text-sm">(已过期)</span>
+                        </div>
+                        <div class="text-xs text-gray-500 dark:text-gray-400 font-mono space-x-2 flex justify-center items-center flex-wrap">
+                             <span>AI: {{userInfo.remaining_ai}}</span>
+                             <span class="text-gray-300">|</span>
+                             <span>突: {{userInfo.remaining_raid}}</span>
+                             <span class="text-gray-300">|</span>
+                             <span>复: {{userInfo.remaining_review}}</span>
+                        </div>
+                        <div class="mt-3 text-xs text-blue-600 dark:text-blue-400 font-bold flex items-center justify-center gap-1">
+                            <span>💳</span>
+                            <span>{{ userInfo.version === 'trial' ? '申请体验 / 升级' : '查看会员详情 / 续费' }}</span>
+                        </div>
+                    </div>
+                
                     <!-- 1. Filter Settings -->
                     <div>
                         <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
@@ -1025,7 +1049,7 @@
                             @click="selectedVersion = ver"
                             class="flex-1 min-w-[80px] py-2 px-1 rounded border-2 text-center transition-all"
                             :class="selectedVersion === ver ? 'border-red-500 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400' : 'border-gray-200 dark:border-gray-700 text-gray-500'">
-                            <div class="text-xs font-bold">{{ ver === 'basic' ? '初级版' : (ver === 'advanced' ? '高级版' : '旗舰版') }}</div>
+                            <div class="text-xs font-bold">{{ ver === 'trial' ? '体验版' : (ver === 'basic' ? '初级版' : (ver === 'advanced' ? '高级版' : '旗舰版')) }}</div>
                             <div class="text-[10px] scale-90">{{ feat.desc }}</div>
                         </button>
                     </div>
@@ -1038,7 +1062,7 @@
                     </div>
 
                     <!-- Duration Selection -->
-                    <div class="mb-4">
+                    <div class="mb-4" v-if="selectedVersion !== 'trial'">
                         <label class="block text-xs text-gray-500 mb-2">选择时长</label>
                         <div class="grid grid-cols-3 gap-2">
                             <button v-for="(opt, key) in pricingOptions[selectedVersion]" :key="key"
@@ -1050,9 +1074,13 @@
                             </button>
                         </div>
                     </div>
+                    
+                    <div v-if="selectedVersion === 'trial'" class="mb-4 text-center p-4 bg-blue-50 dark:bg-blue-900/20 rounded text-blue-600 dark:text-blue-300 text-sm">
+                        体验版包含基础AI功能，由于算力成本限制，请合理使用。<br>体验满意后欢迎升级正式版解锁全部功能。
+                    </div>
 
                     <button @click="createOrder" :disabled="purchaseLoading" class="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded font-bold shadow-lg disabled:opacity-50">
-                        {{ purchaseLoading ? '生成中...' : '立即购买 ¥' + (pricingOptions[selectedVersion]?.[selectedDuration]?.price || '...') }}
+                        {{ purchaseLoading ? '处理中...' : (selectedVersion === 'trial' ? '立即申请体验' : '立即购买 ¥' + (pricingOptions[selectedVersion]?.[selectedDuration]?.price || '...')) }}
                     </button>
                 </div>
 
@@ -1120,6 +1148,8 @@
         </div>
 
     </div>
+
+        </div> <!-- Fix: Closing #app div -->
 
     <script>
         const { createApp } = Vue
@@ -1267,7 +1297,7 @@
                     currentOrder: null,
                     purchaseLoading: false,
                     features: {
-                        'trial': { ai: '每天1次', raid: '无权限', review: '无权限', desc: '10分钟体验' },
+                        'trial': { ai: '每天1次', raid: '无权限', review: '无权限', desc: '10分钟' },
                         'basic': { ai: '每天5次', raid: '无权限', review: '无权限', desc: '入门首选' },
                         'advanced': { ai: '每天10次', raid: '每天3次', review: '每天1次', desc: '进阶利器' },
                         'flagship': { ai: '每天1000次', raid: '每天50次', review: '每天5次', desc: '专业游资' }
@@ -1355,10 +1385,19 @@
                     return (s.total_volume === 0 || (s.up_count === 0 && s.down_count === 0));
                 }
             },
-            watch: {
-                // Removed resize logic as panel is now overlay
-            },
-            beforeUnmount() {
+                watch: {
+                    // Reset duration when version changes
+                    selectedVersion(newVal) {
+                        if (newVal === 'trial') return;
+                        if (this.pricingOptions && this.pricingOptions[newVal]) {
+                            const available = Object.keys(this.pricingOptions[newVal]);
+                            if (available.length > 0 && !available.includes(this.selectedDuration)) {
+                                this.selectedDuration = available[0];
+                            }
+                        }
+                    }
+                },
+                beforeUnmount() {
                 if(this.trialTimer) clearTimeout(this.trialTimer);
                 if(this.expiryTimer) clearInterval(this.expiryTimer);
             },
@@ -1389,10 +1428,10 @@
                     // Req says "30 seconds after trial... popup... User can continue or buy".
                     // If they continue, maybe don't show again this session?
                     if (this.userInfo.version === 'trial' && !localStorage.getItem('trial_popup_shown')) {
-                        this.trialTimer = setTimeout(() => {
+                        this.trialTimer = setTimeout(async () => {
                             if (this.userInfo.version === 'trial' && !this.userInfo.is_expired && !this.showSubscriptionModal) {
-                                // "弹出需要购买会员的弹窗" -> "我要购买" or "继续试用"
-                                if(confirm("🔥 试用倒计时提示 🔥\n您的试用时间仅剩几分钟。\n\n现在购买享折扣，是否查看详情？")) {
+                                const result = await this.showConfirm("试用倒计时提示\n\n您的试用时间仅剩几分钟。\n现在申请正式版享折扣，是否查看详情？");
+                                if(result) {
                                     this.openSubscription('basic');
                                 }
                                 localStorage.setItem('trial_popup_shown', 'true');
@@ -1486,21 +1525,46 @@
                     this.showSubscriptionModal = true;
                     this.purchaseStep = 1;
                     if (targetVer) this.selectedVersion = targetVer;
+                    
                     try {
                         const res = await fetch(`${API_BASE_URL}/api/payment/pricing`);
                         this.pricingOptions = await res.json();
+                        
+                        // Set default duration if not set or invalid
+                        if (this.selectedVersion && this.pricingOptions[this.selectedVersion]) {
+                            const keys = Object.keys(this.pricingOptions[this.selectedVersion]);
+                            if (keys.length > 0 && !keys.includes(this.selectedDuration)) {
+                                this.selectedDuration = keys[0];
+                            }
+                        }
                     } catch (e) { console.error(e); }
                 },
 
                 async createOrder() {
+                    // Handle Trial Application
+                    if (this.selectedVersion === 'trial') {
+                        this.purchaseLoading = true;
+                        // Simulate application
+                        setTimeout(() => {
+                            this.purchaseLoading = false;
+                            this.showMsg('体验申请已提交，请等待管理员审核。', 'success');
+                            this.showSubscriptionModal = false;
+                        }, 1500);
+                        return;
+                    }
+
                     const priceInfo = this.pricingOptions[this.selectedVersion]?.[this.selectedDuration];
-                    if (!priceInfo) return;
+                    if (!priceInfo) {
+                        console.error("Missing pricing info for", this.selectedVersion, this.selectedDuration);
+                        this.showMsg('该版本暂无定价信息', 'error');
+                        return;
+                    }
                     this.purchaseLoading = true;
+                    // Improved duration mapping
                     let dm = 1;
-                    if (this.selectedDuration === '3d') dm = 0;
-                    else if (this.selectedDuration === '3m') dm = 3;
-                    else if (this.selectedDuration === '6m') dm = 6;
-                    else if (this.selectedDuration === '12m') dm = 12;
+                    if (this.selectedDuration.endsWith('d')) dm = 0; // Days
+                    else if (this.selectedDuration.endsWith('m')) dm = parseInt(this.selectedDuration); // Months
+                    else if (this.selectedDuration.endsWith('y')) dm = parseInt(this.selectedDuration) * 12; // Years
 
                     try {
                         const res = await fetch(`${API_BASE_URL}/api/payment/create_order`, {
@@ -1516,6 +1580,8 @@
                         if (data.order_code) {
                             this.currentOrder = data;
                             this.purchaseStep = 2;
+                        } else {
+                            this.showMsg(data.detail || '创建订单失败', 'error');
                         }
                     } catch(e) {
                         this.showMsg('创建订单失败: ' + e, 'error');
@@ -1525,7 +1591,8 @@
                 },
 
                 async confirmPaid() {
-                    if (!confirm("请确认您已经支付了口令红包，否则会员将无法到账！")) return;
+                    const confirmed = await this.showConfirm("请确认您已经支付了口令红包，否则会员将无法到账！");
+                    if (!confirmed) return;
                     try {
                         this.purchaseLoading = true;
                         const res = await fetch(`${API_BASE_URL}/api/payment/confirm_payment`, {
@@ -1641,7 +1708,8 @@
                         'before_3d': '3天以前',
                         'before_7d': '7天以前'
                     };
-                    if (!confirm(`确定要清空 ${labels[range] || range} 的新闻历史吗？`)) return;
+                    const confirmed = await this.showConfirm(`确定要清空 ${labels[range] || range} 的新闻历史吗？`);
+                    if (!confirmed) return;
                     try {
                         const res = await fetch(API_BASE_URL + `/api/news_history/clear?range=${range}`);
                         const data = await res.json();
@@ -1690,16 +1758,15 @@
                             })
                         });
                         
-                        // Trigger sync
                         const response = await fetch(API_BASE_URL + '/api/lhb/sync', { method: 'POST' });
                         const result = await response.json();
                         if (result.status === 'ok') {
-                            alert('已触发后台同步，请留意日志窗口。');
+                            this.showMsg('已触发后台同步，请留意日志窗口。', 'success');
                         } else {
-                            alert(result.message);
+                            this.showMsg(result.message, 'error');
                         }
                     } catch (e) {
-                        alert('同步请求失败');
+                        this.showMsg('同步请求失败', 'error');
                     } finally {
                         // Don't set false immediately, let polling handle it or just timeout
                         // Actually, for better UX, we should poll status
@@ -1741,10 +1808,10 @@
                         const data = await response.json();
                         this.systemConfig = data.config;
                         this.showSettingsModal = false;
-                        // Show toast or notification if needed
+                        this.showMsg('配置已保存', 'success');
                     } catch (e) {
                         console.error('Failed to save config:', e);
-                        alert('保存设置失败');
+                        this.showMsg('保存设置失败', 'error');
                     }
                 },
                 formatTime(timestamp) {
@@ -1861,11 +1928,11 @@
                         if (result.status === 'success') {
                             // await this.fetchData(); // WebSocket will tell us when done
                         } else {
-                            alert('分析失败: ' + result.message);
+                            this.showMsg('分析失败: ' + result.message, 'error');
                         }
                     } catch (error) {
                         console.error('Analysis error:', error);
-                        alert('请求错误');
+                        this.showMsg('请求错误', 'error');
                     } finally {
                         this.isAnalyzing = false;
                     }
@@ -1880,10 +1947,10 @@
                         if (result.status === 'ok') {
                             await this.fetchData();
                         } else {
-                            alert('添加失败: ' + result.msg);
+                            this.showMsg('添加失败: ' + result.msg, 'error');
                         }
                     } catch (error) {
-                        alert('添加错误');
+                        this.showMsg('添加错误', 'error');
                     }
                 },
                 async fetchData() {

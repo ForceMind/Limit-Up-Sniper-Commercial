@@ -30,6 +30,20 @@ PRICING_CONFIG = {
     }
 }
 
+# Update config from SYSTEM_CONFIG on module load if possible or provide update method
+def update_pricing(new_config):
+    global PRICING_CONFIG
+    if new_config:
+        PRICING_CONFIG = new_config
+
+# Try to load initial from config manager
+try:
+    from app.core.config_manager import SYSTEM_CONFIG
+    if "pricing_config" in SYSTEM_CONFIG:
+        PRICING_CONFIG = SYSTEM_CONFIG["pricing_config"]
+except ImportError:
+    pass
+
 HANZI_Repo = "天地玄黄宇宙洪荒日月盈昃辰宿列张寒来暑往秋收冬藏闰余成岁律吕调阳云腾致雨露结为霜金生丽水玉出昆冈"  
 NUMBERS = "0123456789"
 LETTERS = "ABCDEFGHJKLMNPQRSTUVWXYZ"

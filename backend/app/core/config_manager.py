@@ -39,7 +39,13 @@ SYSTEM_CONFIG = {
         "smtp_user": "",
         "smtp_password": "",
         "recipient_email": ""
-    }
+    },
+    "api_keys": {
+        "deepseek": "",
+        "aliyun": "",
+        "other": ""
+    },
+    "pricing_config": {} # Will be populated by purchase_manager or loaded
 }
 
 def load_config():
@@ -52,7 +58,8 @@ def load_config():
                 saved_config = json.load(f)
                 # Update only persistent fields
                 for key in ["auto_analysis_enabled", "use_smart_schedule", "fixed_interval_minutes", 
-                           "schedule_plan", "news_auto_clean_enabled", "news_auto_clean_days", "email_config"]:
+                           "schedule_plan", "news_auto_clean_enabled", "news_auto_clean_days", 
+                           "email_config", "api_keys", "pricing_config"]:
                     if key in saved_config:
                         SYSTEM_CONFIG[key] = saved_config[key]
         except Exception as e:
@@ -63,22 +70,18 @@ def save_config():
     config_path = DATA_DIR / "config.json"
     try:
         with open(config_path, "w", encoding="utf-8") as f:
-            json.dump({
+            export_data = {
                 "auto_analysis_enabled": SYSTEM_CONFIG["auto_analysis_enabled"],
                 "use_smart_schedule": SYSTEM_CONFIG["use_smart_schedule"],
                 "fixed_interval_minutes": SYSTEM_CONFIG["fixed_interval_minutes"],
                 "schedule_plan": SYSTEM_CONFIG.get("schedule_plan", DEFAULT_SCHEDULE),
                 "news_auto_clean_enabled": SYSTEM_CONFIG.get("news_auto_clean_enabled", True),
                 "news_auto_clean_days": SYSTEM_CONFIG.get("news_auto_clean_days", 14),
-                "email_config": SYSTEM_CONFIG.get("email_config", {
-                    "enabled": False, 
-                    "smtp_server": "", 
-                    "smtp_port": 465,
-                    "smtp_user": "",
-                    "smtp_password": "",
-                    "recipient_email": ""
-                })
-            }, f, indent=2, ensure_ascii=False)
+                "email_config": SYSTEM_CONFIG.get("email_config", {}),
+                "api_keys": SYSTEM_CONFIG.get("api_keys", {}),
+                "pricing_config": SYSTEM_CONFIG.get("pricing_config", {})
+            }
+            json.dump(export_data, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"Failed to save config: {e}")
 
