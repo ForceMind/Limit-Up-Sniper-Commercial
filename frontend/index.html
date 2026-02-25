@@ -2108,7 +2108,10 @@
                         this.showMsg('添加错误', 'error');
                     }
                 },
-                fetchData: null, // Will be throttled
+                fetchData() {
+                    // Placeholder for limit-up-sniper throttle
+                    if (this._fetchDataImpl) this._fetchDataImpl();
+                },
                 async _fetchDataImpl() {
                     try {
                         const response = await fetch(API_BASE_URL + '/api/stocks');
@@ -3081,14 +3084,11 @@
                 const savedApiKey = localStorage.getItem('deepseek_api_key');
                 if (savedApiKey) {
                     this.apiKey = savedApiKey;
-                
+                }
+
                 // --- Initialize Throttled Functions ---
                 this.fetchData = this.throttle(this._fetchDataImpl, 2000); // Max once per 2s
                 
-                // ... (rest of mounted)
-                
-                }
-
                 // Initialize activeTab based on time for Mobile
                 const now = new Date();
                 const day = now.getDay();
