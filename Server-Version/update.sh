@@ -20,17 +20,19 @@ echo -e "${GREEN}=== Limit-Up Sniper 商业版 更新程序 ===${NC}"
 
 # 1. 检查操作环境
 # 判断脚本是否是在已安装目录内运行 (/opt/limit-up-sniper/scripts/update.sh)
-if [[ "$SCRIPT_DIR/.." -ef "$APP_DIR" ]]; then
-    # 已安装模式
+# 或者 APP_DIR 是否是一个 git 仓库，如果是，优先使用 git pull 更新
+if [[ "$SCRIPT_DIR/.." -ef "$APP_DIR" ]] || [ -d "$APP_DIR/.git" ]; then
+    # Git 更新模式
+    # 如果当前不在 APP_DIR，切换过去
     cd "$APP_DIR"
+    
     if [ -d ".git" ]; then
-         echo -e "${YELLOW}检测到 Git 仓库，正在拉取最新代码...${NC}"
+         echo -e "${YELLOW}检测到 Git 仓库 ($APP_DIR)，正在拉取最新代码...${NC}"
          git fetch --all
          git reset --hard origin/main
          git pull
          
-         # 已经是最新代码，不需要再复制文件
-         # 直接跳到更新依赖和重启服务
+         # 已经是最新代码，不需要再从外部复制文件
          echo -e "${YELLOW}[1/3] 停止服务...${NC}"
          systemctl stop limit-up-sniper || true
          
@@ -56,8 +58,11 @@ if [[ "$SCRIPT_DIR/.." -ef "$APP_DIR" ]]; then
          systemctl status limit-up-sniper --no-pager | head -n 5
          exit 0
     fi
+fi
 
-    # 非 Git 环境，需要用户提供新源码路径
+# 如果未满足 Git 更新条件，进入源码覆盖模式
+if [[ "$SCRIPT_DIR/.." -ef "$APP_DIR" ]]; then
+    # 已安装模式但不是 Git 仓库
     SOURCE_ROOT="$1"
     if [ -z "$SOURCE_ROOT" ]; then
         echo -e "${RED}[错误] 当前不是 Git 仓库，请提供新源码的路径。${NC}"
