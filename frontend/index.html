@@ -12,10 +12,10 @@
             darkMode: 'class',
         }
     </script>
-    <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <script src="https://cdn.jsdelivr.net/npm/@fingerprintjs/fingerprintjs@3/dist/fp.min.js"></script>
+    <script src="https://cdn.staticfile.org/vue/3.3.4/vue.global.prod.min.js"></script>
+    <script src="https://cdn.staticfile.org/echarts/5.4.3/echarts.min.js"></script>
+    <script src="https://cdn.staticfile.org/marked/9.1.2/marked.min.js"></script>
+    <script src="https://cdn.staticfile.org/fingerprintjs/3.4.1/fp.min.js"></script>
     <script src="config.js"></script>
     <style>
         /* Prevent font scaling on mobile */
@@ -1234,6 +1234,14 @@
         </div> <!-- Fix: Closing #app div -->
 
     <script>
+        // Global Error Handler (Added by Debugger)
+        window.onerror = function(message, source, lineno, colno, error) {
+            console.error('[CRITICAL ERROR]', message, 'at', source, ':', lineno, colno);
+            // Optionally alert if you want to see it on mobile
+            // alert('Error: ' + message + ' Line: ' + lineno);
+        };
+        console.log('App Starting...');
+        
         const { createApp } = Vue
 
         // Add global fetch interceptor
@@ -3267,5 +3275,6 @@
     </style>
 </body>
 </html>
+
 
 
