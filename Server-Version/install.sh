@@ -110,26 +110,35 @@ echo "正在安装 Python 依赖库 (可能需要几分钟)..."
 # 使用清华源加速 (可选，视网络情况而定，这里使用默认源以保证兼容)
 pip install -r requirements.txt --no-cache-dir
 
-# 4.1. 配置 API Key (不再写入 Systemd，而是写入配置文件)
+# 4.1. 配置 API Key (使用环境变量)
 echo -e "${YELLOW}[3.5/5] 配置 API Key...${NC}"
 
-# 尝试读取现有配置
-DATA_DIR="$APP_DIR/backend/data"
-CONFIG_FILE="$DATA_DIR/config.json"
-mkdir -p "$DATA_DIR"
+# 尝试从现有服务文件中读取 API Key
+DEFAULT_KEY=""
+SERVICE_FILE="/etc/systemd/system/limit-up-sniper.service"
+if [ -f "$SERVICE_FILE" ]; then
+    # 提取 Key (假设格式为 Environment="DEEPSEEK_API_KEY=sk-...")
+    EXISTING_KEY=$(grep "DEEPSEEK_API_KEY" $SERVICE_FILE | cut -d'=' -f3- | tr -d '"')
+    if [ ! -z "$EXISTING_KEY" ]; then
+        DEFAULT_KEY=$EXISTING_KEY
+        echo "检测到现有 API Key: ${DEFAULT_KEY:0:5}******${DEFAULT_KEY: -4}"
+    fi
+fi
 
-if [ -f "$CONFIG_FILE" ]; then
-    echo "检测到现有配置文件，跳过 API Key 设置。"
-else
-    # 提示用户输入 DeepSeek Key
-    read -p "请输入您的 DeepSeek API Key (如无需配置请直接回车): " DEEPSEEK_KEY
-    
-    if [ ! -z "$DEEPSEEK_KEY" ]; then
-        # 创建默认配置文件
-        cat > $CONFIG_FILE <<EOF
+read -p "请输入您的 Deepseek API Key (回车使用现有 Key): " INPUT_KEY
+API_KEY=${INPUT_KEY:-$DEFAULT_KEY}
+
+# 创建数据目录(如果不存在)
+DATA_DIR="$APP_DIR/backend/data"
+mkdir -p "$DATA_DIR"
+CONFIG_FILE="$DATA_DIR/config.json"
+
+# 如果配置文件不存在，创建一个默认的(不包含 Key)
+if [ ! -f "$CONFIG_FILE" ]; then
+    cat > $CONFIG_FILE <<EOF
 {
     "api_keys": {
-        "deepseek": "$DEEPSEEK_KEY",
+        "deepseek": "",
         "aliyun": "",
         "other": ""
     },
@@ -141,10 +150,6 @@ else
     "lhb_min_amount": 20000000
 }
 EOF
-        echo "API Key 已保存至配置。"
-    else
-        echo "跳过 API Key 配置。您之后可以在后台管理界面设置。"
-    fi
 fi
 
 # 5. 配置 Systemd 服务
@@ -163,6 +168,7 @@ User=root
 Group=root
 WorkingDirectory=$APP_DIR/backend
 Environment="PATH=$APP_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DEEPSEEK_API_KEY=$API_KEY"
 ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
 
 Restart=always
