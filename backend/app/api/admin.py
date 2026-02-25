@@ -60,34 +60,22 @@ def get_admin_token():
 
 ADMIN_TOKEN = get_admin_token()
 
-async def verify_admin(request: Request, x_admin_token: str = Header(..., alias="X-Admin-Token")):
-    # Reload token from file every time to allow hot-change without restart if desired (optional but good for 'custom auth')
-    # Or just keep memory cache. Let's keep memory cache for performance but check if we should allow custom overrides.
+async def verify_admin(x_admin_token: str = Header(..., alias="X-Admin-Token")):
     global ADMIN_TOKEN
     
-    # Support dynamic token update from file (simple way to allow user to change password)
+    # Reload token from file every time to allow hot-change without restart
     if ADMIN_SECRET_FILE.exists():
-         with open(ADMIN_SECRET_FILE, "r") as f:
-            file_token = f.read().strip()
-            if file_token and file_token != ADMIN_TOKEN:
-                ADMIN_TOKEN = file_token
+         try:
+             with open(ADMIN_SECRET_FILE, "r", encoding="utf-8") as f:
+                file_token = f.read().strip()
+                if file_token and file_token != ADMIN_TOKEN:
+                    ADMIN_TOKEN = file_token
+         except Exception:
+             pass
 
-    client_ip = request.client.host
-    now = time.time()
-    
-    # Clean up old records
-    if client_ip in failed_attempts:
-        failed_attempts[client_ip] = [t for t in failed_attempts[client_ip] if now - t < RATE_LIMIT_WINDOW]
-    
-    # Check rate limit
-    if client_ip in failed_attempts and len(failed_attempts[client_ip]) >= RATE_LIMIT_MAX_ATTEMPTS:
-        raise HTTPException(status_code=429, detail="Too many failed login attempts. Please try again later.")
-    
+    # Simple token check
     if x_admin_token != ADMIN_TOKEN:
-        # Record failure
-        if client_ip not in failed_attempts:
-            failed_attempts[client_ip] = []
-        failed_attempts[client_ip].append(now)
+        print(f"[AUTH FAILED] Start... Expected: {ADMIN_TOKEN[:5]}... Received: {x_admin_token[:5]}...") # Log minimal info for debugging
         raise HTTPException(status_code=403, detail="Admin authorization failed")
     
     return True

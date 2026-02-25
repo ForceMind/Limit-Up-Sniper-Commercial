@@ -3,6 +3,7 @@ import requests
 import pandas as pd
 import time
 import json
+import threading
 from datetime import datetime
 
 class DataProvider:
@@ -13,6 +14,7 @@ class DataProvider:
         self._last_failure_ts = 0
         self._base_info_df = None
         self._base_info_ts = 0
+        self._lock = threading.Lock() # Global lock for heavy operations (market overview)
 
     def log(self, msg):
         if self.logger:
@@ -229,87 +231,94 @@ class DataProvider:
         """
         now_ts = time.time()
         
-        # Throttle to reduce provider pressure: reuse cache within 5 minutes
-        if self._last_market_df is not None and now_ts - self._last_market_ts < 300:
+        # Throttle logic
+        if self._last_market_df is not None and now_ts - self._last_market_ts < 300: # 5 minutes cache
             return self._last_market_df.copy()
 
-        # Cooldown on failure: if failed recently (within 60s), return None or stale cache
+        # Cooldown prevents hammering API on failures
         if now_ts - self._last_failure_ts < 60:
             if self._last_market_df is not None:
                 return self._last_market_df.copy()
+            # If no cache and in cooldown, return empty DF to avoid crash, or None
             return None
 
-        # Helper to temporarily unset proxy
-        import os
-        old_http = os.environ.get("HTTP_PROXY")
-        old_https = os.environ.get("HTTPS_PROXY")
-        os.environ.pop("HTTP_PROXY", None)
-        os.environ.pop("HTTPS_PROXY", None)
-
-        try:
-            # 1. Try Sina Paged (Slow & Steady) - Primary as requested
-            try:
-                self.log("[*] Fetching all market data (Sina Paged)...")
-                df = self._fetch_sina_market_paged()
-                if df is not None and not df.empty:
-                    self._last_market_df = df.copy()
-                    self._last_market_ts = now_ts
-                    return df
-            except Exception as e:
-                self.log(f"[!] Sina Paged failed: {e}")
-
-            # 2. Try AKShare (EastMoney) - Fallback
-            try:
-                self.log("[*] Fetching all market data (AKShare/EM)...")
-                df = ak.stock_zh_a_spot_em()
-                rename_map = {
-                    '代码': 'code', '名称': 'name', '最新价': 'current', '涨跌幅': 'change_percent',
-                    '涨速': 'speed', '换手率': 'turnover', '流通市值': 'circ_mv', '昨收': 'prev_close',
-                    '最高': 'high', '最低': 'low', '今开': 'open', '成交额': 'amount'
-                }
-                df = df.rename(columns=rename_map)
-                # Ensure numeric
-                for col in ['current', 'change_percent', 'speed', 'turnover', 'circ_mv', 'prev_close', 'high']:
-                    if col in df.columns:
-                        df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                
-                self._last_market_df = df.copy()
-                self._last_market_ts = now_ts
-                return df
-            except Exception as e:
-                self.log(f"[!] AKShare/EM failed: {e}")
-
-            # 3. Try Manual EM Paged (Backup)
-            try:
-                self.log("[*] Fetching all market data (Manual EM Paged)...")
-                df = self._fetch_em_market_paged()
-                if df is not None and not df.empty:
-                    self._last_market_df = df.copy()
-                    self._last_market_ts = now_ts
-                    return df
-            except Exception as e:
-                self.log(f"[!] Manual EM Paged failed: {e}")
-
-            # 4. Try Tushare (Requires TUSHARE_TOKEN and package installed)
-            try:
-                self.log("[*] Fetching all market data (Tushare)...")
-                df = self._fetch_tushare_spot()
-                if df is not None and not df.empty:
-                    self._last_market_df = df.copy()
-                    self._last_market_ts = now_ts
-                    return df
-            except Exception as e:
-                self.log(f"[!] Tushare failed: {e}")
-                
-            # Fallback: return last cache even if stale
-            self._last_failure_ts = now_ts # Mark failure
-            if self._last_market_df is not None:
+        # Lock to ensure only one thread updates data at a time
+        with self._lock:
+            # Doublets check inside lock
+            if self._last_market_df is not None and time.time() - self._last_market_ts < 300:
                 return self._last_market_df.copy()
-            return None
-        finally:
-            # Restore proxy settings
-            if old_http: os.environ["HTTP_PROXY"] = old_http
-            if old_https: os.environ["HTTPS_PROXY"] = old_https
+                
+            # Helper to temporarily unset proxy
+            import os
+            old_http = os.environ.get("HTTP_PROXY")
+            old_https = os.environ.get("HTTPS_PROXY")
+            if old_http: os.environ.pop("HTTP_PROXY", None)
+            if old_https: os.environ.pop("HTTPS_PROXY", None)
+
+            try:
+                # 1. Try Sina Paged (Slow & Steady) - Primary as requested
+                try:
+                    self.log("[*] Fetching all market data (Sina Paged)...")
+                    df = self._fetch_sina_market_paged()
+                    if df is not None and not df.empty:
+                        self._last_market_df = df.copy()
+                        self._last_market_ts = now_ts
+                        return df
+                except Exception as e:
+                    self.log(f"[!] Sina Paged failed: {e}")
+
+                # 2. Try AKShare (EastMoney) - Fallback
+                try:
+                    self.log("[*] Fetching all market data (AKShare/EM)...")
+                    df = ak.stock_zh_a_spot_em()
+                    rename_map = {
+                        '代码': 'code', '名称': 'name', '最新价': 'current', '涨跌幅': 'change_percent',
+                        '涨速': 'speed', '换手率': 'turnover', '流通市值': 'circ_mv', '昨收': 'prev_close',
+                        '最高': 'high', '最低': 'low', '今开': 'open', '成交额': 'amount'
+                    }
+                    df = df.rename(columns=rename_map)
+                    # Ensure numeric
+                    for col in ['current', 'change_percent', 'speed', 'turnover', 'circ_mv', 'prev_close', 'high']:
+                        if col in df.columns:
+                            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                    
+                    self._last_market_df = df.copy()
+                    self._last_market_ts = now_ts
+                    return df
+                except Exception as e:
+                    self.log(f"[!] AKShare/EM failed: {e}")
+
+                # 3. Try Manual EM Paged (Backup)
+                try:
+                    self.log("[*] Fetching all market data (Manual EM Paged)...")
+                    df = self._fetch_em_market_paged()
+                    if df is not None and not df.empty:
+                        self._last_market_df = df.copy()
+                        self._last_market_ts = now_ts
+                        return df
+                except Exception as e:
+                    self.log(f"[!] Manual EM Paged failed: {e}")
+
+                # 4. Try Tushare (Requires TUSHARE_TOKEN and package installed)
+                try:
+                    self.log("[*] Fetching all market data (Tushare)...")
+                    df = self._fetch_tushare_spot()
+                    if df is not None and not df.empty:
+                        self._last_market_df = df.copy()
+                        self._last_market_ts = now_ts
+                        return df
+                except Exception as e:
+                    self.log(f"[!] Tushare failed: {e}")
+                    
+                # Fallback: return last cache even if stale
+                self._last_failure_ts = now_ts # Mark failure
+                if self._last_market_df is not None:
+                    return self._last_market_df.copy()
+                return None
+            finally:
+                # Restore proxy settings
+                if old_http: os.environ["HTTP_PROXY"] = old_http
+                if old_https: os.environ["HTTPS_PROXY"] = old_https
 
     def fetch_limit_up_pool(self):
         """Fetch Limit Up Pool"""
