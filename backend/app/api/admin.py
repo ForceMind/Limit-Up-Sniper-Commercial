@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Header, Body, Request
 from sqlalchemy.orm import Session
 from app.db import models, schemas, database
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import secrets
 import os
 import time
@@ -68,14 +68,16 @@ async def verify_admin(x_admin_token: str = Header(..., alias="X-Admin-Token")):
          try:
              with open(ADMIN_SECRET_FILE, "r", encoding="utf-8") as f:
                 file_token = f.read().strip()
+                # Update global token if file changed
                 if file_token and file_token != ADMIN_TOKEN:
                     ADMIN_TOKEN = file_token
          except Exception:
              pass
 
     # Simple token check
+    # Debug: verify match
     if x_admin_token != ADMIN_TOKEN:
-        print(f"[AUTH FAILED] Start... Expected: {ADMIN_TOKEN[:5]}... Received: {x_admin_token[:5]}...") # Log minimal info for debugging
+        print(f"[AUTH ERROR] Token Mismatch. File/Memory: {ADMIN_TOKEN} vs Header: {x_admin_token}")
         raise HTTPException(status_code=403, detail="Admin authorization failed")
     
     return True

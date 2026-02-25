@@ -132,93 +132,84 @@
                             </div>
                         </section>
 
-                        <!-- API Configuration -->
-                        <section class="mt-8">
-                            <h3 class="text-lg font-semibold border-b pb-2 mb-4">API Key 配置</h3>
+                        <section class="mb-8 border-b border-gray-200 pb-8 bg-white p-6 rounded-lg shadow-sm">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
+                                <span class="text-blue-500">📧</span> 邮件通知设置
+                            </h3>
                             <div class="space-y-4">
-                                <p class="text-sm text-gray-500">配置第三方服务所需的 API 密钥。</p>
-                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 pl-8" v-if="config.api_keys">
-                                    <div>
-                                        <label class="block text-sm text-gray-600 mb-1">DeepSeek API Key</label>
-                                        <input type="password" v-model="config.api_keys.deepseek" class="border rounded w-full px-2 py-1" placeholder="sk-...">
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm text-gray-600 mb-1">Aliyun API Key</label>
-                                        <input type="password" v-model="config.api_keys.aliyun" class="border rounded w-full px-2 py-1" placeholder="sk-...">
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm text-gray-600 mb-1">Other API Key</label>
-                                        <input type="password" v-model="config.api_keys.other" class="border rounded w-full px-2 py-1">
-                                    </div>
-                                </div>
-                            </div>
-                        </section>
-
-                        <section class="mt-8">
-                            <h3 class="text-lg font-semibold border-b pb-2 mb-4">邮件通知设置</h3>
-                            <div class="space-y-4">
-                                <label class="flex items-center gap-3">
-                                    <input type="checkbox" v-if="config.email_config" v-model="config.email_config.enabled" class="w-5 h-5 text-blue-600">
-                                    <span>启用邮件通知 (有新订单时通知管理员)</span>
+                                <label class="flex items-center gap-3 cursor-pointer">
+                                    <input type="checkbox" v-if="config.email_config" v-model="config.email_config.enabled" class="w-5 h-5 text-blue-600 rounded focus:ring-blue-500">
+                                    <span class="font-medium">启用邮件通知 (有新订单时通知管理员)</span>
                                 </label>
                                 
-                                <div v-if="config.email_config && config.email_config.enabled" class="grid grid-cols-2 gap-4 pl-8 bg-gray-50 p-4 rounded">
-                                    <div class="col-span-2 text-xs text-gray-500 mb-2 p-2 bg-blue-50 rounded border border-blue-100">
-                                        <p class="font-bold">📧 配置说明 (以QQ邮箱为例):</p>
-                                        <ul class="list-disc pl-4 mt-1 space-y-1">
-                                            <li>1. 在QQ邮箱设置 -> 账户中开启 <b>IMAP/SMTP服务</b>。</li>
-                                            <li>2. 获取生成的<b>授权码</b> (一串不含空格的字母)。</li>
-                                            <li>3. SMTP服务器填 <code>smtp.qq.com</code>，端口填 <code>465</code>。</li>
-                                            <li>4. 下方需填写您的邮箱账号和刚刚获取的授权码。</li>
-                                            <li>5. 接收通知邮箱可以是同一个，也可以是其他管理员邮箱。</li>
-                                        </ul>
-                                    </div>
+                                <transition name="fade">
+                                    <div v-if="config.email_config && config.email_config.enabled" class="grid grid-cols-1 md:grid-cols-2 gap-6 pl-0 md:pl-4 bg-gray-50 p-6 rounded-lg border border-gray-100 mt-4">
+                                        <div class="col-span-1 md:col-span-2 text-xs text-gray-600 mb-2 p-3 bg-blue-50 rounded-lg border border-blue-100 shadow-sm">
+                                            <p class="font-bold text-blue-700 mb-1">📧 配置说明 (以QQ邮箱为例):</p>
+                                            <ul class="list-disc pl-4 space-y-1">
+                                                <li>在QQ邮箱设置 -> 账户中开启 <b>IMAP/SMTP服务</b>。</li>
+                                                <li>获取生成的<b>授权码</b> (一串不含空格的字母)。</li>
+                                                <li>SMTP服务器填 <code>smtp.qq.com</code>，端口填 <code>465</code>。</li>
+                                            </ul>
+                                        </div>
 
-                                    <div class="col-span-2">
-                                        <label class="block text-sm text-gray-600 mb-1">接收通知邮箱</label>
-                                        <input type="email" v-model="config.email_config.recipient_email" class="border rounded w-full px-2 py-1" placeholder="admin@example.com">
+                                        <div class="col-span-1 md:col-span-2">
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">接收通知邮箱</label>
+                                            <input type="email" v-model="config.email_config.recipient_email" class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 px-3 py-2" placeholder="admin@example.com">
+                                        </div>
+                                        
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">SMTP服务器</label>
+                                            <input type="text" v-model="config.email_config.smtp_server" class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 px-3 py-2" placeholder="smtp.qq.com">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">SMTP端口</label>
+                                            <input type="number" v-model.number="config.email_config.smtp_port" class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 px-3 py-2" placeholder="465">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">发送邮箱账号</label>
+                                            <input type="email" v-model="config.email_config.smtp_user" class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 px-3 py-2">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">发送邮箱密码/授权码</label>
+                                            <input type="password" v-model="config.email_config.smtp_password" class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 px-3 py-2" placeholder="输入邮箱授权码">
+                                        </div>
                                     </div>
-                                    
-                                    <div>
-                                        <label class="block text-sm text-gray-600 mb-1">SMTP服务器</label>
-                                        <input type="text" v-model="config.email_config.smtp_server" class="border rounded w-full px-2 py-1" placeholder="smtp.qq.com">
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm text-gray-600 mb-1">SMTP端口</label>
-                                        <input type="number" v-model.number="config.email_config.smtp_port" class="border rounded w-full px-2 py-1" placeholder="465">
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm text-gray-600 mb-1">发送邮箱账号</label>
-                                        <input type="email" v-model="config.email_config.smtp_user" class="border rounded w-full px-2 py-1">
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm text-gray-600 mb-1">发送邮箱密码/授权码</label>
-                                        <input type="password" v-model="config.email_config.smtp_password" class="border rounded w-full px-2 py-1" placeholder="输入邮箱授权码">
-                                    </div>
-                                </div>
+                                </transition>
                             </div>
                         </section>
 
-                        <!-- API Configuration -->
-                        <section class="mb-8 border-b pb-8">
-                            <h3 class="text-xl font-semibold mb-4 text-gray-700">API Key 配置</h3>
-                            <div class="bg-gray-50 border border-gray-200 rounded p-4">
-                                <p class="text-sm text-gray-500 mb-4">配置第三方服务所需的 API 密钥 (保存后生效)</p>
-                                <div v-if="config.api_keys" class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        <!-- API Configuration (Cleaned & Separated) -->
+                        <section class="mb-8 border-b border-gray-200 pb-8 bg-white p-6 rounded-lg shadow-sm">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
+                                <span class="text-purple-500">🔑</span> API Key 配置
+                            </h3>
+                            <div class="bg-purple-50 border border-purple-100 rounded-lg p-6">
+                                <p class="text-sm text-gray-600 mb-6">配置第三方服务所需的 API 密钥，用于驱动 AI 分析和其他高级功能。</p>
+                                <div v-if="config.api_keys" class="grid grid-cols-1 gap-6">
                                     <div>
-                                        <label class="block text-sm font-bold text-gray-700 mb-1">DeepSeek API Key</label>
-                                        <input type="password" v-model="config.api_keys.deepseek" class="w-full border rounded p-2 text-sm font-mono" placeholder="sk-...">
+                                        <label class="block text-sm font-bold text-gray-800 mb-1">DeepSeek API Key <span class="text-red-500">*</span></label>
+                                        <div class="text-xs text-gray-500 mb-2">用于股票深度分析、情绪解读。</div>
+                                        <input type="password" v-model="config.api_keys.deepseek" class="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 px-3 py-2 font-mono text-sm" placeholder="sk-...">
                                     </div>
-                                    <div>
-                                        <label class="block text-sm font-bold text-gray-700 mb-1">Aliyun API Key</label>
-                                        <input type="password" v-model="config.api_keys.aliyun" class="w-full border rounded p-2 text-sm font-mono" placeholder="sk-...">
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm font-bold text-gray-700 mb-1">其他服务 Key</label>
-                                        <input type="text" v-model="config.api_keys.other" class="w-full border rounded p-2 text-sm">
+                                    <div class="p-4 border-t border-purple-200 mt-2">
+                                        <label class="block text-sm font-bold text-gray-800 mb-1">其他服务 Key (可选)</label>
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                                            <div>
+                                                 <label class="block text-xs text-gray-600 mb-1">Aliyun / OCR</label>
+                                                 <input type="password" v-model="config.api_keys.aliyun" class="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 px-3 py-2 font-mono text-xs" placeholder="sk-...">
+                                            </div>
+                                            <div>
+                                                 <label class="block text-xs text-gray-600 mb-1">备用 Key</label>
+                                                 <input type="text" v-model="config.api_keys.other" class="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 px-3 py-2 font-mono text-xs">
+                                            </div>
+                                        </div>
                                     </div>
                                 </div>
-                                <div v-else class="text-gray-500 text-sm">加载 API 配置中... (请确保后端已重启)</div>
+                                <div v-else class="text-gray-500 text-sm flex items-center gap-2">
+                                    <svg class="animate-spin h-4 w-4 text-purple-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                    加载 API 配置中...
+                                </div>
                             </div>
                         </section>
 
