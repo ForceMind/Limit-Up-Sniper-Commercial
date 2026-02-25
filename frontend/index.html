@@ -339,6 +339,14 @@
                 
                 <!-- Scrollable Table Container -->
                 <div class="flex-1 overflow-auto relative">
+                    <!-- MASK for Pre-Market -->
+                    <div v-if="shouldShowMask('pre')" class="absolute inset-0 bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
+                        <div class="text-xl font-bold text-red-500 mb-2">需要会员权限</div>
+                        <div class="text-sm text-gray-300 mb-4">当前功能仅限正式会员使用</div>
+                        <button @click="openSubscription('basic')" class="bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-2 rounded-full font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all text-sm">
+                            立即开通
+                        </button>
+                    </div>
                     <div class="min-w-[800px]">
                         <!-- Table Header -->
                         <div class="grid gap-2 px-2 py-2 text-xs text-gray-500 border-b border-gray-200 dark:border-gray-700 bg-gray-100/90 dark:bg-gray-900/90 sticky top-0 z-30"
@@ -417,6 +425,14 @@
 
                 <!-- Scrollable Table Container -->
                 <div class="flex-1 overflow-auto relative">
+                    <!-- MASK for Intraday -->
+                    <div v-if="shouldShowMask('intra')" class="absolute inset-0 bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
+                        <div class="text-xl font-bold text-red-500 mb-2">需要会员权限</div>
+                        <div class="text-sm text-gray-300 mb-4">当前功能仅限正式会员使用</div>
+                        <button @click="openSubscription('basic')" class="bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-2 rounded-full font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all text-sm">
+                            立即开通
+                        </button>
+                    </div>
                     <div class="min-w-[950px]">
                         <!-- Table Header -->
                         <div class="grid gap-2 px-2 py-2 text-xs text-gray-500 border-b border-gray-200 dark:border-gray-700 bg-gray-100/90 dark:bg-gray-900/90 sticky top-0 z-30"
@@ -635,6 +651,14 @@
 
                     <!-- Scrollable Table Container -->
                     <div class="flex-1 overflow-auto relative" v-show="!isMobile || activePoolTab === 'limit_up'">
+                        <!-- MASK for Limit Up Pool -->
+                        <div v-if="shouldShowMask('pool')" class="absolute inset-0 bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
+                             <div class="text-xl font-bold text-red-500 mb-2">需要会员权限</div>
+                             <div class="text-sm text-gray-300 mb-4">当前功能仅限正式会员使用</div>
+                             <button @click="openSubscription('basic')" class="bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-2 rounded-full font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all text-sm">
+                                 立即开通
+                             </button>
+                         </div>
                         <div class="min-w-[800px]">
                             <!-- Table Header -->
                             <div class="grid gap-2 px-2 py-2 text-xs text-gray-500 border-b border-gray-200 dark:border-gray-700 bg-gray-100/90 dark:bg-gray-900/90 sticky top-0 z-30"
@@ -705,6 +729,14 @@
                         <h2 class="text-gray-600 dark:text-gray-400 font-bold flex items-center gap-2 text-sm md:text-base">
                             <span>💣</span> 炸板 (Broken Limit)
                             <span v-if="isMobile && activePoolTab !== 'broken'" class="text-xs text-gray-400">(点击展开)</span>
+                        <!-- MASK for Broken Pool (same as pool permission) -->
+                        <div v-if="shouldShowMask('pool')" class="absolute inset-0 bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
+                            <div class="text-xl font-bold text-red-500 mb-2">需要会员权限</div>
+                            <div class="text-sm text-gray-300 mb-4">当前功能仅限正式会员使用</div>
+                            <button @click="openSubscription('basic')" class="bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-2 rounded-full font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all text-sm">
+                                立即开通
+                            </button>
+                        </div>
                         </h2>
                         <div class="flex items-center gap-2">
                             <span class="text-xs text-gray-500">{{ brokenLimitPool.length }} 只</span>
@@ -1482,20 +1514,43 @@
                         console.error("Login failed", e);
                     }
                 },
+                shouldShowMask(tab) {
+                    // 游客或过期用户
+                    const isMasked = (this.userInfo.version === 'trial' && this.userInfo.trial_duration <= 0) || this.userInfo.is_expired;
+                    if (!isMasked) return false;
+                    
+                    // 竞价(pre), 涨停(pool), 盘中(intra, limit_up) 需要遮罩
+                    return ['pre', 'pool', 'intra'].includes(tab);
+                },
                 
+                // --- Permissions ---
                 checkPermission(type) { 
-                    if (this.userInfo.is_expired) {
-                        if (type === 'view') return true; 
-                        this.showMsg('会员已过期，请续费', 'error');
+                    const expired = this.userInfo.is_expired;
+                    const version = this.userInfo.version;
+
+                    if (type === 'view') return true; // View is generally allowed, masked by shouldShowMask
+
+                    // Global Block for expired users on advanced actions
+                    if (expired) {
+                        this.showMsg('会员已过期，请续费解锁完整功能', 'error');
                         this.openSubscription();
                         return false;
                     }
 
-                    if (type === 'ai' && this.userInfo.remaining_ai <= 0) {
-                        this.showMsg('今日AI分析次数已用完', 'error');
-                        this.openSubscription();
-                        return false;
+                    // Version based checks
+                    if (type === 'ai') {
+                         if (this.userInfo.remaining_ai <= 0) {
+                            this.showMsg('今日AI分析次数已用完', 'error');
+                            this.openSubscription();
+                            return false;
+                        }
+                        if (version === 'trial') {
+                             this.showMsg('体验版不支持手动分析', 'info');
+                             return false;
+                        }
+                        return true;
                     }
+                    
                     if (type === 'raid') {
                         if (this.userInfo.remaining_raid <= 0) {
                              this.showMsg('今日盘中突击次数已用完', 'error');
@@ -2045,7 +2100,17 @@
                     }
                     return 'border-gray-800';
                 },
+                
+                // Mask Logic
+                shouldShowMask(tab) {
+                    const isRestricted = this.userInfo.version === 'trial' || this.userInfo.is_expired;
+                    if (!isRestricted) return false;
+                    // pre, pool, intra, limit_up
+                    return ['pre', 'pool', 'intra'].includes(tab);
+                },
+
                 renderMarkdown(text) {
+
                     if (!text) return '';
                     try {
                         return marked.parse(text);
