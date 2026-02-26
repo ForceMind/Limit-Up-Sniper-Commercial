@@ -1,4 +1,192 @@
 #!/bin/bash
+# Unified update flow:
+# 1) Backup local runtime data/config
+# 2) Pull latest code when git repo exists
+# 3) Deploy files (or skip copy in self-update mode)
+# 4) Restore local runtime data/config
+# 5) Restart services
+
+set -euo pipefail
+
+APP_DIR="/opt/limit-up-sniper"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+DEFAULT_SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
+SOURCE_ROOT_INPUT="${1:-}"
+
+GREEN='\033[0;32m'
+RED='\033[0;31m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+log_info() {
+    echo -e "${GREEN}$1${NC}"
+}
+
+log_warn() {
+    echo -e "${YELLOW}$1${NC}"
+}
+
+log_error() {
+    echo -e "${RED}$1${NC}"
+}
+
+SKIP_COPY=false
+SOURCE_ROOT=""
+GIT_PULL_DIR=""
+
+if [[ "$SCRIPT_DIR/.." -ef "$APP_DIR" ]]; then
+    SOURCE_ROOT="$APP_DIR"
+    SKIP_COPY=true
+else
+    SOURCE_ROOT="${SOURCE_ROOT_INPUT:-$DEFAULT_SOURCE_ROOT}"
+fi
+
+if [ ! -d "$SOURCE_ROOT/backend" ] || [ ! -d "$SOURCE_ROOT/frontend" ]; then
+    log_error "[ERROR] Invalid source root: $SOURCE_ROOT"
+    log_error "backend/ and frontend/ are required"
+    exit 1
+fi
+
+if [ -d "$SOURCE_ROOT/.git" ]; then
+    GIT_PULL_DIR="$SOURCE_ROOT"
+fi
+
+BACKUP_DIR="$(mktemp -d /tmp/limit-up-sniper-backup.XXXXXX)"
+cleanup() {
+    rm -rf "$BACKUP_DIR"
+}
+trap cleanup EXIT
+
+backup_runtime_files() {
+    log_warn "[1/5] Backing up local runtime data/config..."
+    mkdir -p "$BACKUP_DIR/backend" "$BACKUP_DIR/frontend"
+
+    if [ -d "$APP_DIR/backend/data" ]; then
+        cp -a "$APP_DIR/backend/data" "$BACKUP_DIR/backend/"
+        echo "Backup: backend/data"
+    else
+        echo "Skip: backend/data not found"
+    fi
+
+    if [ -f "$APP_DIR/backend/.env" ]; then
+        cp -a "$APP_DIR/backend/.env" "$BACKUP_DIR/backend/.env"
+        echo "Backup: backend/.env"
+    else
+        echo "Skip: backend/.env not found"
+    fi
+
+    if [ -f "$APP_DIR/frontend/config.js" ]; then
+        cp -a "$APP_DIR/frontend/config.js" "$BACKUP_DIR/frontend/config.js"
+        echo "Backup: frontend/config.js"
+    else
+        echo "Skip: frontend/config.js not found"
+    fi
+}
+
+pull_latest_if_needed() {
+    if [ -n "$GIT_PULL_DIR" ]; then
+        log_warn "[2/5] Pulling latest code..."
+        if git -C "$GIT_PULL_DIR" pull --ff-only; then
+            echo "Git pull success"
+        else
+            log_warn "[WARN] git pull --ff-only failed, continue with local code snapshot."
+        fi
+    else
+        log_warn "[2/5] No git repo detected, skip pull."
+    fi
+}
+
+deploy_files() {
+    if [ "$SKIP_COPY" = true ]; then
+        log_warn "[3/5] Self-update mode, skip file copy."
+        return
+    fi
+
+    log_warn "[3/5] Deploying backend/frontend..."
+    mkdir -p "$APP_DIR"
+    rm -rf "$APP_DIR/backend" "$APP_DIR/frontend"
+    cp -a "$SOURCE_ROOT/backend" "$APP_DIR/"
+    cp -a "$SOURCE_ROOT/frontend" "$APP_DIR/"
+
+    mkdir -p "$APP_DIR/scripts"
+    if compgen -G "$SOURCE_ROOT/Server-Version/*.sh" > /dev/null; then
+        cp -a "$SOURCE_ROOT/Server-Version/"*.sh "$APP_DIR/scripts/"
+        chmod +x "$APP_DIR/scripts/"*.sh || true
+    fi
+    chmod -R 755 "$APP_DIR/frontend" || true
+}
+
+restore_runtime_files() {
+    log_warn "[4/5] Restoring local runtime data/config..."
+    mkdir -p "$APP_DIR/backend" "$APP_DIR/frontend"
+
+    if [ -d "$BACKUP_DIR/backend/data" ]; then
+        rm -rf "$APP_DIR/backend/data"
+        cp -a "$BACKUP_DIR/backend/data" "$APP_DIR/backend/"
+        echo "Restore: backend/data"
+    else
+        mkdir -p "$APP_DIR/backend/data"
+        echo "Restore: backend/data (empty dir created)"
+    fi
+
+    if [ -f "$BACKUP_DIR/backend/.env" ]; then
+        cp -a "$BACKUP_DIR/backend/.env" "$APP_DIR/backend/.env"
+        echo "Restore: backend/.env"
+    fi
+
+    if [ -f "$BACKUP_DIR/frontend/config.js" ]; then
+        cp -a "$BACKUP_DIR/frontend/config.js" "$APP_DIR/frontend/config.js"
+        echo "Restore: frontend/config.js"
+    fi
+}
+
+fix_runtime_permissions() {
+    mkdir -p "$APP_DIR/backend/data"
+    chmod -R 777 "$APP_DIR/backend/data" || true
+    touch "$APP_DIR/backend/app.log"
+    chmod 666 "$APP_DIR/backend/app.log" || true
+}
+
+install_dependencies() {
+    log_warn "[5/5] Updating Python dependencies..."
+    if [ -f "$APP_DIR/venv/bin/activate" ]; then
+        # shellcheck disable=SC1091
+        source "$APP_DIR/venv/bin/activate"
+        pip install -r "$APP_DIR/backend/requirements.txt" --no-cache-dir -q
+    else
+        echo "Skip: venv not found"
+    fi
+}
+
+main() {
+    log_info "=== Limit-Up Sniper Commercial: Universal Update ==="
+    echo "App dir   : $APP_DIR"
+    echo "Source dir: $SOURCE_ROOT"
+
+    backup_runtime_files
+
+    log_warn "Stopping services..."
+    systemctl stop limit-up-sniper || true
+
+    pull_latest_if_needed
+    deploy_files
+    restore_runtime_files
+    fix_runtime_permissions
+    install_dependencies
+
+    echo "Restarting services..."
+    systemctl restart limit-up-sniper
+    systemctl restart nginx || true
+
+    log_info "========================================="
+    log_info "Update complete (local data/config kept)"
+    log_info "========================================="
+    systemctl status limit-up-sniper --no-pager | head -n 5 || true
+}
+
+main "$@"
+# Legacy implementation remains below for reference only; it is unreachable.
+exit 0
 
 # update.sh - Limit-Up Sniper 商业版 更新脚本
 # 用法: sudo ./update.sh [源码目录]

@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Header, Body
 from sqlalchemy.orm import Session
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Optional
 import hashlib
 import json
 import os
@@ -18,7 +19,7 @@ ACCOUNTS_FILE = DATA_DIR / "user_accounts.json"
 TRIAL_FP_FILE = DATA_DIR / "trial_fingerprints.json"
 
 PAID_VERSIONS = {"basic", "advanced", "flagship"}
-GUEST_PREFIXES = ("guest_", "visitor_")
+GUEST_PREFIXES = ("guestv2_", "guest_", "visitor_")
 GUEST_TRIAL_MINUTES = 10
 
 
@@ -70,6 +71,14 @@ def _is_guest_device(device_id: str) -> bool:
     return any(device_id.startswith(prefix) for prefix in GUEST_PREFIXES)
 
 
+def _as_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
+
+
 def _can_apply_trial(account: dict, user: models.User) -> bool:
     if not account or not user:
         return False
@@ -82,13 +91,16 @@ def _can_apply_trial(account: dict, user: models.User) -> bool:
 
 def _build_user_payload(user):
     quotas = user_service.get_user_quota(user.version)
-    is_expired = bool(user.expires_at and user.expires_at < datetime.utcnow())
+    expires_at = _as_utc(user.expires_at)
+    created_at = _as_utc(user.created_at)
+    now_utc = datetime.now(timezone.utc)
+    is_expired = bool(expires_at and expires_at < now_utc)
     return {
         "id": user.id,
         "device_id": user.device_id,
         "version": user.version,
-        "expires_at": user.expires_at,
-        "created_at": user.created_at,
+        "expires_at": expires_at,
+        "created_at": created_at,
         "daily_ai_count": user.daily_ai_count,
         "daily_raid_count": user.daily_raid_count,
         "daily_review_count": user.daily_review_count,

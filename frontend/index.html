@@ -61,7 +61,7 @@
 <body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-mono h-screen p-2 md:p-4 overflow-hidden flex flex-col transition-colors duration-300">
     <div id="app" v-cloak class="container mx-auto max-w-full flex-1 flex flex-col overflow-hidden">
         <!-- Version Tag -->
-        <div class="fixed bottom-1 right-1 text-[10px] text-gray-500 z-[99999]" style="opacity: 0.5;">{{ serverVersion }}</div>
+        <div class="fixed bottom-1 right-1 text-[10px] text-gray-500 z-[99999]" style="opacity: 0.5;">{{ frontendVersion }}</div>
         <!-- Header -->
         <header class="flex flex-col md:flex-row justify-between items-center mb-2 md:mb-4 border-b border-gray-200 dark:border-gray-700 pb-2 px-2 md:px-4 shrink-0 gap-2">
             <div class="flex items-center gap-2 w-full md:w-auto justify-between md:justify-start">
@@ -1040,7 +1040,7 @@
         </div>
 
         <!-- Loading State -->
-        <div v-if="stocks.length === 0 && !isAnalyzing" class="absolute inset-0 flex items-center justify-center bg-white/90 dark:bg-gray-900/90 z-50">
+        <div v-if="showInitialLoadingOverlay" class="absolute inset-0 flex items-center justify-center bg-white/90 dark:bg-gray-900/90 z-50">
             <div class="text-center">
                 <div class="w-12 h-12 border-4 border-red-500 border-t-transparent rounded-full animate-spin mx-auto mb-4"></div>
                 <p class="text-red-600 dark:text-red-500 tracking-widest animate-pulse">系统初始化中...</p>
@@ -1443,6 +1443,7 @@
                     serverVersion: '获取中...',
                     loginLoading: false,
                     loadingChart: false,
+                    initialDataLoading: true,
                     chartInstance: null,
                     // Modals
                     msgModal: { show: false, msg: '', type: 'info' },
@@ -1517,6 +1518,9 @@
                 },
                 hasDataAccess() {
                     return !!this.deviceId && !this.userInfo.is_expired;
+                },
+                showInitialLoadingOverlay() {
+                    return this.hasDataAccess && this.initialDataLoading && this.stocks.length === 0 && !this.isAnalyzing;
                 },
                 // Time-based visibility logic
                 isPreMarketTime() {
@@ -1668,11 +1672,17 @@
                     this.fingerprintId = fp;
                     localStorage.setItem('sniper_fingerprint_id', fp);
                 },
+                generateGuestToken() {
+                    if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                        return `guestv2_${window.crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+                    }
+                    const fallback = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+                    return `guestv2_${fallback.slice(0, 24)}`;
+                },
                 async ensureGuestSession() {
                     let guestToken = localStorage.getItem('sniper_guest_token');
-                    if (!guestToken) {
-                        const cleanFp = (this.fingerprintId || String(Date.now())).replace(/[^a-zA-Z0-9]/g, '').slice(0, 24);
-                        guestToken = `guest_${cleanFp || Math.random().toString(36).slice(2, 10)}`;
+                    if (!guestToken || !guestToken.startsWith('guestv2_')) {
+                        guestToken = this.generateGuestToken();
                         localStorage.setItem('sniper_guest_token', guestToken);
                     }
 
@@ -1838,6 +1848,14 @@
                         await this.fetchLocalFavoriteQuotes();
                         this.showLoginModal = false;
                         this.showSettingsModal = false;
+                        if (this.hasDataAccess) {
+                            this.initialDataLoading = true;
+                            this.fetchData();
+                            this.fetchLimitUpPool();
+                            this.fetchMarketSentiment();
+                            this.fetchIndices();
+                            if (!this.wsConnected) this.connectWebSocket();
+                        }
                         this.showMsg(mode === 'register' ? '注册成功' : '登录成功', 'success');
                         
                         this.loginForm.password = '';
@@ -1875,6 +1893,14 @@
                         this.deviceId = token;
                         localStorage.setItem('sniper_device_id', token);
                         this.accountCanApplyTrial = false;
+                        if (this.hasDataAccess) {
+                            this.initialDataLoading = true;
+                            this.fetchData();
+                            this.fetchLimitUpPool();
+                            this.fetchMarketSentiment();
+                            this.fetchIndices();
+                            if (!this.wsConnected) this.connectWebSocket();
+                        }
                         this.showMsg('体验申请已通过，资格已开通', 'success');
                     } catch (e) {
                         this.showMsg(e.message || '申请体验失败', 'error');
@@ -2456,6 +2482,7 @@
                             this.showMsg(payload.message || '会员审批已通过，权益已生效', 'success');
                             await this.refreshCurrentUserInfo();
                             if (this.hasDataAccess) {
+                                this.initialDataLoading = true;
                                 if (!this.wsConnected) this.connectWebSocket();
                                 this.fetchData();
                                 this.fetchLimitUpPool();
@@ -2528,7 +2555,10 @@
                     }
                 },
                 fetchData() {
-                    if (!this.hasDataAccess) return;
+                    if (!this.hasDataAccess) {
+                        this.initialDataLoading = false;
+                        return;
+                    }
                     if (!this._fetchDataImpl) return;
                     
                     const now = Date.now();
@@ -2538,7 +2568,10 @@
                     this._fetchDataImpl();
                 },
                 async _fetchDataImpl() {
-                    if (!this.hasDataAccess) return;
+                    if (!this.hasDataAccess) {
+                        this.initialDataLoading = false;
+                        return;
+                    }
                     try {
                         const response = await fetch(API_BASE_URL + '/api/stocks');
                         const data = await response.json();
@@ -2568,6 +2601,8 @@
                         this.lastUpdated = new Date().toLocaleTimeString();
                     } catch (error) {
                         console.error('Data fetch failed:', error);
+                    } finally {
+                        this.initialDataLoading = false;
                     }
                 },
                 async fetchIndices() {
@@ -3513,6 +3548,7 @@
                         this.connectNotifyWebSocket();
                     }
                     if (this.hasDataAccess) {
+                        this.initialDataLoading = true;
                         this.fetchData();
                         this.fetchLimitUpPool();
                         this.fetchMarketSentiment();
@@ -3708,9 +3744,9 @@
             position: absolute;
         }
 
-        /* Keep permission mask fixed to the visible area while horizontal scrolling */
+        /* Keep permission mask pinned to the viewport area while horizontal scrolling */
         .permission-mask {
-            position: absolute;
+            position: sticky;
             left: 0;
             top: 0;
             width: 100%;
