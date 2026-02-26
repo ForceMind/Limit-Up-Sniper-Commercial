@@ -388,7 +388,7 @@
                                 <div class="font-mono text-gray-500 text-xs">#{{ index + 1 }}</div>
                                 <div class="text-gray-900 dark:text-gray-300 text-sm font-bold">{{ stock.code.replace('sh', '').replace('sz', '') }}</div>
                                 <div class="font-bold truncate sticky left-0 z-20 bg-purple-50 dark:bg-gray-800 group-hover:bg-gray-100 dark:group-hover:bg-gray-700 pl-2 border-r border-gray-200 dark:border-gray-700 shadow-sm text-sm">
-                                    <a :href="`https://quote.eastmoney.com/${stock.code.replace('sh', '').replace('sz', '')}.html`" target="_blank" class="hover:underline text-gray-900 dark:text-gray-100">{{ stock.name }}</a>
+                                    <button @click.stop="openChart(stock)" class="hover:underline text-gray-900 dark:text-gray-100 text-left">{{ stock.name }}</button>
                                 </div>
                                 <div class="text-right font-mono text-gray-700 dark:text-gray-300">{{ stock.current.toFixed(2) }}</div>
                                 <div class="text-right font-bold" 
@@ -516,11 +516,12 @@
                             <div class="p-2 space-y-1 opacity-60 grayscale hover:grayscale-0 transition-all">
                                 <div v-for="(stock, index) in discardedStocks" :key="stock.code" 
                                      class="rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent grid gap-2 items-center px-2 py-2 bg-gray-100 dark:bg-gray-800/30"
+                                     @click="openChart(stock)"
                                      style="grid-template-columns: 60px 70px 1fr 100px 60px 60px 50px 50px 60px 45px 45px 45px 45px;">
                                     
                                     <div class="text-gray-500 text-sm font-bold">{{ stock.code.replace('sh', '').replace('sz', '') }}</div>
                                     <div class="font-bold truncate text-gray-500">
-                                        <a :href="`https://quote.eastmoney.com/${stock.code.replace('sh', '').replace('sz', '')}.html`" target="_blank" class="hover:underline">{{ stock.name }}</a>
+                                        <button @click.stop="openChart(stock)" class="hover:underline text-left">{{ stock.name }}</button>
                                     </div>
                                     <div class="text-xs text-gray-500 truncate" :title="stock.news_summary || stock.concept">
                                         {{ stock.news_summary || stock.concept }}
@@ -782,11 +783,12 @@
                                 <transition-group name="list" tag="div" class="space-y-1">
                                     <div v-for="(stock, index) in filteredBrokenLimitPool" :key="stock.code" 
                                          class="group rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent grid gap-2 items-center px-2 py-2 bg-gray-50 dark:bg-gray-900/10"
+                                         @click="openChart(stock)"
                                          style="grid-template-columns: 60px 70px 60px 60px 60px 60px 1.5fr 1fr 45px 45px 45px 45px;">
                                         
                                         <div class="text-gray-900 dark:text-gray-300 text-sm font-bold">{{ stock.code.replace('sh', '').replace('sz', '').replace('bj', '') }}</div>
                                         <div class="font-bold truncate sticky left-0 z-20 bg-gray-50 dark:bg-gray-800 group-hover:bg-gray-100 dark:group-hover:bg-gray-700 pl-2 border-r border-gray-200 dark:border-gray-700 shadow-sm text-sm">
-                                            <a :href="`https://quote.eastmoney.com/${stock.code.replace('sh', '').replace('sz', '').replace('bj', '')}.html`" target="_blank" class="hover:underline text-gray-900 dark:text-gray-100">{{ stock.name }}</a>
+                                            <button @click.stop="openChart(stock)" class="hover:underline text-gray-900 dark:text-gray-100 text-left">{{ stock.name }}</button>
                                         </div>
                                         <div class="text-right font-mono text-gray-700 dark:text-gray-300">{{ stock.current.toFixed(2) }}</div>
                                         <div class="text-right font-bold" :class="getColorClass(stock.change_percent)">
@@ -1189,7 +1191,7 @@
         </div>
 
         <!-- New User Onboarding -->
-        <div v-if="showOnboardingModal" class="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+        <div v-if="showOnboardingModal" class="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-transparent">
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-md p-6">
                 <div class="text-xs text-blue-600 dark:text-blue-400 font-bold mb-2">
                     新手引导 {{ onboardingStep + 1 }} / {{ onboardingSteps.length }}
@@ -1210,7 +1212,7 @@
                 <!-- Header -->
                 <div class="flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-700">
                     <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">
-                        {{ purchaseStep === 1 ? '升级会员' : (purchaseStep === 2 ? '支付订单' : '等待验证') }}
+                        {{ purchaseStep === 1 ? (isRenewOnlyMode ? '会员续费' : '升级会员') : (purchaseStep === 2 ? '支付订单' : '等待验证') }}
                     </h3>
                     <button @click="showSubscriptionModal = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
                         <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -1246,8 +1248,15 @@
                         </div>
                     </div>
 
+                    <div v-if="isRenewOnlyMode" class="mb-4 rounded border border-emerald-200 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-800 p-3 text-xs text-emerald-700 dark:text-emerald-300">
+                        <div class="font-bold mb-1">
+                            当前会员版本：{{ selectedVersion === 'basic' ? '初级版' : (selectedVersion === 'advanced' ? '高级版' : '旗舰版') }}
+                        </div>
+                        <div>当前页面仅支持同版本续费。如需降级，请等待当前会员到期后再选择其他版本。</div>
+                    </div>
+
                     <!-- Version Tabs -->
-                    <div class="flex gap-2 mb-4 overflow-x-auto pb-2" v-if="purchaseableVersions.length > 0">
+                    <div class="flex gap-2 mb-4 overflow-x-auto pb-2" v-else-if="purchaseableVersions.length > 0">
                         <button v-for="ver in purchaseableVersions" :key="ver" 
                             @click="selectedVersion = ver"
                             class="flex-1 min-w-[80px] py-2 px-1 rounded border-2 text-center transition-all"
@@ -1266,7 +1275,7 @@
                     </div>
 
                     <!-- Duration Selection -->
-                    <div class="mb-4">
+                    <div class="mb-4" v-if="pricingOptions[selectedVersion]">
                         <label class="block text-xs text-gray-500 mb-2">选择时长</label>
                         <div class="grid grid-cols-3 gap-2">
                             <button v-for="(opt, key) in pricingOptions[selectedVersion]" :key="key"
@@ -1284,7 +1293,7 @@
                     </div>
 
                     <button @click="createOrder" :disabled="purchaseLoading" class="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded font-bold shadow-lg disabled:opacity-50">
-                        {{ purchaseLoading ? '处理中...' : ('立即购买 ¥' + (pricingOptions[selectedVersion]?.[selectedDuration]?.price || '...')) }}
+                        {{ purchaseLoading ? '处理中...' : ((isRenewOnlyMode ? '立即续费 ¥' : '立即购买 ¥') + (pricingOptions[selectedVersion]?.[selectedDuration]?.price || '...')) }}
                     </button>
                 </div>
 
@@ -1549,11 +1558,11 @@
                     onboardingStep: 0,
                     onboardingUsername: '',
                     onboardingSteps: [
-                        { title: '竞价页面', desc: '用于查看开盘前的核心候选股与竞价信号，适合盘前制定计划。' },
-                        { title: '涨停页面', desc: '用于观察涨停池与炸板池变化，判断板块强弱与市场热度。' },
-                        { title: '盘中页面', desc: '用于执行盘中突击与实时跟踪，快速捕捉异动机会。' },
-                        { title: '自选页面', desc: '用于管理你自己的重点股票清单，便于持续追踪。' },
-                        { title: '会员与充值', desc: '在会员中心可续费、升级，并可使用邀请码获得赠送权益。' }
+                        { title: '竞价页面', desc: '用于查看开盘前的核心候选股与竞价信号，适合盘前制定计划。', tab: 'pre' },
+                        { title: '涨停页面', desc: '用于观察涨停池与炸板池变化，判断板块强弱与市场热度。', tab: 'pool' },
+                        { title: '盘中页面', desc: '用于执行盘中突击与实时跟踪，快速捕捉异动机会。', tab: 'intra' },
+                        { title: '自选页面', desc: '用于管理你自己的重点股票清单，便于持续追踪。', tab: 'manual' },
+                        { title: '会员与充值', desc: '在会员中心可续费、升级，并可使用邀请码获得赠送权益。', tab: 'manual', openSubscription: true }
                     ],
                     features: {
                         'trial': { ai: '每日1次', raid: '暂不支持', review: '暂不支持', desc: '体验10分钟' },
@@ -1593,6 +1602,9 @@
                 },
                 isPaidMember() {
                     return ['basic', 'advanced', 'flagship'].includes(this.userInfo.version);
+                },
+                isRenewOnlyMode() {
+                    return this.isRegisteredAccount && ['basic', 'advanced', 'flagship'].includes(this.userInfo.version);
                 },
                 purchaseableVersions() {
                     return Object.keys(this.pricingOptions || {}).filter(ver => ver !== 'trial');
@@ -1733,6 +1745,16 @@
                     const username = (this.displayUsername || localStorage.getItem('sniper_username') || '').trim();
                     return username ? `sniper_onboarding_done_${username}` : '';
                 },
+                applyOnboardingStep(stepIndex) {
+                    const step = this.onboardingSteps[stepIndex] || {};
+                    if (step.tab) {
+                        this.activeTab = step.tab;
+                        if (step.tab === 'pool') this.activePoolTab = 'limit_up';
+                    }
+                    if (step.openSubscription) {
+                        this.openSubscription(this.userInfo.version === 'trial' ? 'basic' : this.userInfo.version);
+                    }
+                },
                 maybeStartOnboarding(forceStart = false) {
                     if (!this.isRegisteredAccount) return;
                     const key = this.getOnboardingStorageKey();
@@ -1741,11 +1763,21 @@
                     if (localStorage.getItem(key) === '1') return;
                     this.onboardingUsername = this.displayUsername || localStorage.getItem('sniper_username') || '';
                     this.onboardingStep = 0;
-                    this.showOnboardingModal = true;
+                    this.showOnboardingModal = false;
+                    this.applyOnboardingStep(0);
+                    setTimeout(() => {
+                        this.showOnboardingModal = true;
+                    }, 180);
                 },
                 nextOnboardingStep() {
                     if (this.onboardingStep < this.onboardingSteps.length - 1) {
-                        this.onboardingStep += 1;
+                        const nextStep = this.onboardingStep + 1;
+                        this.showOnboardingModal = false;
+                        this.onboardingStep = nextStep;
+                        this.applyOnboardingStep(nextStep);
+                        setTimeout(() => {
+                            this.showOnboardingModal = true;
+                        }, 180);
                         return;
                     }
                     const key = this.getOnboardingStorageKey();
@@ -2156,6 +2188,18 @@
                         }
                     }
                 },
+                consumeLocalQuota(type) {
+                    if (type === 'ai') {
+                        this.userInfo.daily_ai_count = Number(this.userInfo.daily_ai_count || 0) + 1;
+                        this.userInfo.remaining_ai = Math.max(0, Number(this.userInfo.remaining_ai || 0) - 1);
+                    } else if (type === 'raid') {
+                        this.userInfo.daily_raid_count = Number(this.userInfo.daily_raid_count || 0) + 1;
+                        this.userInfo.remaining_raid = Math.max(0, Number(this.userInfo.remaining_raid || 0) - 1);
+                    } else if (type === 'review') {
+                        this.userInfo.daily_review_count = Number(this.userInfo.daily_review_count || 0) + 1;
+                        this.userInfo.remaining_review = Math.max(0, Number(this.userInfo.remaining_review || 0) - 1);
+                    }
+                },
                 // --- Permissions ---
                 checkPermission(type) { 
                     const expired = this.userInfo.is_expired;
@@ -2246,7 +2290,9 @@
                             return;
                         }
 
-                        if (targetVer && availableVersions.includes(targetVer)) {
+                        if (this.isRenewOnlyMode && availableVersions.includes(this.userInfo.version)) {
+                            this.selectedVersion = this.userInfo.version;
+                        } else if (targetVer && availableVersions.includes(targetVer)) {
                             this.selectedVersion = targetVer;
                         } else if (!availableVersions.includes(this.selectedVersion)) {
                             this.selectedVersion = availableVersions[0];
@@ -2268,6 +2314,10 @@
                         this.showSubscriptionModal = false;
                         this.showLoginModal = true;
                         return;
+                    }
+
+                    if (this.isRenewOnlyMode) {
+                        this.selectedVersion = this.userInfo.version;
                     }
 
                     if (!this.selectedVersion || !this.pricingOptions[this.selectedVersion]) {
@@ -3060,6 +3110,7 @@
                         if (this.currentAnalysisStock.code !== stock.code) return;
                         
                         if (result.status === 'success') {
+                            this.consumeLocalQuota('ai');
                             this.analysisResult = result.analysis;
                             this.startTypewriter(result.analysis);
                         } else {
@@ -3135,6 +3186,7 @@
                         
                         if (this.currentAnalysisStock.code === stock.code) {
                             if (result.status === 'success') {
+                                this.consumeLocalQuota('ai');
                                 this.analysisResult = result.analysis;
                                 this.startTypewriter(result.analysis);
                             } else {
@@ -3655,6 +3707,7 @@
                     });
                 },
                 async triggerAIAnalysis() {
+                    if (!this.checkPermission('ai')) return;
                     this.analyzingAI = true;
                     try {
                         // Refresh K-line data first to ensure AI gets the latest market info
@@ -3670,7 +3723,7 @@
 
                         const promptType = this.chartType === 'day' ? 'day_trading_signal' : 'min_trading_signal';
 
-                        const res = await fetch(API_BASE_URL + '/api/stock/analyze', {
+                        const res = await fetch(API_BASE_URL + '/api/analyze/stock', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -3686,6 +3739,7 @@
                         if (!res.ok) throw new Error(res.statusText);
                         const data = await res.json();
                         if (data.status === 'success') {
+                            this.consumeLocalQuota('ai');
                             let result = data.result;
                             let signals = [];
                             let summary = "";

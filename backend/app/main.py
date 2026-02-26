@@ -81,6 +81,9 @@ USER_OP_LOG_SKIP_PREFIXES = (
     "/api/admin/users/set_membership",
     "/api/admin/orders/approve",
     "/api/admin/config",
+    "/api/admin/referrals",
+    "/api/admin/data/export",
+    "/api/admin/data/restore",
     "/api/auth/login_user",
     "/api/auth/register",
     "/api/auth/apply_trial",
@@ -1480,6 +1483,7 @@ class LHBAnalyzeRequest(BaseModel):
     force: bool = False
 
 @app.post("/api/lhb/analyze")
+@app.post("/api/lhb/analyze_daily")
 async def analyze_lhb_daily_api(req: LHBAnalyzeRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     # Run in thread pool
     await check_review_permission(user)
@@ -1489,7 +1493,7 @@ async def analyze_lhb_daily_api(req: LHBAnalyzeRequest, user: models.User = Depe
     # Fetch data first
     data = lhb_manager.get_daily_data(req.date)
     result = await loop.run_in_executor(None, lambda: analyze_daily_lhb(req.date, data, force_update=req.force))
-    return {"status": "ok", "result": result}
+    return {"status": "ok", "result": result, "analysis": result}
 
 @app.get("/api/lhb/analysis")
 async def get_lhb_analysis_api(date: str, user: models.User = Depends(get_current_user)):
@@ -1558,6 +1562,7 @@ async def fetch_lhb_data(background_tasks: BackgroundTasks, user: models.User = 
     return {"status": "success"}
 
 @app.post("/api/analyze/stock")
+@app.post("/api/stock/analyze")
 async def analyze_stock_manual(request: AnalyzeRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     """手动触发个股AI分析"""
     # 扣除次数

@@ -183,9 +183,31 @@
     <script>
         const { createApp } = Vue
 
+        const originalFetch = window.fetch;
+        window.fetch = async (...args) => {
+            let [resource, config] = args;
+            config = config || {};
+            config.headers = config.headers || {};
+            const deviceId = localStorage.getItem('sniper_device_id') || localStorage.getItem('sniper_token');
+            if (deviceId) {
+                config.headers['X-Device-ID'] = deviceId;
+            }
+            return originalFetch(resource, config);
+        };
+
+        function ensureDeviceId() {
+            let deviceId = localStorage.getItem('sniper_device_id') || localStorage.getItem('sniper_token');
+            if (!deviceId) {
+                deviceId = `guestv2_${Math.random().toString(36).slice(2, 10)}`;
+                localStorage.setItem('sniper_device_id', deviceId);
+            }
+            return deviceId;
+        }
+
         createApp({
             data() {
                 return {
+                    deviceId: '',
                     availableDates: [],
                     selectedDate: '',
                     lhbData: [],
@@ -215,12 +237,28 @@
                 }
             },
             methods: {
+                async ensureSession() {
+                    this.deviceId = ensureDeviceId();
+                    try {
+                        await fetch(API_BASE_URL + '/api/auth/login', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ device_id: this.deviceId })
+                        });
+                    } catch (e) {
+                        console.error('Ensure session failed:', e);
+                    }
+                },
                 toggleSort() {
                     this.sortOrder = this.sortOrder === 'desc' ? 'asc' : 'desc';
                 },
                 async fetchDates() {
                     try {
                         const res = await fetch(API_BASE_URL + '/api/lhb/dates');
+                        if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            throw new Error(err.detail || `LHB dates load failed (${res.status})`);
+                        }
                         this.availableDates = await res.json();
                         if (this.availableDates.length > 0) {
                             this.selectedDate = this.availableDates[0];
@@ -314,14 +352,14 @@
                     this.analyzing = true;
                     this.showAnalysisPanel = true;
                     try {
-                        const res = await fetch(API_BASE_URL + '/api/lhb/analyze_daily', {
+                        const res = await fetch(API_BASE_URL + '/api/lhb/analyze', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ date: this.selectedDate })
                         });
                         const data = await res.json();
                         if (data.status === 'ok') {
-                            this.analysisResult = data.analysis;
+                            this.analysisResult = data.result || data.analysis || '';
                         } else {
                             this.analysisResult = '分析失败: ' + data.message;
                         }
@@ -350,8 +388,10 @@
                     this.isMobile = window.innerWidth < 768;
                 });
 
-                this.fetchDates();
-                this.connectWebSocket();
+                this.ensureSession().finally(() => {
+                    this.fetchDates();
+                    this.connectWebSocket();
+                });
             }
         }).mount('#app')
     </script>

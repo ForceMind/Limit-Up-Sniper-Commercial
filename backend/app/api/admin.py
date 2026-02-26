@@ -1,4 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks, UploadFile, File
+from fastapi.responses import FileResponse
+from starlette.background import BackgroundTask
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.db import models, schemas, database
@@ -8,6 +10,9 @@ import os
 import json
 import hashlib
 import re
+import shutil
+import tempfile
+import zipfile
 from pathlib import Path
 from app.core.config_manager import SYSTEM_CONFIG, save_config
 from app.core.lhb_manager import lhb_manager
@@ -356,13 +361,7 @@ async def list_users(
 ):
     users = db.query(models.User).order_by(models.User.created_at.desc()).all()
     accounts = _load_user_accounts()
-    device_to_username: Dict[str, str] = {}
-    for username, account in accounts.items():
-        if not isinstance(account, dict):
-            continue
-        did = str(account.get("device_id", "")).strip()
-        if did:
-            device_to_username[did] = username
+    device_to_username = _device_username_map(accounts)
 
     filter_mode = (account_type or "all").strip().lower()
     if filter_mode not in {"all", "guest", "registered"}:
@@ -378,6 +377,13 @@ async def list_users(
         if filter_mode == "registered" and not is_registered:
             continue
         account = accounts.get(username, {}) if is_registered else {}
+        used_ai = max(0, int(u.daily_ai_count or 0))
+        used_raid = max(0, int(u.daily_raid_count or 0))
+        used_review = max(0, int(u.daily_review_count or 0))
+        quota_ai = max(0, int(quotas.get("ai", 0)))
+        quota_raid = max(0, int(quotas.get("raid", 0)))
+        quota_review = max(0, int(quotas.get("review", 0))
+        )
         res.append({
             "id": u.id,
             "device_id": u.device_id,
@@ -389,12 +395,15 @@ async def list_users(
             "version": u.version,
             "expires_at": u.expires_at,
             "created_at": u.created_at,
-            "daily_ai_count": u.daily_ai_count,
-            "daily_raid_count": u.daily_raid_count,
-            "daily_review_count": u.daily_review_count,
-            "remaining_ai": quotas['ai'] - u.daily_ai_count,
-            "remaining_raid": quotas['raid'] - u.daily_raid_count,
-            "remaining_review": quotas['review'] - u.daily_review_count,
+            "daily_ai_count": used_ai,
+            "daily_raid_count": used_raid,
+            "daily_review_count": used_review,
+            "quota_ai": quota_ai,
+            "quota_raid": quota_raid,
+            "quota_review": quota_review,
+            "remaining_ai": max(0, quota_ai - used_ai),
+            "remaining_raid": max(0, quota_raid - used_raid),
+            "remaining_review": max(0, quota_review - used_review),
             "is_expired": (u.expires_at and u.expires_at < datetime.utcnow())
         })
     safe_skip = max(0, int(skip or 0))
@@ -683,6 +692,108 @@ async def order_stats(db: Session = Depends(get_db), authorized: bool = Depends(
     }
 
 
+@router.get("/referrals")
+async def list_referrals(
+    status: str = "rewarded",
+    page: int = 1,
+    page_size: int = 50,
+    keyword: str = "",
+    authorized: bool = Depends(verify_admin),
+    db: Session = Depends(get_db),
+):
+    records = account_store.load_referral_records()
+    order_invites = records.get("order_invites", {})
+    if not isinstance(order_invites, dict):
+        order_invites = {}
+
+    normalized_status = (status or "all").strip().lower()
+    if normalized_status not in {"all", "pending", "rewarded", "rejected", "cancelled", "invalid"}:
+        raise HTTPException(status_code=400, detail="Invalid status filter")
+
+    keyword_lc = (keyword or "").strip().lower()
+    accounts = _load_user_accounts()
+    device_to_username = _device_username_map(accounts)
+
+    order_codes = [str(code).strip() for code in order_invites.keys() if str(code).strip()]
+    order_map: Dict[str, models.PurchaseOrder] = {}
+    if order_codes:
+        rows = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.order_code.in_(order_codes)).all()
+        order_map = {str(x.order_code): x for x in rows}
+
+    items: List[Dict[str, Any]] = []
+    for order_code, info in order_invites.items():
+        if not isinstance(info, dict):
+            continue
+        current_status = str(info.get("status", "")).strip().lower()
+        if normalized_status != "all" and current_status != normalized_status:
+            continue
+
+        invite_code = str(info.get("invite_code", "")).strip()
+        inviter_username = str(info.get("inviter_username", "")).strip()
+        inviter_device_id = str(info.get("inviter_device_id", "")).strip()
+        invitee_device_id = str(info.get("invitee_device_id", "")).strip()
+        invitee_username = device_to_username.get(invitee_device_id, "")
+        reason = str(info.get("reason", "")).strip()
+
+        order = order_map.get(str(order_code).strip())
+        row = {
+            "order_code": str(order_code).strip(),
+            "invite_code": invite_code,
+            "status": current_status,
+            "inviter_username": inviter_username,
+            "inviter_device_id": inviter_device_id,
+            "invitee_username": invitee_username,
+            "invitee_device_id": invitee_device_id,
+            "reward_days": int(info.get("reward_days", 0) or 0),
+            "bonus_token": str(info.get("bonus_token", "")).strip(),
+            "reason": reason,
+            "created_at": str(info.get("created_at", "")).strip(),
+            "updated_at": str(info.get("updated_at", "")).strip(),
+            "rewarded_at": str(info.get("rewarded_at", "")).strip(),
+            "order_amount": float(order.amount) if order else 0.0,
+            "order_target_version": str(order.target_version) if order else "",
+            "order_duration_days": int(order.duration_days) if order else 0,
+            "order_status": str(order.status) if order else "",
+        }
+        if keyword_lc:
+            haystack = " ".join([
+                row["order_code"],
+                row["invite_code"],
+                row["inviter_username"],
+                row["inviter_device_id"],
+                row["invitee_username"],
+                row["invitee_device_id"],
+                row["reason"],
+            ]).lower()
+            if keyword_lc not in haystack:
+                continue
+        items.append(row)
+
+    items.sort(
+        key=lambda x: (
+            x.get("rewarded_at") or "",
+            x.get("created_at") or "",
+            x.get("order_code") or "",
+        ),
+        reverse=True,
+    )
+
+    safe_page = max(1, int(page or 1))
+    safe_size = max(10, min(int(page_size or 50), 200))
+    total = len(items)
+    start = (safe_page - 1) * safe_size
+    paged = items[start:start + safe_size]
+
+    return {
+        "status": "success",
+        "total": total,
+        "page": safe_page,
+        "page_size": safe_size,
+        "total_pages": max(1, (total + safe_size - 1) // safe_size),
+        "items": paged,
+    }
+
+
 @router.post("/orders/approve")
 async def approve_order(
     action: schemas.AdminOrderAction,
@@ -936,6 +1047,149 @@ async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depe
     return {"status": "success"}
 
 
+@router.get("/data/export")
+async def export_data_package(authorized: bool = Depends(verify_admin)):
+    if not DATA_DIR.exists():
+        raise HTTPException(status_code=404, detail="Data directory not found")
+
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    temp_zip = Path(tempfile.gettempdir()) / f"sniper_data_export_{ts}_{secrets.token_hex(4)}.zip"
+
+    try:
+        with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for file_path in DATA_DIR.rglob("*"):
+                if not file_path.is_file():
+                    continue
+                arc = str(file_path.relative_to(DATA_DIR)).replace("\\", "/")
+                zf.write(file_path, arcname=arc)
+    except Exception as e:
+        if temp_zip.exists():
+            try:
+                temp_zip.unlink()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+
+    add_runtime_log(f"[ADMIN] Data export prepared: {temp_zip.name}")
+    filename = f"sniper_data_export_{ts}.zip"
+    return FileResponse(
+        path=str(temp_zip),
+        media_type="application/zip",
+        filename=filename,
+        background=BackgroundTask(lambda: temp_zip.unlink(missing_ok=True)),
+    )
+
+
+def _restore_source_dir(extract_root: Path) -> Path:
+    current = extract_root
+    entries = [p for p in current.iterdir() if p.name != "__MACOSX"]
+    if len(entries) == 1 and entries[0].is_dir():
+        current = entries[0]
+    candidate_data_dir = current / "data"
+    if candidate_data_dir.exists() and candidate_data_dir.is_dir():
+        current = candidate_data_dir
+    return current
+
+
+@router.post("/data/restore")
+async def restore_data_package(
+    backup_file: UploadFile = File(...),
+    authorized: bool = Depends(verify_admin),
+):
+    filename = str(backup_file.filename or "").strip().lower()
+    if not filename.endswith(".zip"):
+        raise HTTPException(status_code=400, detail="Only .zip backup file is supported")
+
+    max_size_bytes = 1024 * 1024 * 1024  # 1GB
+    payload = await backup_file.read()
+    if not payload:
+        raise HTTPException(status_code=400, detail="Empty backup file")
+    if len(payload) > max_size_bytes:
+        raise HTTPException(status_code=400, detail="Backup file is too large (max 1GB)")
+
+    with tempfile.TemporaryDirectory(prefix="sniper_restore_") as tmp:
+        tmp_dir = Path(tmp)
+        zip_path = tmp_dir / "backup.zip"
+        extract_dir = tmp_dir / "extract"
+        zip_path.write_bytes(payload)
+
+        try:
+            with zipfile.ZipFile(zip_path, "r") as zf:
+                for name in zf.namelist():
+                    p = Path(name)
+                    if p.is_absolute() or ".." in p.parts:
+                        raise HTTPException(status_code=400, detail="Backup package contains unsafe file path")
+                zf.extractall(extract_dir)
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid backup zip: {e}")
+
+        source_dir = _restore_source_dir(extract_dir)
+        if not source_dir.exists() or not source_dir.is_dir():
+            raise HTTPException(status_code=400, detail="Backup content is invalid")
+
+        known_files = {
+            "commercial.db",
+            "config.json",
+            "user_accounts.json",
+            "referral_records.json",
+            "watchlist.json",
+            "favorites.json",
+            "lhb_history.csv",
+        }
+        if not any((source_dir / f).exists() for f in known_files):
+            raise HTTPException(status_code=400, detail="Backup content does not look like server data directory")
+
+        backup_root = BASE_DIR / "backups"
+        backup_root.mkdir(parents=True, exist_ok=True)
+        snapshot_name = f"data_before_restore_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}"
+        snapshot_dir = backup_root / snapshot_name
+
+        if DATA_DIR.exists():
+            shutil.copytree(DATA_DIR, snapshot_dir)
+        else:
+            snapshot_dir.mkdir(parents=True, exist_ok=True)
+
+        restored_files = 0
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        for item in DATA_DIR.iterdir():
+            try:
+                if item.is_dir():
+                    shutil.rmtree(item)
+                else:
+                    item.unlink()
+            except Exception as e:
+                raise HTTPException(status_code=500, detail=f"Failed to clear current data: {e}")
+
+        for src in source_dir.iterdir():
+            dst = DATA_DIR / src.name
+            if src.is_dir():
+                shutil.copytree(src, dst, dirs_exist_ok=True)
+                restored_files += sum(1 for p in dst.rglob("*") if p.is_file())
+            else:
+                shutil.copy2(src, dst)
+                restored_files += 1
+
+        lhb_manager.load_config()
+        add_runtime_log(
+            f"[ADMIN] Data restore done from {backup_file.filename}, snapshot={snapshot_name}, files={restored_files}"
+        )
+        log_user_operation(
+            "admin_data_restore",
+            status="success",
+            actor="admin",
+            method="POST",
+            path="/api/admin/data/restore",
+            detail=f"snapshot={snapshot_name}, files={restored_files}",
+        )
+        return {
+            "status": "success",
+            "snapshot": snapshot_name,
+            "restored_files": restored_files,
+        }
+
+
 # --- Logs & Monitor ---
 def _tail_file_lines(path: Path, max_lines: int) -> List[str]:
     if not path.exists():
@@ -990,6 +1244,47 @@ def _preview_data(data: Any, max_chars: int = 180) -> str:
     return raw[:max_chars] + "..."
 
 
+def _device_username_map(accounts: Dict[str, dict]) -> Dict[str, str]:
+    mapping: Dict[str, str] = {}
+    for username, account in accounts.items():
+        if not isinstance(account, dict):
+            continue
+        did = str(account.get("device_id", "")).strip()
+        if did:
+            mapping[did] = username
+    return mapping
+
+
+def _iter_user_operation_logs() -> List[Dict[str, Any]]:
+    log_file = DATA_DIR / "user_operation_logs.jsonl"
+    if not log_file.exists():
+        return []
+
+    items: List[Dict[str, Any]] = []
+    try:
+        with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    parsed = json.loads(text)
+                except Exception:
+                    continue
+                if isinstance(parsed, dict):
+                    items.append(parsed)
+    except Exception:
+        return []
+    items.reverse()
+    return items
+
+
+def _contains_ci(text: str, keyword: str) -> bool:
+    if not keyword:
+        return True
+    return keyword.lower() in str(text or "").lower()
+
+
 @router.get("/logs/system")
 async def get_system_logs(lines: int = 200, authorized: bool = Depends(verify_admin)):
     safe_lines = max(20, min(int(lines or 200), 2000))
@@ -1012,9 +1307,75 @@ async def get_login_logs(authorized: bool = Depends(verify_admin)):
 
 
 @router.get("/logs/user_ops")
-async def get_user_operation_logs(limit: int = 300, authorized: bool = Depends(verify_admin)):
-    safe_limit = max(50, min(int(limit or 300), 2000))
-    return {"logs": get_recent_user_operations(limit=safe_limit)}
+async def get_user_operation_logs(
+    page: int = 1,
+    page_size: int = 50,
+    actor: str = "",
+    status: str = "",
+    action: str = "",
+    path_keyword: str = "",
+    user_keyword: str = "",
+    authorized: bool = Depends(verify_admin),
+):
+    safe_page = max(1, int(page or 1))
+    safe_size = max(10, min(int(page_size or 50), 200))
+
+    actor_lc = (actor or "").strip().lower()
+    status_lc = (status or "").strip().lower()
+    action_lc = (action or "").strip().lower()
+    path_kw = (path_keyword or "").strip().lower()
+    user_kw = (user_keyword or "").strip().lower()
+
+    if actor_lc and actor_lc not in {"admin", "user", "guest", "system", "anonymous"}:
+        raise HTTPException(status_code=400, detail="Invalid actor filter")
+    if status_lc and status_lc not in {"success", "failed"}:
+        raise HTTPException(status_code=400, detail="Invalid status filter")
+
+    all_items = _iter_user_operation_logs()
+    accounts = _load_user_accounts()
+    device_to_username = _device_username_map(accounts)
+
+    filtered: List[Dict[str, Any]] = []
+    for item in all_items:
+        row = dict(item)
+        if not isinstance(row, dict):
+            continue
+
+        did = str(row.get("device_id", "")).strip()
+        if not str(row.get("username", "")).strip() and did:
+            resolved = device_to_username.get(did, "")
+            if resolved:
+                row["username"] = resolved
+
+        if actor_lc and str(row.get("actor", "")).strip().lower() != actor_lc:
+            continue
+        if status_lc and str(row.get("status", "")).strip().lower() != status_lc:
+            continue
+        if action_lc and action_lc not in str(row.get("action", "")).strip().lower():
+            continue
+        if path_kw and path_kw not in str(row.get("path", "")).strip().lower():
+            continue
+        if user_kw:
+            candidate = " ".join([
+                str(row.get("username", "")).strip(),
+                str(row.get("device_id", "")).strip(),
+                str(row.get("ip", "")).strip(),
+            ]).lower()
+            if user_kw not in candidate:
+                continue
+
+        filtered.append(row)
+
+    total = len(filtered)
+    start = (safe_page - 1) * safe_size
+    logs = filtered[start:start + safe_size]
+    return {
+        "logs": logs,
+        "total": total,
+        "page": safe_page,
+        "page_size": safe_size,
+        "total_pages": max(1, (total + safe_size - 1) // safe_size),
+    }
 
 
 @router.get("/monitor/ai_cache")
