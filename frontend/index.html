@@ -93,7 +93,7 @@
                 <!-- User Profile (Desktop Only) -->
                 <div class="hidden md:flex items-center gap-2">
                     <!-- <button v-if="!deviceId.startsWith('user_')" @click="showLoginModal = true" class="text-xs bg-blue-100 dark:bg-blue-900 text-blue-800 dark:text-blue-200 px-2 py-1 rounded hover:bg-blue-200 transition">登录/注册</button> -->
-                    <div class="text-xs text-gray-400 font-mono">{{ localStorage.getItem('sniper_username') || 'Member' }}</div>
+                    <div class="text-xs text-gray-400 font-mono">{{ displayUsername || 'Member' }}</div>
                     
                     <div @click="openSubscription()" class="cursor-pointer text-xs flex flex-col items-end mr-2 bg-gray-50 dark:bg-gray-800 p-1 px-2 rounded border border-gray-200 dark:border-gray-700 hover:bg-gray-100 transition">
                         <div class="font-bold" :class="{
@@ -110,7 +110,6 @@
                     <div class="text-[10px] text-gray-400">
                         AI:{{userInfo.remaining_ai}} | 突:{{userInfo.remaining_raid}} | 复:{{userInfo.remaining_review}}
                     </div>
-                </div>
 
                 <!-- Settings Button (Merged Filter & Config) -->
                 <button v-if="!isSearchFocused || !isMobile" @click.stop="showSettingsModal = true" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors z-10 relative" title="过滤设置">
@@ -738,14 +737,6 @@
                         <h2 class="text-gray-600 dark:text-gray-400 font-bold flex items-center gap-2 text-sm md:text-base">
                             <span>💣</span> 炸板 (Broken Limit)
                             <span v-if="isMobile && activePoolTab !== 'broken'" class="text-xs text-gray-400">(点击展开)</span>
-                        <!-- MASK for Broken Pool (same as pool permission) -->
-                        <div v-if="shouldShowMask('pool')" class="absolute inset-0 bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
-                            <div class="text-xl font-bold text-red-500 mb-2">需要会员权限</div>
-                            <div class="text-sm text-gray-300 mb-4">当前功能仅限正式会员使用</div>
-                            <button @click="openSubscription('basic')" class="bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-2 rounded-full font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all text-sm">
-                                立即开通
-                            </button>
-                        </div>
                         </h2>
                         <div class="flex items-center gap-2">
                             <span class="text-xs text-gray-500">{{ brokenLimitPool.length }} 只</span>
@@ -754,6 +745,14 @@
 
                     <!-- Scrollable Table Container -->
                     <div class="flex-1 overflow-auto relative" v-show="!isMobile || activePoolTab === 'broken'">
+                        <!-- MASK for Broken Pool (same as pool permission) -->
+                        <div v-if="shouldShowMask('pool')" class="absolute inset-0 bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
+                            <div class="text-xl font-bold text-red-500 mb-2">需要会员权限</div>
+                            <div class="text-sm text-gray-300 mb-4">当前功能仅限正式会员使用</div>
+                            <button @click="openSubscription('basic')" class="bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-2 rounded-full font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all text-sm">
+                                立即开通
+                            </button>
+                        </div>
                         <div class="min-w-[800px]">
                             <!-- Table Header -->
                             <div class="grid gap-2 px-2 py-2 text-xs text-gray-500 border-b border-gray-200 dark:border-gray-700 bg-gray-100/90 dark:bg-gray-900/90 sticky top-0 z-30"
@@ -981,6 +980,8 @@
                         </div>
                     </div>
 
+                </div>
+
 
                 <!-- Help Link -->
                 <div class="px-6 pb-4 pt-4 text-center border-t border-gray-100 dark:border-gray-700">
@@ -1106,12 +1107,7 @@
             </div>
         </div>
 
-        <!-- Subscription Modal -->flex flex-col items-center justify-center h-40 text-gray-400" v-if="!pricingOptions || !pricingOptions[selectedVersion]">
-                            <div class="animate-spin rounded-full h-8 w-8 border-b-2 border-gray-900 mb-2"></div>
-                            <p class="text-xs">加载价格配置中...</p>
-                        </div>
-
-                        <div class="grid grid-cols-3 gap-2" v-else
+        <!-- Subscription Modal -->
         <div v-if="showSubscriptionModal" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
                 <!-- Header -->
@@ -1232,8 +1228,6 @@
 
     </div>
 
-        </div> <!-- Fix: Closing #app div -->
-
     <script>
         // Global Error Handler (Added by Debugger)
         window.onerror = function(message, source, lineno, colno, error) {
@@ -1342,12 +1336,6 @@
                     // Settings
                     showSettingsModal: false,
                     isSearchFocused: false,
-                    // Auth
-                    showLoginModal: false, 
-                    loginMode: 'login', // login, register
-                    loginForm: { username: '', password: '' },
-                    loginError: '',
-                    authLoading: false,
 
                     apiKey: '', // Store API Key
                     systemConfig: {
@@ -1377,6 +1365,7 @@
                     // LOGIN DATA
                     showLoginModal: false,
                     loginForm: { username: '', password: '' },
+                    displayUsername: '',
                     loginLoading: false,
                     loadingChart: false,
                     chartInstance: null,
@@ -1542,37 +1531,98 @@
                 },
                 // --- User & Auth Methods ---
                 // --- User & Auth Methods ---
-                async initUser() {
-                    let deviceId = localStorage.getItem('sniper_device_id');
-                    if (!deviceId) {
-                        // Use random ID instead of FingerprintJS to avoid blocking
-                        deviceId = 'device_' + Math.random().toString(36).substr(2, 9);
-                        localStorage.setItem('sniper_device_id', deviceId);
+                async checkLogin() {
+                    let token = localStorage.getItem('sniper_token');
+
+                    // Auto-visit/Guest logic if no token?
+                    // No, for Commercial version we might prefer forcing them to see login or start as Trial Guest.
+                    // If no token, we can create a temporary guest token?
+                    // The backend supports strict "username/password" but maybe we want a "Guest Mode" for trial?
+                    // The backend `login` endpoint supported `device_id`.
+                    // Let's first try to restore the session if token exists.
+                    if (token) {
+                        try {
+                            // Verify status
+                            // We use the token to check status.
+                            // Ideally, we want full user info.
+                            // We can use the logic "login with known token" if the backend allows it.
+                            // Since we don't have "get_me", let's assume if we have token, we are somewhat okay
+                            // OR we can't easily get full profile without `login_user`.
+                            // Wait, the backend's `login` endpoint (legacy) takes `device_id`.
+                            // If we treat `token` as `device_id` (which `register` does return as `token`), 
+                            // we can call `POST /api/auth/login` with `{device_id: token}` to get full profile!
+                            // This unifies Guest and User flows!
+                            const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ device_id: token })
+                            });
+                            const data = await res.json();
+                            this.userInfo = data;
+                            return;
+                        } catch(e) { console.error("Session restore failed", e); }
                     }
-                    this.deviceId = deviceId;
-                    this.login();
-                },
-                
-                async login() {
-                    try {
+
+                    // If no token or failed, start as fresh Guest
+                    // Create a random device_id for guest trial
+                    token = 'guest_' + Math.random().toString(36).substr(2, 9);
+                    localStorage.setItem('sniper_token', token);
+                    
+                    // Register this guest automatically?
+                    // Yes, call login to create it in DB
+                     try {
                         const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ device_id: this.deviceId })
+                            body: JSON.stringify({ device_id: token })
                         });
                         const data = await res.json();
                         this.userInfo = data;
-                        
-                        // Fix for recharge window bug: Don't force open subscription on login-check if just expired silent update needed
-                        if (this.userInfo.version === 'trial' && this.userInfo.is_expired) {
-                            // this.showMsg('试用已结束，请购买会员', 'info');
-                            // this.openSubscription('basic'); 
-                            // User complained this blocks interaction or is annoying. 
-                            // We just let the UI show "Expired" status in red.
-                        }
-                    } catch (e) {
-                        console.error("Login failed", e);
+                    } catch(e) { console.error("Guest init failed", e); }
+                },
+
+                async handleAuth(mode) {
+                    if (!this.loginForm.username || !this.loginForm.password) {
+                        this.showMsg('请输入用户名和密码', 'error');
+                        return;
                     }
+
+                    this.loginLoading = true;
+                    try {
+                        const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login_user';
+                        const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify(this.loginForm)
+                        });
+                        
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || 'Auth failed');
+
+                        // Success
+                        this.userInfo = data.user;
+                        localStorage.setItem('sniper_token', data.token); // Save token
+                        localStorage.setItem('sniper_username', this.loginForm.username);
+                        this.displayUsername = this.loginForm.username;
+                        this.showLoginModal = false;
+                        this.showMsg(mode === 'register' ? '注册成功' : '登录成功', 'success');
+                        
+                        // Clear sensitive data?
+                        this.loginForm.password = '';
+                    } catch (e) {
+                        this.showMsg(e.message || '操作失败', 'error');
+                    } finally {
+                        this.loginLoading = false;
+                    }
+                },
+                
+                logout() {
+                    localStorage.removeItem('sniper_token');
+                    localStorage.removeItem('sniper_username');
+                    this.displayUsername = '';
+                    this.showMsg('已退出登录', 'info');
+                    // Reload to reset state safely
+                    window.location.reload();
                 },
 
                 throttle(func, limit) {
@@ -3018,8 +3068,13 @@
                 }
             },
             mounted() {
+                // Force close any rogue modals on startup
+                this.confirmModal = { show: false, msg: '', resolve: null };
+                this.showLoginModal = false;
+                this.msgModal.show = false;
+                
                 // Init User
-                this.initUser();
+                this.checkLogin(true); // true = silent/restore mode
                 this.startUserTimers();
                 
                 // Event listener for auth errors
@@ -3061,6 +3116,12 @@
                 const savedApiKey = localStorage.getItem('deepseek_api_key');
                 if (savedApiKey) {
                     this.apiKey = savedApiKey;
+                }
+
+                // Initialize display username
+                const savedUsername = localStorage.getItem('sniper_username');
+                if (savedUsername) {
+                    this.displayUsername = savedUsername;
                 }
 
                 // Initialize activeTab based on time for Mobile
