@@ -10,6 +10,7 @@ import ssl
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from app.core.config_manager import SYSTEM_CONFIG
+from app.core.runtime_logs import add_runtime_log
 
 # Configure Logging
 logger = logging.getLogger("payment")
@@ -20,6 +21,7 @@ def send_email_notification(order, client_ip):
     logger.info("======== NEW PAYMENT NOTIFICATION ========")
     logger.info(f"Order: {order.order_code}")
     logger.info(f"Amount: {order.amount}")
+    add_runtime_log(f"[PAY] New order notify: {order.order_code}, amount={order.amount}, ip={client_ip}")
 
     # 1. Log to console/file
     print(f"[Email Logic] Admin notified for order {order.order_code} from {client_ip}")
@@ -178,6 +180,9 @@ async def create_order(
     db.add(order)
     db.commit()
     db.refresh(order)
+    add_runtime_log(
+        f"[PAY] Order created: code={order.order_code}, device={user.device_id}, version={order.target_version}, days={order.duration_days}, amount={order.amount}"
+    )
 
     return {
         "order_code": order.order_code,
@@ -211,6 +216,7 @@ async def confirm_payment(
 
     order.status = "waiting_verification"
     db.commit()
+    add_runtime_log(f"[PAY] Order confirmed by user: {order.order_code} -> waiting_verification")
 
     # Send Email Notification to Admin
     client_ip = request.client.host
@@ -236,4 +242,5 @@ async def cancel_order(
 
     order.status = "cancelled"
     db.commit()
+    add_runtime_log(f"[PAY] Order cancelled: {order.order_code}")
     return {"status": "success"}

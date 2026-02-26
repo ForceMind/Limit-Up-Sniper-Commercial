@@ -1155,7 +1155,7 @@
                         10分钟体验资格已使用，可直接购买3天体验或正式会员。
                     </div>
                 </div>
-                <div class='text-xs text-center text-gray-400 mt-2 font-mono'>v2.5.1 (Build 2026.02.26)</div>
+                <div class='text-xs text-center text-gray-400 mt-2 font-mono'>{{ serverVersion }}</div>
                 
                 <div class="text-xs text-gray-400 text-center mt-2">
                     {{ isRegisteredAccount ? '已登录后可在会员中心购买或续费。' : '游客仅可浏览，需注册后申请体验或购买会员。' }}
@@ -1360,6 +1360,8 @@
                     newStockCode: '',
                     logs: [],
                     wsConnected: false,
+                    notifyWsConnected: false,
+                    notifySocket: null,
                     currentTime: new Date(),
                     searchQuery: '',
                     searchResults: [],
@@ -1610,6 +1612,10 @@
                 if(this.trialTimer) clearTimeout(this.trialTimer);
                 if(this.expiryTimer) clearInterval(this.expiryTimer);
                 if(this.msgTimer) clearTimeout(this.msgTimer);
+                if (this.notifySocket) {
+                    try { this.notifySocket.close(); } catch (e) {}
+                    this.notifySocket = null;
+                }
             },
             methods: {
                 startUserTimers() {
@@ -1825,6 +1831,7 @@
                         localStorage.setItem('sniper_username', data.username || this.loginForm.username);
                         this.deviceId = data.token;
                         this.isRegisteredAccount = true;
+                        this.connectNotifyWebSocket();
                         this.displayUsername = data.username || this.loginForm.username;
                         this.accountCanApplyTrial = !!data.can_apply_trial;
                         this.loadLocalFavorites();
@@ -2066,9 +2073,14 @@
                             },
                             body: JSON.stringify({ order_code: this.currentOrder.order_code })
                         });
+                        const data = await res.json();
+                        if (!res.ok) {
+                            throw new Error(data.detail || '提交失败');
+                        }
                         this.purchaseStep = 3;
+                        this.showMsg('已提交审核，审批通过后会实时弹窗通知', 'info');
                     } catch(e) {
-                        this.showMsg('提交失败', 'error');
+                        this.showMsg(e.message || '提交失败', 'error');
                     } finally {
                         this.purchaseLoading = false;
                     }
@@ -2392,7 +2404,78 @@
                     ws.onclose = () => {
                         this.wsConnected = false;
                         if (this.hasDataAccess) {
-                            setTimeout(this.connectWebSocket, 3000); // Reconnect
+                            setTimeout(() => this.connectWebSocket(), 3000); // Reconnect
+                        }
+                    };
+                },
+                async refreshCurrentUserInfo() {
+                    if (!this.deviceId) return;
+                    try {
+                        const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ device_id: this.deviceId })
+                        });
+                        const data = await res.json();
+                        if (res.ok && data && data.version) {
+                            this.userInfo = data;
+                            if (['basic', 'advanced', 'flagship'].includes(data.version)) {
+                                this.accountCanApplyTrial = false;
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Failed to refresh user info', e);
+                    }
+                },
+                connectNotifyWebSocket() {
+                    if (!this.deviceId) return;
+                    if (this.notifySocket) {
+                        try { this.notifySocket.close(); } catch (e) {}
+                        this.notifySocket = null;
+                    }
+                    let wsBase = API_BASE_URL.replace(/^http/, 'ws');
+                    if (wsBase.startsWith('//')) wsBase = 'ws:' + wsBase;
+                    const wsUrl = `${wsBase}/ws/logs?channel=notify&device_id=${encodeURIComponent(this.deviceId)}`;
+                    const ws = new WebSocket(wsUrl);
+                    this.notifySocket = ws;
+
+                    ws.onopen = () => {
+                        this.notifyWsConnected = true;
+                    };
+
+                    ws.onmessage = async (event) => {
+                        let payload = null;
+                        try {
+                            payload = JSON.parse(event.data);
+                        } catch (e) {
+                            return;
+                        }
+                        if (!payload || !payload.event) return;
+
+                        if (payload.event === 'membership_approved') {
+                            this.showMsg(payload.message || '会员审批已通过，权益已生效', 'success');
+                            await this.refreshCurrentUserInfo();
+                            if (this.hasDataAccess) {
+                                if (!this.wsConnected) this.connectWebSocket();
+                                this.fetchData();
+                                this.fetchLimitUpPool();
+                                this.fetchMarketSentiment();
+                                this.fetchIndices();
+                            }
+                            if (this.showSubscriptionModal && this.purchaseStep === 3) {
+                                this.showSubscriptionModal = false;
+                                this.purchaseStep = 1;
+                            }
+                        } else if (payload.event === 'membership_rejected') {
+                            this.showMsg(payload.message || '订单审核未通过', 'error');
+                        }
+                    };
+
+                    ws.onclose = () => {
+                        this.notifyWsConnected = false;
+                        this.notifySocket = null;
+                        if (this.deviceId) {
+                            setTimeout(() => this.connectNotifyWebSocket(), 3000);
                         }
                     };
                 },
@@ -3426,6 +3509,9 @@
                 
                 // Init User
                 this.checkLogin().then(() => {
+                    if (this.deviceId) {
+                        this.connectNotifyWebSocket();
+                    }
                     if (this.hasDataAccess) {
                         this.fetchData();
                         this.fetchLimitUpPool();
@@ -3624,11 +3710,11 @@
 
         /* Keep permission mask fixed to the visible area while horizontal scrolling */
         .permission-mask {
-            position: sticky;
+            position: absolute;
             left: 0;
             top: 0;
             width: 100%;
-            min-height: 100%;
+            height: 100%;
         }
         
         /* Scrollbar Styling */

@@ -106,7 +106,69 @@ class LHBManager:
         except:
             return False
 
-    def fetch_and_update_data(self, logger=None, force_days=None):
+    def get_existing_dates(self):
+        if not LHB_FILE.exists():
+            return []
+        try:
+            df = pd.read_csv(LHB_FILE, dtype={'trade_date': str})
+            return sorted(df['trade_date'].astype(str).unique().tolist(), reverse=True)
+        except Exception:
+            return []
+
+    def get_trade_dates_between(self, start_date: str, end_date: str):
+        try:
+            start_dt = datetime.strptime(start_date, "%Y-%m-%d").date()
+            end_dt = datetime.strptime(end_date, "%Y-%m-%d").date()
+        except Exception:
+            return []
+
+        if start_dt > end_dt:
+            start_dt, end_dt = end_dt, start_dt
+
+        try:
+            hist_df = ak.tool_trade_date_hist_sina()
+            dates = hist_df['trade_date'].tolist()
+            in_range = [d for d in dates if start_dt <= d <= end_dt]
+            return [d.strftime('%Y-%m-%d') for d in in_range]
+        except Exception:
+            return []
+
+    def get_missing_dates(self, start_date: str, end_date: str):
+        target_dates = self.get_trade_dates_between(start_date, end_date)
+        if not target_dates:
+            return []
+        existing = set(self.get_existing_dates())
+        return [d for d in target_dates if d not in existing]
+
+    def get_summary(self, start_date: str = None, end_date: str = None):
+        existing_dates = self.get_existing_dates()
+        total_records = 0
+        if LHB_FILE.exists():
+            try:
+                df = pd.read_csv(LHB_FILE)
+                total_records = int(len(df))
+            except Exception:
+                total_records = 0
+
+        missing_dates = []
+        if start_date and end_date:
+            missing_dates = self.get_missing_dates(start_date, end_date)
+
+        return {
+            "is_syncing": bool(self.is_syncing),
+            "enabled": bool(self.config.get("enabled")),
+            "days": int(self.config.get("days", 0) or 0),
+            "min_amount": int(self.config.get("min_amount", 0) or 0),
+            "last_update": self.config.get("last_update"),
+            "total_records": total_records,
+            "available_dates": existing_dates,
+            "available_date_count": len(existing_dates),
+            "latest_date": existing_dates[0] if existing_dates else None,
+            "missing_dates": missing_dates,
+            "missing_count": len(missing_dates),
+        }
+
+    def fetch_and_update_data(self, logger=None, force_days=None, force_dates=None):
         def log(msg):
             if logger: logger(msg)
             print(msg)
@@ -118,7 +180,7 @@ class LHBManager:
         # Always reload config before sync to ensure we have latest settings (e.g. from other workers)
         self.load_config()
 
-        if not self.config['enabled']:
+        if not self.config['enabled'] and not force_dates:
             log("[LHB] 龙虎榜功能未开启，跳过更新。")
             return
 
@@ -126,23 +188,38 @@ class LHBManager:
         try:
             days = force_days if force_days is not None else self.config['days']
             min_amount = self.config['min_amount']
+            forced_trade_dates = []
+            if force_dates:
+                for item in force_dates:
+                    try:
+                        forced_trade_dates.append(datetime.strptime(str(item), '%Y-%m-%d').date())
+                    except Exception:
+                        continue
+                forced_trade_dates = sorted(set(forced_trade_dates))
             
-            desc = "最近1个" if days == 1 else f"最近 {days} 个"
-            log(f"[LHB] 开始同步{desc}交易日的龙虎榜数据...")
+            if force_dates:
+                trade_dates = forced_trade_dates
+                log(f"[LHB] 使用范围内缺失日期补齐，同步 {len(trade_dates)} 个交易日。")
+                if not trade_dates:
+                    log("[LHB] 范围内无有效交易日，跳过同步。")
+                    return
+            else:
+                desc = "最近1个" if days == 1 else f"最近 {days} 个"
+                log(f"[LHB] 开始同步{desc}交易日的龙虎榜数据...")
 
-            # 1. Get Trading Dates
-            end_date = datetime.now()
-            start_date = end_date - timedelta(days=days * 1.5 + 20) # Increase buffer
-            
-            try:
-                tool_trade_date_hist_sina_df = ak.tool_trade_date_hist_sina()
-                trade_dates = tool_trade_date_hist_sina_df['trade_date'].tolist()
-                # Filter dates
-                trade_dates = [d for d in trade_dates if d >= start_date.date() and d <= end_date.date()]
-                trade_dates = trade_dates[-days:] # Take last N trading days
-            except Exception as e:
-                log(f"[LHB] 获取交易日历失败: {e}")
-                return
+                # 1. Get Trading Dates
+                end_date = datetime.now()
+                start_date = end_date - timedelta(days=days * 1.5 + 20) # Increase buffer
+                
+                try:
+                    tool_trade_date_hist_sina_df = ak.tool_trade_date_hist_sina()
+                    trade_dates = tool_trade_date_hist_sina_df['trade_date'].tolist()
+                    # Filter dates
+                    trade_dates = [d for d in trade_dates if d >= start_date.date() and d <= end_date.date()]
+                    trade_dates = trade_dates[-days:] # Take last N trading days
+                except Exception as e:
+                    log(f"[LHB] 获取交易日历失败: {e}")
+                    return
 
             # 2. Load existing data
             existing_df = pd.DataFrame()

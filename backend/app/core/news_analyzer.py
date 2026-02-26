@@ -25,6 +25,26 @@ HEADERS = {
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "") # 请在环境变量中设置 DEEPSEEK_API_KEY
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
+
+def _build_usage_meta(result):
+    if not isinstance(result, dict):
+        return {}
+    usage = result.get("usage") or {}
+    if not isinstance(usage, dict):
+        usage = {}
+    prompt_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    completion_tokens = int(usage.get("completion_tokens", 0) or 0)
+    total_tokens = int(usage.get("total_tokens", 0) or (prompt_tokens + completion_tokens))
+    return {
+        "provider": "deepseek",
+        "model": result.get("model", "deepseek-chat"),
+        "usage": {
+            "prompt_tokens": max(0, prompt_tokens),
+            "completion_tokens": max(0, completion_tokens),
+            "total_tokens": max(0, total_tokens),
+        },
+    }
+
 def get_market_data(logger=None):
     """
     获取今日市场核心数据：涨停池、炸板池
@@ -529,7 +549,7 @@ def analyze_news_with_deepseek(news_batch, market_summary="", logger=None, mode=
                     raise ValueError("No JSON object found")
         
         # Save to Cache
-        ai_cache.set(cache_key, data)
+        ai_cache.set(cache_key, data, meta=_build_usage_meta(result))
         
         return data
     except Exception as e:
@@ -897,7 +917,7 @@ def analyze_single_stock(stock_data, logger=None, prompt_type='normal', api_key=
                     pass
 
             # Save to cache
-            ai_cache.set(cache_key, content)
+            ai_cache.set(cache_key, content, meta=_build_usage_meta(result))
             
             return content
         else:
@@ -1377,7 +1397,7 @@ def analyze_daily_lhb(date_str, lhb_data, logger=None, force_update=False):
         if response.status_code == 200:
             result = response.json()
             content = result['choices'][0]['message']['content']
-            ai_cache.set(cache_key, content)
+            ai_cache.set(cache_key, content, meta=_build_usage_meta(result))
             return content
         else:
             return f"分析失败: API Error {response.status_code}"

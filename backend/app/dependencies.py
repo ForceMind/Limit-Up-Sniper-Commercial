@@ -36,7 +36,7 @@ async def check_ai_permission(user: models.User = Depends(get_current_user)):
     
     return user
 
-async def check_raid_permission(user: models.User = Depends(get_current_user)):
+async def check_raid_permission(user: models.User = Depends(get_current_user), skip_quota: bool = False):
     """Check if user can use Mid-day Raid"""
     if user.version in ['trial', 'basic']:
         raise UpgradeRequired(detail="Raid feature requires Advanced version or above")
@@ -44,11 +44,11 @@ async def check_raid_permission(user: models.User = Depends(get_current_user)):
     if user.expires_at and user.expires_at < datetime.utcnow():
         raise UpgradeRequired(detail="License expired")
         
-    if not user_service.check_quota(user, 'raid'):
+    if not skip_quota and not user_service.check_quota(user, 'raid'):
          raise QuotaLimitExceeded(detail="Daily Raid limit reached")
     return user
 
-async def check_review_permission(user: models.User = Depends(get_current_user)):
+async def check_review_permission(user: models.User = Depends(get_current_user), skip_quota: bool = False):
     """Check if user can use Post-market Review"""
     if user.version in ['trial', 'basic']:
         raise UpgradeRequired(detail="Review feature requires Advanced version or above")
@@ -56,7 +56,7 @@ async def check_review_permission(user: models.User = Depends(get_current_user))
     if user.expires_at and user.expires_at < datetime.utcnow():
         raise UpgradeRequired(detail="License expired")
         
-    if not user_service.check_quota(user, 'review'):
+    if not skip_quota and not user_service.check_quota(user, 'review'):
          raise QuotaLimitExceeded(detail="Daily Review limit reached")
     return user
 

@@ -8,6 +8,7 @@ import os
 
 from app.db import schemas, database, models
 from app.core import user_service
+from app.core.runtime_logs import add_runtime_log
 
 router = APIRouter()
 
@@ -163,6 +164,7 @@ async def register(data: dict = Body(...), db: Session = Depends(get_db)):
     user.daily_review_count = 0
     db.commit()
     db.refresh(user)
+    add_runtime_log(f"[AUTH] Register success: username={username}, device={device_id}")
 
     return {
         "token": device_id,
@@ -189,6 +191,7 @@ async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
 
     device_id = account["device_id"]
     user = user_service.get_or_create_user(db, device_id)
+    add_runtime_log(f"[AUTH] Login success: username={username}, device={device_id}")
 
     return {
         "token": device_id,
@@ -279,6 +282,7 @@ async def apply_trial(
     user.daily_review_count = 0
     db.commit()
     db.refresh(user)
+    add_runtime_log(f"[AUTH] Trial applied: username={account_key}, device={x_device_id}")
 
     return {
         "status": "success",

@@ -2,6 +2,7 @@ import json
 import time
 import hashlib
 from pathlib import Path
+from typing import Any, Dict, Optional
 
 CACHE_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "ai_cache.json"
 
@@ -36,14 +37,17 @@ class AICache:
                 return entry.get('data')
         return None
 
-    def set(self, key, data):
+    def set(self, key, data, meta: Optional[Dict[str, Any]] = None):
         """
         Set cache data with current timestamp.
         """
-        self.cache[key] = {
+        entry = {
             'timestamp': int(time.time()),
             'data': data
         }
+        if isinstance(meta, dict) and meta:
+            entry['meta'] = meta
+        self.cache[key] = entry
         self._save_cache()
         
     def cleanup(self, max_age_seconds=604800):
@@ -62,6 +66,11 @@ class AICache:
         if key in self.cache:
             return self.cache[key].get('timestamp', 0)
         return 0
+
+    def get_entry(self, key):
+        if key in self.cache:
+            return self.cache.get(key) or {}
+        return {}
 
     @staticmethod
     def generate_key(content):

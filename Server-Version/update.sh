@@ -135,12 +135,6 @@ else
     # 验证 index.html 是否存在
     if [ -f "$APP_DIR/frontend/index.html" ]; then
         echo "前端 index.html 更新成功。"
-        # 可以尝试输出一些特征行来确认版本 (如 v2.5.1)
-        if grep -q "v2.5.1" "$APP_DIR/frontend/index.html"; then
-             echo -e "${GREEN}版本验证通过: 检测到 v2.5.1${NC}"
-        else
-             echo -e "${YELLOW}警告: 未在 index.html 中检测到 v2.5.1 标识，可能是旧文件?${NC}"
-        fi
     else
         echo -e "${RED}[错误] 前端文件更新失败: index.html 丢失!${NC}"
     fi

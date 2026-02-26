@@ -26,6 +26,7 @@
                 <button @click="currentView='dashboard'" :class="currentView=='dashboard'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">概览 & 配置</button>
                 <button @click="currentView='users'" :class="currentView=='users'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">用户管理</button>
                 <button @click="currentView='orders'" :class="currentView=='orders'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">订单管理</button>
+                <button @click="currentView='lhb'" :class="currentView=='lhb'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">龙虎榜管理</button>
                 <button @click="currentView='logs'" :class="currentView=='logs'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">系统日志</button>
             </nav>
             
@@ -114,23 +115,7 @@
 
                         <section>
                             <h3 class="text-lg font-semibold border-b pb-2 mb-4"> 龙虎榜设置</h3>
-                            <div class="space-y-4">
-                                <label class="flex items-center gap-3">
-                                    <input type="checkbox" v-model="config.lhb_enabled" class="w-5 h-5 text-blue-600">
-                                    <span>启用龙虎榜自动同步</span>
-                                </label>
-                                
-                                <div class="grid grid-cols-2 gap-4 pl-8">
-                                    <div>
-                                        <label class="block text-sm text-gray-600 mb-1">同步天数</label>
-                                        <input type="number" v-model="config.lhb_days" class="border rounded w-full px-2 py-1">
-                                    </div>
-                                    <div>
-                                        <label class="block text-sm text-gray-600 mb-1">最小上榜金额(万)</label>
-                                        <input type="number" v-model="config.lhb_min_amount" class="border rounded w-full px-2 py-1">
-                                    </div>
-                                </div>
-                            </div>
+                            <div class="text-sm text-gray-500">已迁移到左侧「龙虎榜管理」独立页签。</div>
                         </section>
 
                         <section class="mb-8 border-b border-gray-200 pb-8 bg-white p-6 rounded-lg shadow-sm">
@@ -300,17 +285,51 @@
                     </div>
 
                      <!-- AI Cache -->
-                    <div v-if="activeLogTab === 'ai_cache'" class="flex-1 bg-white rounded shadow p-4 text-sm overflow-auto">
-                        <div class="mb-4 flex gap-4 items-center">
-                            <span class="font-bold text-lg">缓存统计</span>
-                            <span class="bg-blue-100 text-blue-800 px-2 py-1 rounded text-xs">Total Items: {{ aiCacheStats.total_keys }}</span>
+                    <div v-if="activeLogTab === 'ai_cache'" class="flex-1 bg-white rounded shadow p-4 text-sm overflow-auto space-y-4">
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">缓存条目</div>
+                                <div class="text-lg font-bold">{{ aiCacheStats.total_keys || 0 }}</div>
+                            </div>
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">输入 Token</div>
+                                <div class="text-lg font-bold text-blue-700">{{ (aiCacheStats.totals && aiCacheStats.totals.input_tokens) || 0 }}</div>
+                            </div>
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">输出 Token</div>
+                                <div class="text-lg font-bold text-emerald-700">{{ (aiCacheStats.totals && aiCacheStats.totals.output_tokens) || 0 }}</div>
+                            </div>
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">累计成本 (¥)</div>
+                                <div class="text-lg font-bold text-red-600">{{ ((aiCacheStats.totals && aiCacheStats.totals.total_cost_cny) || 0).toFixed(6) }}</div>
+                            </div>
                         </div>
-                        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-2">
-                             <div v-for="key in aiCacheStats.keys" :key="key" class="border p-2 rounded text-xs truncate bg-gray-50 cursor-pointer hover:bg-gray-100 text-gray-600" :title="key">
-                                {{ key }}
-                             </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <div class="space-y-2 max-h-[58vh] overflow-auto pr-1">
+                                <div
+                                    v-for="item in aiCacheStats.items || []"
+                                    :key="item.key"
+                                    @click="openCacheItem(item.key)"
+                                    class="border rounded p-2 cursor-pointer hover:bg-blue-50"
+                                >
+                                    <div class="text-xs font-mono text-gray-700 truncate" :title="item.key">{{ item.key }}</div>
+                                    <div class="text-xs text-gray-500 mt-1">in: {{ item.usage.prompt_tokens }} / out: {{ item.usage.completion_tokens }} / ¥{{ Number(item.cost_cny || 0).toFixed(6) }}</div>
+                                    <div class="text-xs text-gray-400 truncate mt-1" :title="item.preview">{{ item.preview }}</div>
+                                </div>
+                                <div v-if="!aiCacheStats.items || aiCacheStats.items.length === 0" class="text-gray-400">暂无缓存数据</div>
+                            </div>
+
+                            <div class="border rounded p-3 bg-gray-50 min-h-[220px]">
+                                <div class="font-bold mb-2">缓存内容详情</div>
+                                <div v-if="!aiCacheDetail" class="text-gray-400 text-sm">点击左侧任意缓存条目查看内容。</div>
+                                <div v-else class="space-y-2">
+                                    <div class="text-xs font-mono break-all text-gray-700">{{ aiCacheDetail.key }}</div>
+                                    <div class="text-xs text-gray-500">成本: ¥{{ Number(aiCacheDetail.cost_cny || 0).toFixed(6) }}</div>
+                                    <pre class="text-xs bg-white border rounded p-2 overflow-auto max-h-[46vh]">{{ formatJSON(aiCacheDetail.data) }}</pre>
+                                </div>
+                            </div>
                         </div>
-                         <div v-if="!aiCacheStats.keys || aiCacheStats.keys.length === 0" class="text-gray-400">暂无缓存数据</div>
                     </div>
 
                     <div class="flex justify-end gap-2">
@@ -385,7 +404,30 @@
                 <div v-if="currentView === 'orders'" class="max-w-6xl mx-auto">
                     <div class="flex justify-between items-center mb-6">
                         <h2 class="text-2xl font-bold">订单管理</h2>
-                        <button @click="fetchOrders" class="text-blue-500 hover:text-blue-700">刷新</button>
+                        <button @click="fetchOrders(); fetchOrderStats()" class="text-blue-500 hover:text-blue-700">刷新</button>
+                    </div>
+
+                    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                        <div class="bg-white border rounded p-3">
+                            <div class="text-xs text-gray-500">总金额</div>
+                            <div class="text-lg font-bold text-red-600">¥{{ Number(orderStats.total_amount || 0).toFixed(2) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-3">
+                            <div class="text-xs text-gray-500">已完成金额</div>
+                            <div class="text-lg font-bold text-emerald-600">¥{{ Number(orderStats.completed_amount || 0).toFixed(2) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-3">
+                            <div class="text-xs text-gray-500">待审核金额</div>
+                            <div class="text-lg font-bold text-blue-600">¥{{ Number(orderStats.waiting_amount || 0).toFixed(2) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-3">
+                            <div class="text-xs text-gray-500">待支付金额</div>
+                            <div class="text-lg font-bold text-amber-600">¥{{ Number(orderStats.pending_amount || 0).toFixed(2) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-3">
+                            <div class="text-xs text-gray-500">订单总数</div>
+                            <div class="text-lg font-bold text-gray-700">{{ orderStats.total_orders || 0 }}</div>
+                        </div>
                     </div>
 
                     <div class="bg-white rounded shadow overflow-hidden">
@@ -427,6 +469,119 @@
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+
+                <!-- LHB Management -->
+                <div v-if="currentView === 'lhb'" class="max-w-7xl mx-auto space-y-4">
+                    <div class="flex flex-wrap items-end justify-between gap-3">
+                        <h2 class="text-2xl font-bold">龙虎榜管理</h2>
+                        <div class="flex items-end gap-2">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">开始日期</label>
+                                <input type="date" v-model="lhbRange.start_date" class="border rounded px-2 py-1 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">结束日期</label>
+                                <input type="date" v-model="lhbRange.end_date" class="border rounded px-2 py-1 text-sm">
+                            </div>
+                            <button @click="fetchLHBOverview" class="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-2 rounded text-sm">刷新</button>
+                            <button @click="syncLHBMissing" :disabled="lhbSyncing" class="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded text-sm disabled:opacity-50">
+                                {{ lhbSyncing ? '同步中...' : '一键补齐缺失' }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="bg-white border rounded p-4 flex flex-wrap items-end gap-4">
+                        <label class="flex items-center gap-2 text-sm">
+                            <input type="checkbox" v-model="lhbSettings.enabled">
+                            <span>启用自动同步</span>
+                        </label>
+                        <div>
+                            <div class="text-xs text-gray-500 mb-1">默认同步天数</div>
+                            <input type="number" v-model.number="lhbSettings.days" class="border rounded px-2 py-1 w-28 text-sm">
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500 mb-1">最小上榜金额</div>
+                            <input type="number" v-model.number="lhbSettings.min_amount" class="border rounded px-2 py-1 w-40 text-sm">
+                        </div>
+                        <button @click="saveLHBSettings" class="bg-gray-900 hover:bg-black text-white px-4 py-2 rounded text-sm">保存设置</button>
+                    </div>
+
+                    <div class="bg-white border rounded p-4 grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+                        <div>
+                            <div class="text-xs text-gray-500">总记录数</div>
+                            <div class="text-lg font-bold">{{ lhbOverview.total_records || 0 }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500">已同步交易日</div>
+                            <div class="text-lg font-bold">{{ lhbOverview.available_date_count || 0 }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500">缺失交易日</div>
+                            <div class="text-lg font-bold text-red-600">{{ lhbOverview.missing_count || 0 }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500">最新日期</div>
+                            <div class="text-lg font-bold text-blue-600">{{ lhbOverview.latest_date || '-' }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500">同步状态</div>
+                            <div class="text-lg font-bold" :class="lhbOverview.is_syncing ? 'text-amber-600' : 'text-emerald-600'">
+                                {{ lhbOverview.is_syncing ? '运行中' : '空闲' }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div class="bg-white border rounded p-4">
+                            <h3 class="font-bold mb-2">缺失日期</h3>
+                            <div v-if="!lhbOverview.missing_dates || lhbOverview.missing_dates.length === 0" class="text-sm text-gray-400">所选范围内没有缺失日期</div>
+                            <div v-else class="max-h-72 overflow-auto space-y-1">
+                                <div v-for="d in lhbOverview.missing_dates" :key="d" class="text-xs font-mono px-2 py-1 border rounded bg-red-50 text-red-700">
+                                    {{ d }}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <h3 class="font-bold mb-2">服务器已有日期（点击查看）</h3>
+                            <div v-if="!lhbOverview.available_dates || lhbOverview.available_dates.length === 0" class="text-sm text-gray-400">暂无数据</div>
+                            <div v-else class="max-h-72 overflow-auto space-y-1">
+                                <button
+                                    v-for="d in lhbOverview.available_dates"
+                                    :key="d"
+                                    @click="selectLHBDate(d)"
+                                    class="w-full text-left text-xs font-mono px-2 py-1 border rounded hover:bg-blue-50"
+                                    :class="lhbDate === d ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-gray-50 text-gray-700'"
+                                >{{ d }}</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white border rounded p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="font-bold">日期明细: {{ lhbDate || '-' }}</h3>
+                            <button @click="fetchLHBDateData" :disabled="!lhbDate" class="text-sm px-3 py-1 border rounded hover:bg-gray-50 disabled:opacity-40">刷新</button>
+                        </div>
+                        <div v-if="!lhbDateData || lhbDateData.length === 0" class="text-sm text-gray-400">当前日期暂无数据</div>
+                        <div v-else class="max-h-[420px] overflow-auto">
+                            <table class="w-full text-sm text-left">
+                                <thead class="bg-gray-50 text-gray-500 sticky top-0">
+                                    <tr>
+                                        <th class="p-2">代码</th>
+                                        <th class="p-2">名称</th>
+                                        <th class="p-2">席位数</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    <tr v-for="item in lhbDateData" :key="item.code">
+                                        <td class="p-2 font-mono">{{ item.code }}</td>
+                                        <td class="p-2">{{ item.name }}</td>
+                                        <td class="p-2">{{ item.seats ? item.seats.length : 0 }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
                 </div>
 
@@ -499,6 +654,7 @@
                     config: {},
                     users: [],
                     orders: [],
+                    orderStats: {},
                     msgModal: { show: false, msg: '', type: 'info' },
                     msgTimer: null,
                     confirmModal: { show: false, msg: '', resolve: null },
@@ -508,18 +664,38 @@
                     sysLogs: [],
                     loginLogs: [],
                     aiCacheStats: {},
+                    aiCacheDetail: null,
                     watchlistStats: [],
+                    // LHB Admin
+                    lhbRange: {
+                        start_date: '',
+                        end_date: ''
+                    },
+                    lhbOverview: {},
+                    lhbDate: '',
+                    lhbDateData: [],
+                    lhbSyncing: false,
+                    lhbSettings: {
+                        enabled: false,
+                        days: 30,
+                        min_amount: 10000000
+                    },
                     // Admin Account
                     newAdminPassword: '',
                     passwordMsg: ''
                 }
             },
             mounted() {
+                const today = new Date();
+                const start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+                this.lhbRange.start_date = start.toISOString().slice(0, 10);
+                this.lhbRange.end_date = today.toISOString().slice(0, 10);
                 if (this.token) {
                     this.fetchConfig();
                     // Pre-fetch
                     this.fetchUsers();
                     this.fetchOrders();
+                    this.fetchOrderStats();
                     this.fetchWatchlistStats();
                 }
             },
@@ -529,8 +705,12 @@
                         this.fetchUsers();
                         this.fetchWatchlistStats();
                     }
-                    if (val === 'orders') this.fetchOrders();
+                    if (val === 'orders') {
+                        this.fetchOrders();
+                        this.fetchOrderStats();
+                    }
                     if (val === 'logs') this.fetchLogs('system');
+                    if (val === 'lhb') this.fetchLHBOverview();
                 }
             },
             methods: {
@@ -592,6 +772,7 @@
                         this.fetchConfig();
                         this.fetchUsers();
                         this.fetchOrders();
+                        this.fetchOrderStats();
                         this.fetchWatchlistStats();
                     } catch (e) {
                         this.showMsg(e.message || '登录失败', 'error');
@@ -611,7 +792,10 @@
                             
                             if (type === 'system') this.sysLogs = data.logs || [];
                             else if (type === 'login') this.loginLogs = data;
-                            else if (type === 'ai_cache') this.aiCacheStats = data;
+                            else if (type === 'ai_cache') {
+                                this.aiCacheStats = data || {};
+                                this.aiCacheDetail = null;
+                            }
                         } catch (e) {
                             console.error("Fetch Logs Error:", e);
                         }
@@ -708,6 +892,118 @@
                         this.orders = await res.json();
                     } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
                 },
+                async fetchOrderStats() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/orders/stats', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`Order Stats Load Failed: ${res.status}`);
+                        this.orderStats = await res.json();
+                    } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
+                },
+                async openCacheItem(key) {
+                    if (!key) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + `/api/admin/monitor/ai_cache/item?key=${encodeURIComponent(key)}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`Cache Item Load Failed: ${res.status}`);
+                        this.aiCacheDetail = await res.json();
+                    } catch (e) {
+                        this.showMsg(e.message || '加载缓存内容失败', 'error');
+                    }
+                },
+                formatJSON(data) {
+                    try {
+                        return JSON.stringify(data, null, 2);
+                    } catch (e) {
+                        return String(data ?? '');
+                    }
+                },
+                async fetchLHBOverview() {
+                    try {
+                        const qs = new URLSearchParams({
+                            start_date: this.lhbRange.start_date || '',
+                            end_date: this.lhbRange.end_date || ''
+                        }).toString();
+                        const res = await fetch(API_BASE_URL + `/api/admin/lhb/overview?${qs}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`LHB Overview Load Failed: ${res.status}`);
+                        const data = await res.json();
+                        const overview = (data && data.data) ? data.data : {};
+                        this.lhbOverview = overview;
+                        this.lhbSettings.enabled = !!overview.enabled;
+                        this.lhbSettings.days = Number(overview.days || 0);
+                        this.lhbSettings.min_amount = Number(overview.min_amount || 0);
+                        if (!this.lhbDate && overview.available_dates && overview.available_dates.length > 0) {
+                            this.selectLHBDate(overview.available_dates[0]);
+                        }
+                    } catch (e) {
+                        this.showMsg(e.message || '加载龙虎榜概览失败', 'error');
+                    }
+                },
+                async saveLHBSettings() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/lhb/settings', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                enabled: !!this.lhbSettings.enabled,
+                                days: Number(this.lhbSettings.days || 0),
+                                min_amount: Number(this.lhbSettings.min_amount || 0)
+                            })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '保存失败');
+                        this.showMsg('龙虎榜设置已保存', 'success');
+                        this.fetchLHBOverview();
+                    } catch (e) {
+                        this.showMsg(e.message || '保存失败', 'error');
+                    }
+                },
+                selectLHBDate(date) {
+                    this.lhbDate = date;
+                    this.fetchLHBDateData();
+                },
+                async fetchLHBDateData() {
+                    if (!this.lhbDate) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + `/api/admin/lhb/date_data?date=${encodeURIComponent(this.lhbDate)}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`LHB Date Load Failed: ${res.status}`);
+                        const data = await res.json();
+                        this.lhbDateData = Array.isArray(data.data) ? data.data : [];
+                    } catch (e) {
+                        this.showMsg(e.message || '加载日期明细失败', 'error');
+                    }
+                },
+                async syncLHBMissing() {
+                    if (this.lhbSyncing) return;
+                    this.lhbSyncing = true;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/lhb/sync_missing', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                start_date: this.lhbRange.start_date,
+                                end_date: this.lhbRange.end_date
+                            })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (res.ok) {
+                            if (data.status === 'no_missing') this.showMsg('所选范围没有缺失数据', 'info');
+                            else if (data.status === 'busy') this.showMsg('后台正在同步，请稍后再试', 'info');
+                            else this.showMsg(`已启动补齐任务，缺失 ${data.missing_dates ? data.missing_dates.length : 0} 天`, 'success');
+                            this.fetchLHBOverview();
+                        } else {
+                            throw new Error(data.detail || '同步失败');
+                        }
+                    } catch (e) {
+                        this.showMsg(e.message || '同步失败', 'error');
+                    } finally {
+                        this.lhbSyncing = false;
+                    }
+                },
 
                 async fetchWatchlistStats() {
                     try {
@@ -767,6 +1063,7 @@
                         if (data.status === 'success' || data.status === 'rejected') {
                             this.showMsg('操作成功', 'success');
                             this.fetchOrders();
+                            this.fetchOrderStats();
                             this.fetchUsers(); // Refresh users too as one might have updated
                         } else {
                             this.showMsg(data.detail || '操作失败', 'error');

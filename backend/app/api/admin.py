@@ -1,7 +1,8 @@
-from fastapi import APIRouter, Depends, HTTPException, Header
+from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks
 from sqlalchemy.orm import Session
+from sqlalchemy import func
 from app.db import models, schemas, database
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 import secrets
 import os
 import json
@@ -11,6 +12,9 @@ from app.core.config_manager import SYSTEM_CONFIG, save_config
 from app.core.lhb_manager import lhb_manager
 from app.core import user_service, purchase_manager
 from app.core import watchlist_stats
+from app.core.ai_cache import ai_cache
+from app.core.runtime_logs import get_runtime_logs, add_runtime_log
+from app.core.ws_hub import ws_hub
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 
@@ -150,6 +154,7 @@ async def admin_login(data: AdminLoginSchema, request_ip: str = Header(None, ali
     if username != cred.get("username") or not _verify_admin_password(password, cred):
         attempts.append(now_ts)
         failed_attempts[client_ip] = attempts
+        add_runtime_log(f"[ADMIN] Login failed from ip={client_ip}, username={username}")
         raise HTTPException(status_code=403, detail="用户名或密码错误")
 
     # Success, reset failed attempts
@@ -166,6 +171,7 @@ async def admin_login(data: AdminLoginSchema, request_ip: str = Header(None, ali
         "ip": client_ip,
     }
     _save_sessions(sessions)
+    add_runtime_log(f"[ADMIN] Login success: ip={client_ip}, username={cred.get('username')}")
 
     return {
         "status": "success",
@@ -261,6 +267,47 @@ async def list_orders(status: str = None, skip: int = 0, limit: int = 100, db: S
     return orders
 
 
+@router.get("/orders/stats")
+async def order_stats(db: Session = Depends(get_db), authorized: bool = Depends(verify_admin)):
+    rows = (
+        db.query(
+            models.PurchaseOrder.status,
+            func.count(models.PurchaseOrder.id),
+            func.coalesce(func.sum(models.PurchaseOrder.amount), 0.0),
+        )
+        .group_by(models.PurchaseOrder.status)
+        .all()
+    )
+
+    stats_by_status: Dict[str, Dict[str, float]] = {}
+    total_orders = 0
+    total_amount = 0.0
+    for status, count, amount in rows:
+        c = int(count or 0)
+        a = float(amount or 0.0)
+        stats_by_status[str(status)] = {
+            "count": c,
+            "amount": round(a, 2),
+        }
+        total_orders += c
+        total_amount += a
+
+    completed_amount = float(stats_by_status.get("completed", {}).get("amount", 0.0))
+    waiting_amount = float(stats_by_status.get("waiting_verification", {}).get("amount", 0.0))
+    pending_amount = float(stats_by_status.get("pending", {}).get("amount", 0.0))
+    rejected_amount = float(stats_by_status.get("rejected", {}).get("amount", 0.0))
+
+    return {
+        "total_orders": total_orders,
+        "total_amount": round(total_amount, 2),
+        "completed_amount": round(completed_amount, 2),
+        "waiting_amount": round(waiting_amount, 2),
+        "pending_amount": round(pending_amount, 2),
+        "rejected_amount": round(rejected_amount, 2),
+        "by_status": stats_by_status,
+    }
+
+
 @router.post("/orders/approve")
 async def approve_order(
     action: schemas.AdminOrderAction,
@@ -274,6 +321,13 @@ async def approve_order(
     if action.action == "reject":
         order.status = "rejected"
         db.commit()
+        add_runtime_log(f"[ORDER] Rejected order={order.order_code}")
+        await ws_hub.push_device_event(order.user.device_id, {
+            "event": "membership_rejected",
+            "order_code": order.order_code,
+            "status": "rejected",
+            "message": "订单审核未通过，请联系管理员或重新提交。",
+        })
         return {"status": "rejected"}
 
     if order.status == "completed":
@@ -316,6 +370,18 @@ async def approve_order(
 
     order.status = "completed"
     db.commit()
+    add_runtime_log(
+        f"[ORDER] Approved order={order.order_code}, device={user.device_id}, version={user.version}, bonus_days={bonus_days}"
+    )
+    await ws_hub.push_device_event(user.device_id, {
+        "event": "membership_approved",
+        "order_code": order.order_code,
+        "status": "completed",
+        "version": user.version,
+        "expires_at": user.expires_at.isoformat() if user.expires_at else None,
+        "bonus_days": int(bonus_days),
+        "message": "会员审批已通过，权益已生效。",
+    })
 
     return {
         "status": "success",
@@ -410,18 +476,69 @@ async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depe
 
 
 # --- Logs & Monitor ---
-@router.get("/logs/system")
-async def get_system_logs(lines: int = 100, authorized: bool = Depends(verify_admin)):
-    log_file = BASE_DIR / "app.log"
-    if not log_file.exists():
-        return {"logs": ["Log file not found."]}
-
+def _tail_file_lines(path: Path, max_lines: int) -> List[str]:
+    if not path.exists():
+        return []
     try:
-        with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
-            all_lines = f.readlines()
-            return {"logs": all_lines[-lines:]}
-    except Exception as e:
-        return {"logs": [f"Error reading logs: {str(e)}"]}
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            all_lines = [x.rstrip("\n") for x in f.readlines()]
+        return all_lines[-max_lines:]
+    except Exception:
+        return []
+
+
+def _safe_float(v: Any) -> float:
+    try:
+        return float(v or 0)
+    except Exception:
+        return 0.0
+
+
+def _safe_int(v: Any) -> int:
+    try:
+        return int(v or 0)
+    except Exception:
+        return 0
+
+
+def _ai_usage_from_entry(entry: Dict[str, Any]) -> Dict[str, int]:
+    meta = entry.get("meta") or {}
+    usage = meta.get("usage") if isinstance(meta, dict) else {}
+    if not isinstance(usage, dict):
+        usage = {}
+    prompt_tokens = max(0, _safe_int(usage.get("prompt_tokens", 0)))
+    completion_tokens = max(0, _safe_int(usage.get("completion_tokens", 0)))
+    total_tokens = max(0, _safe_int(usage.get("total_tokens", prompt_tokens + completion_tokens)))
+    return {
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": total_tokens,
+    }
+
+
+def _preview_data(data: Any, max_chars: int = 180) -> str:
+    try:
+        if isinstance(data, (dict, list)):
+            raw = json.dumps(data, ensure_ascii=False)
+        else:
+            raw = str(data)
+    except Exception:
+        raw = str(data)
+    if len(raw) <= max_chars:
+        return raw
+    return raw[:max_chars] + "..."
+
+
+@router.get("/logs/system")
+async def get_system_logs(lines: int = 200, authorized: bool = Depends(verify_admin)):
+    safe_lines = max(20, min(int(lines or 200), 2000))
+    file_logs = _tail_file_lines(BASE_DIR / "app.log", safe_lines)
+    runtime_logs = get_runtime_logs(limit=safe_lines)
+
+    merged = (file_logs + runtime_logs)[-safe_lines:]
+    if not merged:
+        merged = ["No system logs yet."]
+    return {"logs": merged}
 
 
 @router.get("/logs/login")
@@ -439,9 +556,171 @@ async def get_login_logs(authorized: bool = Depends(verify_admin)):
 
 
 @router.get("/monitor/ai_cache")
-async def get_ai_cache_stats(authorized: bool = Depends(verify_admin)):
-    from app.core.ai_cache import ai_cache
+async def get_ai_cache_stats(limit: int = 100, authorized: bool = Depends(verify_admin)):
+    safe_limit = max(20, min(int(limit or 100), 500))
+    all_items = []
+    for key, entry in ai_cache.cache.items():
+        if not isinstance(entry, dict):
+            continue
+        usage = _ai_usage_from_entry(entry)
+        prompt_tokens = usage["prompt_tokens"]
+        completion_tokens = usage["completion_tokens"]
+        input_cost = (prompt_tokens / 1_000_000.0) * 2.0
+        output_cost = (completion_tokens / 1_000_000.0) * 3.0
+        all_items.append({
+            "key": key,
+            "timestamp": _safe_int(entry.get("timestamp", 0)),
+            "usage": usage,
+            "cost_cny": round(input_cost + output_cost, 6),
+            "preview": _preview_data(entry.get("data")),
+        })
+
+    all_items.sort(key=lambda x: x["timestamp"], reverse=True)
+    recent_items = all_items[:safe_limit]
+
+    total_input_tokens = sum(x["usage"]["prompt_tokens"] for x in all_items)
+    total_output_tokens = sum(x["usage"]["completion_tokens"] for x in all_items)
+    total_cost = (total_input_tokens / 1_000_000.0) * 2.0 + (total_output_tokens / 1_000_000.0) * 3.0
+
     return {
         "total_keys": len(ai_cache.cache),
-        "keys": list(ai_cache.cache.keys())[-50:]
+        "visible_keys": len(recent_items),
+        "pricing": {
+            "input_per_million_cny": 2.0,
+            "output_per_million_cny": 3.0,
+        },
+        "totals": {
+            "input_tokens": total_input_tokens,
+            "output_tokens": total_output_tokens,
+            "total_cost_cny": round(total_cost, 6),
+        },
+        "items": recent_items,
+    }
+
+
+@router.get("/monitor/ai_cache/item")
+async def get_ai_cache_item(key: str, authorized: bool = Depends(verify_admin)):
+    cache_key = (key or "").strip()
+    if not cache_key:
+        raise HTTPException(status_code=400, detail="Missing key")
+    entry = ai_cache.get_entry(cache_key)
+    if not entry:
+        raise HTTPException(status_code=404, detail="Cache key not found")
+
+    usage = _ai_usage_from_entry(entry)
+    prompt_tokens = usage["prompt_tokens"]
+    completion_tokens = usage["completion_tokens"]
+    total_cost = (prompt_tokens / 1_000_000.0) * 2.0 + (completion_tokens / 1_000_000.0) * 3.0
+
+    return {
+        "key": cache_key,
+        "timestamp": _safe_int(entry.get("timestamp", 0)),
+        "meta": entry.get("meta", {}),
+        "usage": usage,
+        "cost_cny": round(total_cost, 6),
+        "data": entry.get("data"),
+    }
+
+
+# --- LHB Admin ---
+class AdminLHBRangeRequest(BaseModel):
+    start_date: str
+    end_date: str
+
+
+class AdminLHBSettingsRequest(BaseModel):
+    enabled: bool
+    days: int
+    min_amount: int
+
+
+@router.get("/lhb/overview")
+async def get_lhb_overview(
+    start_date: str = "",
+    end_date: str = "",
+    authorized: bool = Depends(verify_admin),
+):
+    lhb_manager.load_config()
+    s = (start_date or "").strip()
+    e = (end_date or "").strip()
+    if not s or not e:
+        today = datetime.utcnow().date()
+        s = (today - timedelta(days=30)).strftime("%Y-%m-%d")
+        e = today.strftime("%Y-%m-%d")
+    return {
+        "status": "success",
+        "data": lhb_manager.get_summary(start_date=s, end_date=e),
+        "range": {"start_date": s, "end_date": e},
+    }
+
+
+@router.post("/lhb/settings")
+async def update_lhb_settings(
+    payload: AdminLHBSettingsRequest,
+    authorized: bool = Depends(verify_admin),
+):
+    lhb_manager.update_settings(payload.enabled, payload.days, payload.min_amount)
+    add_runtime_log(
+        f"[LHB] Updated settings: enabled={payload.enabled}, days={payload.days}, min_amount={payload.min_amount}"
+    )
+    return {"status": "success", "config": lhb_manager.config}
+
+
+@router.get("/lhb/date_data")
+async def get_lhb_date_data(date: str, authorized: bool = Depends(verify_admin)):
+    date_str = (date or "").strip()
+    if not date_str:
+        raise HTTPException(status_code=400, detail="Missing date")
+    return {
+        "status": "success",
+        "date": date_str,
+        "data": lhb_manager.get_daily_data(date_str),
+    }
+
+
+@router.post("/lhb/sync_missing")
+async def sync_lhb_missing(
+    payload: AdminLHBRangeRequest,
+    background_tasks: BackgroundTasks,
+    authorized: bool = Depends(verify_admin),
+):
+    start_date = (payload.start_date or "").strip()
+    end_date = (payload.end_date or "").strip()
+    if not start_date or not end_date:
+        raise HTTPException(status_code=400, detail="Missing date range")
+
+    try:
+        datetime.strptime(start_date, "%Y-%m-%d")
+        datetime.strptime(end_date, "%Y-%m-%d")
+    except Exception:
+        raise HTTPException(status_code=400, detail="Date format must be YYYY-MM-DD")
+
+    missing_dates = lhb_manager.get_missing_dates(start_date, end_date)
+    if not missing_dates:
+        return {
+            "status": "no_missing",
+            "message": "No missing LHB dates in selected range.",
+            "missing_dates": [],
+        }
+
+    if lhb_manager.is_syncing:
+        return {
+            "status": "busy",
+            "message": "LHB sync is already running.",
+            "missing_dates": missing_dates,
+        }
+
+    add_runtime_log(
+        f"[LHB] Start missing-date sync: {start_date} ~ {end_date}, count={len(missing_dates)}"
+    )
+    background_tasks.add_task(
+        lhb_manager.fetch_and_update_data,
+        add_runtime_log,
+        None,
+        missing_dates,
+    )
+    return {
+        "status": "started",
+        "message": "Missing-date sync started.",
+        "missing_dates": missing_dates,
     }

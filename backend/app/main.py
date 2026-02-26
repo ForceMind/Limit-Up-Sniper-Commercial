@@ -21,6 +21,8 @@ from app.core.data_provider import data_provider
 from app.core.lhb_manager import lhb_manager
 from app.core.ai_cache import ai_cache
 from app.core.config_manager import SYSTEM_CONFIG, save_config, DEFAULT_SCHEDULE
+from app.core.ws_hub import ws_hub
+from app.core.runtime_logs import add_runtime_log
 from app.api import auth, admin, payment
 from app.db import database, models
 from app.dependencies import get_current_user, check_ai_permission, check_raid_permission, check_review_permission, check_data_permission, QuotaLimitExceeded, UpgradeRequired
@@ -52,27 +54,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# WebSocket Manager
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: List[WebSocket] = []
-
-    async def connect(self, websocket: WebSocket):
-        await websocket.accept()
-        self.active_connections.append(websocket)
-
-    def disconnect(self, websocket: WebSocket):
-        self.active_connections.remove(websocket)
-
-    async def broadcast(self, message: str):
-        for connection in self.active_connections:
-            try:
-                await connection.send_text(message)
-            except:
-                pass
-
-manager = ConnectionManager()
 
 @app.get("/api/status")
 async def get_system_status():
@@ -514,12 +495,19 @@ def refresh_watchlist():
 
 @app.websocket("/ws/logs")
 async def websocket_endpoint(websocket: WebSocket):
-    await manager.connect(websocket)
+    channel = (websocket.query_params.get("channel") or "logs").strip().lower()
+    device_id = (websocket.query_params.get("device_id") or "").strip()
+    if channel not in ("logs", "notify"):
+        channel = "logs"
+    if channel == "notify" and not device_id:
+        channel = "logs"
+
+    await ws_hub.register(websocket, channel=channel, device_id=device_id)
     try:
         while True:
-            await websocket.receive_text() # Keep connection open
+            await websocket.receive_text()  # Keep connection open
     except WebSocketDisconnect:
-        manager.disconnect(websocket)
+        await ws_hub.unregister(websocket, channel=channel, device_id=device_id)
 
 @app.get("/api/search")
 async def search_stock(q: str, user: models.User = Depends(check_data_permission)):
@@ -687,7 +675,7 @@ async def log_broadcaster():
         try:
             # 非阻塞获取
             msg = log_queue.get_nowait()
-            await manager.broadcast(msg)
+            await ws_hub.broadcast_log(msg)
         except queue.Empty:
             await asyncio.sleep(0.1)
 
@@ -734,6 +722,7 @@ async def startup_event():
     
     # Update base info (CircMV etc) on startup
     print("Startup: Updating base stock info...")
+    add_runtime_log("Startup: Updating base stock info...")
     await asyncio.to_thread(data_provider.update_base_info)
     
     asyncio.create_task(log_broadcaster())
@@ -748,6 +737,7 @@ async def startup_event():
     
     # 启动时立即执行一次盘中扫描，确保列表不为空
     print("Startup: Running initial intraday scan...")
+    add_runtime_log("Startup: Running initial intraday scan...")
     asyncio.create_task(run_initial_scan())
 
 async def periodic_cleanup_task():
@@ -988,12 +978,17 @@ async def scheduler_loop():
 
 def thread_logger(msg):
     """线程安全的 logger"""
+    add_runtime_log(msg)
     log_queue.put(msg)
 
 # Global Cache Timer
 LAST_ANALYSIS_TIME = {
     "mid_day": datetime.min,
     "after_hours": datetime.min
+}
+ANALYSIS_TRIGGER_LOCKS = {
+    "mid_day": asyncio.Lock(),
+    "after_hours": asyncio.Lock()
 }
 
 @app.post("/api/analyze")
@@ -1009,27 +1004,37 @@ async def run_analysis(
     limit_type = 'raid' if mode in ["intraday", "intraday_monitor"] else 'review'
     
     if limit_type == 'raid':
-        await check_raid_permission(user)
+        await check_raid_permission(user, skip_quota=True)
     else:
-        await check_review_permission(user)
-        
-    user_service.consume_quota(db, user, limit_type)
+        await check_review_permission(user, skip_quota=True)
     
-    # 2. 缓存检查 (5分钟)
-    # Map mode string
+    # 2. 缓存检查 (5分钟) + 并发互斥，避免重复扣费和重复触发
     cache_key = "mid_day" if limit_type == 'raid' else "after_hours"
-    last_time = LAST_ANALYSIS_TIME.get(cache_key, datetime.min)
-    
-    if (datetime.now() - last_time).total_seconds() < 300:
-        return {"status": "success", "message": f"Returning cached {mode} data (updated {int((datetime.now() - last_time).total_seconds())}s ago)"}
+    lock = ANALYSIS_TRIGGER_LOCKS[cache_key]
+    async with lock:
+        last_time = LAST_ANALYSIS_TIME.get(cache_key, datetime.min)
+        seconds_since_last = int((datetime.now() - last_time).total_seconds())
+        if seconds_since_last < 300:
+            thread_logger(f"[Cache] {mode} 5分钟缓存命中，复用最近结果（{seconds_since_last}s 前）")
+            return {
+                "status": "success",
+                "cached": True,
+                "seconds_since_last": seconds_since_last,
+                "message": f"Returning cached {mode} data (updated {seconds_since_last}s ago)"
+            }
 
-    # 3. 执行新的分析
-    LAST_ANALYSIS_TIME[cache_key] = datetime.now()
+        # 3. 执行新的分析
+        if limit_type == 'raid':
+            await check_raid_permission(user)
+        else:
+            await check_review_permission(user)
+        user_service.consume_quota(db, user, limit_type)
+        LAST_ANALYSIS_TIME[cache_key] = datetime.now()
     
     # Run in background to avoid blocking
     background_tasks.add_task(execute_analysis, mode)
     
-    return {"status": "success", "message": f"{mode} analysis started in background"}
+    return {"status": "success", "cached": False, "message": f"{mode} analysis started in background"}
 
 def execute_analysis(mode="after_hours", hours=None):
     try:
