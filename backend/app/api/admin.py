@@ -9,7 +9,7 @@ import json
 from pathlib import Path
 from app.core.config_manager import SYSTEM_CONFIG, save_config
 from app.core.lhb_manager import lhb_manager
-from app.core import user_service
+from app.core import user_service, purchase_manager
 from app.core import watchlist_stats
 from datetime import datetime, timedelta
 from pydantic import BaseModel
@@ -221,8 +221,7 @@ async def approve_order(
     # New Duration
     new_duration_days = order.duration_days
     
-    # If upgrading/downgrading, convert remaining value to new time?
-    # Requirement: "提示把剩余时长按照分钟转为新的版本时长" (Convert remaining duration to new version duration by minutes - likely by value)
+    # If upgrading/downgrading, convert remaining value to new time.
     
     target_price_per_month = base_prices.get(order.target_version, 0)
     target_price_per_minute = target_price_per_month / (30 * 24 * 60)
@@ -232,17 +231,26 @@ async def approve_order(
         converted_minutes = current_value_remaining / target_price_per_minute
         
     total_new_minutes = (new_duration_days * 24 * 60) + converted_minutes
-    
+
+    # 续费加送：同版本续费即可生效（不区分是否已到期）
+    is_same_version_renewal = user.version != "trial" and (user.version == order.target_version)
+    bonus_days = purchase_manager.get_renewal_bonus_days(order.duration_days) if is_same_version_renewal else 0
+    bonus_minutes = bonus_days * 24 * 60
+
     user.version = order.target_version
-    user.expires_at = now + timedelta(minutes=total_new_minutes)
-    
+    user.expires_at = now + timedelta(minutes=total_new_minutes + bonus_minutes)
+
     order.status = "completed"
     db.commit()
-    
-    return {"status": "success", "new_expiry": user.expires_at}
+
+    return {
+        "status": "success",
+        "new_expiry": user.expires_at,
+        "bonus_days": bonus_days
+    }
 
 # --- System Configuration ---
-# 迁移原 System Config
+# Migrated system config block
 
 class AdminConfigUpdate(BaseModel):
     auto_analysis_enabled: bool
@@ -378,4 +386,3 @@ async def get_ai_cache_stats(authorized: bool = Depends(verify_admin)):
         "total_keys": len(ai_cache.cache),
         "keys": list(ai_cache.cache.keys())[-50:] # Limit to last 50 keys to verify
     }
-

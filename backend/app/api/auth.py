@@ -5,7 +5,8 @@ from pathlib import Path
 import hashlib
 import json
 import os
-from app.db import schemas, database
+
+from app.db import schemas, database, models
 from app.core import user_service
 
 router = APIRouter()
@@ -14,6 +15,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data"
 ACCOUNTS_FILE = DATA_DIR / "user_accounts.json"
 TRIAL_FP_FILE = DATA_DIR / "trial_fingerprints.json"
+
+PAID_VERSIONS = {"basic", "advanced", "flagship"}
+GUEST_PREFIXES = ("guest_", "visitor_")
+GUEST_TRIAL_MINUTES = 10
 
 
 def _ensure_data_dir():
@@ -60,6 +65,20 @@ def _make_device_id(username: str) -> str:
     return "user_" + hashlib.md5(username.encode("utf-8")).hexdigest()[:12]
 
 
+def _is_guest_device(device_id: str) -> bool:
+    return any(device_id.startswith(prefix) for prefix in GUEST_PREFIXES)
+
+
+def _can_apply_trial(account: dict, user: models.User) -> bool:
+    if not account or not user:
+        return False
+    if account.get("trial_applied"):
+        return False
+    if user.version in PAID_VERSIONS:
+        return False
+    return True
+
+
 def _build_user_payload(user):
     quotas = user_service.get_user_quota(user.version)
     is_expired = bool(user.expires_at and user.expires_at < datetime.utcnow())
@@ -75,8 +94,9 @@ def _build_user_payload(user):
         "remaining_ai": quotas["ai"] - user.daily_ai_count,
         "remaining_raid": quotas["raid"] - user.daily_raid_count,
         "remaining_review": quotas["review"] - user.daily_review_count,
-        "is_expired": is_expired
+        "is_expired": is_expired,
     }
+
 
 def get_db():
     db = database.SessionLocal()
@@ -88,8 +108,25 @@ def get_db():
 
 @router.post("/login", response_model=schemas.UserInfo)
 async def login(data: schemas.UserCreate, db: Session = Depends(get_db)):
-    user = user_service.get_or_create_user(db, data.device_id)
+    device_id = (data.device_id or "").strip()
+    if not device_id:
+        raise HTTPException(status_code=400, detail="缺少设备标识")
+
+    created = db.query(models.User).filter(models.User.device_id == device_id).first() is None
+    user = user_service.get_or_create_user(db, device_id)
+
+    # 新游客首次进入：自动开通10分钟浏览权限
+    if created and _is_guest_device(device_id):
+        user.version = "trial"
+        user.expires_at = datetime.utcnow() + timedelta(minutes=GUEST_TRIAL_MINUTES)
+        user.daily_ai_count = 0
+        user.daily_raid_count = 0
+        user.daily_review_count = 0
+        db.commit()
+        db.refresh(user)
+
     return _build_user_payload(user)
+
 
 @router.post("/register")
 async def register(data: dict = Body(...), db: Session = Depends(get_db)):
@@ -113,10 +150,11 @@ async def register(data: dict = Body(...), db: Session = Depends(get_db)):
         "password_hash": password_hash,
         "device_id": device_id,
         "created_at": datetime.utcnow().isoformat(),
-        "trial_applied": False
+        "trial_applied": False,
     }
     _save_accounts(accounts)
 
+    # 注册后默认未开通高级权限（需申请体验或购买）
     user = user_service.get_or_create_user(db, device_id)
     user.version = "trial"
     user.expires_at = datetime.utcnow()
@@ -129,9 +167,10 @@ async def register(data: dict = Body(...), db: Session = Depends(get_db)):
     return {
         "token": device_id,
         "username": username,
-        "can_apply_trial": True,
-        "user": _build_user_payload(user)
+        "can_apply_trial": _can_apply_trial(accounts[username], user),
+        "user": _build_user_payload(user),
     }
+
 
 @router.post("/login_user")
 async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
@@ -154,8 +193,8 @@ async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
     return {
         "token": device_id,
         "username": username,
-        "can_apply_trial": not bool(account.get("trial_applied")),
-        "user": _build_user_payload(user)
+        "can_apply_trial": _can_apply_trial(account, user),
+        "user": _build_user_payload(user),
     }
 
 
@@ -166,7 +205,7 @@ async def account_meta(x_device_id: str = Header(None), db: Session = Depends(ge
 
     accounts = _load_accounts()
     matched = None
-    for _, account in accounts.items():
+    for account in accounts.values():
         if account.get("device_id") == x_device_id:
             matched = account
             break
@@ -175,15 +214,15 @@ async def account_meta(x_device_id: str = Header(None), db: Session = Depends(ge
         return {
             "is_registered": False,
             "username": "",
-            "can_apply_trial": False
+            "can_apply_trial": False,
         }
 
     user = user_service.get_or_create_user(db, x_device_id)
     return {
         "is_registered": True,
         "username": matched.get("username", ""),
-        "can_apply_trial": not bool(matched.get("trial_applied")),
-        "user": _build_user_payload(user)
+        "can_apply_trial": _can_apply_trial(matched, user),
+        "user": _build_user_payload(user),
     }
 
 
@@ -191,10 +230,10 @@ async def account_meta(x_device_id: str = Header(None), db: Session = Depends(ge
 async def apply_trial(
     data: dict = Body(...),
     x_device_id: str = Header(None),
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
 ):
     if not x_device_id:
-        raise HTTPException(status_code=400, detail="请先登录后申请体验")
+        raise HTTPException(status_code=400, detail="请先登录后再申请体验")
 
     fingerprint_id = (data.get("fingerprint_id") or "").strip()
     if not fingerprint_id:
@@ -208,11 +247,15 @@ async def apply_trial(
             break
 
     if not account_key:
-        raise HTTPException(status_code=403, detail="请先注册并登录后申请体验")
+        raise HTTPException(status_code=403, detail="请先注册并登录后再申请体验")
+
+    user = user_service.get_or_create_user(db, x_device_id)
+    if user.version in PAID_VERSIONS:
+        raise HTTPException(status_code=400, detail="会员账号不支持申请10分钟体验")
 
     account = accounts[account_key]
     if account.get("trial_applied"):
-        raise HTTPException(status_code=400, detail="当前账号已申请过体验")
+        raise HTTPException(status_code=400, detail="当前账号已申请过10分钟体验")
 
     fp_used = _load_trial_fingerprints()
     if fp_used.get(fingerprint_id):
@@ -220,7 +263,7 @@ async def apply_trial(
 
     fp_used[fingerprint_id] = {
         "username": account_key,
-        "applied_at": datetime.utcnow().isoformat()
+        "applied_at": datetime.utcnow().isoformat(),
     }
     _save_trial_fingerprints(fp_used)
 
@@ -229,7 +272,6 @@ async def apply_trial(
     accounts[account_key] = account
     _save_accounts(accounts)
 
-    user = user_service.get_or_create_user(db, x_device_id)
     user.version = "trial"
     user.expires_at = datetime.utcnow() + timedelta(minutes=10)
     user.daily_ai_count = 0
@@ -242,14 +284,14 @@ async def apply_trial(
         "status": "success",
         "message": "体验申请已自动通过",
         "can_apply_trial": False,
-        "user": _build_user_payload(user)
+        "user": _build_user_payload(user),
     }
 
 
 @router.get("/status")
 async def check_status(x_device_id: str = Header(None), db: Session = Depends(get_db)):
     if not x_device_id:
-         raise HTTPException(status_code=400, detail="Missing Device ID")
+        raise HTTPException(status_code=400, detail="Missing Device ID")
 
     user = user_service.get_or_create_user(db, x_device_id)
 
@@ -260,5 +302,5 @@ async def check_status(x_device_id: str = Header(None), db: Session = Depends(ge
     return {
         "status": status,
         "type": user.version,
-        "expiry": user.expires_at.strftime("%Y-%m-%d %H:%M") if user.expires_at else "永久"
+        "expiry": user.expires_at.strftime("%Y-%m-%d %H:%M") if user.expires_at else "永久",
     }
