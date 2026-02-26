@@ -107,7 +107,7 @@
                         </div>
                     </div>
                 </div>
-                    <div class="text-[10px] text-gray-400">
+                    <div class="hidden md:block text-[10px] text-gray-400">
                         AI:{{userInfo.remaining_ai}} | 突:{{userInfo.remaining_raid}} | 复:{{userInfo.remaining_review}}
                     </div>
 
@@ -914,6 +914,9 @@
                              <span class="text-gray-300">|</span>
                              <span>复: {{userInfo.remaining_review}}</span>
                         </div>
+                        <div v-if="userInfo.version === 'trial'" class="mt-2 text-xs text-orange-600 dark:text-orange-400 font-bold">
+                            体验倒计时：{{ trialCountdownText }}
+                        </div>
                         <div class="mt-3 text-xs text-blue-600 dark:text-blue-400 font-bold flex items-center justify-center gap-1">
                             <span>💳</span>
                             <span>{{ userInfo.version === 'trial' ? '申请体验 / 升级' : '查看会员详情 / 续费' }}</span>
@@ -964,18 +967,26 @@
                         </h4>
                         <div class="bg-gray-50 dark:bg-gray-900 rounded p-3 text-xs space-y-2 font-mono">
                             <div class="flex justify-between items-center">
-                                <span class="text-gray-500">定时任务 (Smart Schedule)</span>
+                                <span class="text-gray-500">定时任务</span>
                                 <span :class="systemConfig.auto_analysis_enabled ? 'text-green-600' : 'text-gray-400'">
-                                    {{ systemConfig.auto_analysis_enabled ? '运行中 (Running)' : '已停止 (Stopped)' }}
+                                    {{ systemConfig.auto_analysis_enabled ? '运行中' : '已停止' }}
                                 </span>
                             </div>
                             <div class="flex justify-between items-center">
-                                <span class="text-gray-500">龙虎榜更新 (LHB Update)</span>
+                                <span class="text-gray-500">龙虎榜更新</span>
                                 <span class="text-gray-700 dark:text-gray-300">{{ lhbConfig.last_update_time || '未更新' }}</span>
                             </div>
                             <div class="flex justify-between items-center">
-                                <span class="text-gray-500">系统版本 (Version)</span>
-                                <span class="text-gray-700 dark:text-gray-300">v2.5.0 Commercial</span>
+                                <span class="text-gray-500">前端版本</span>
+                                <span class="text-gray-700 dark:text-gray-300">{{ frontendVersion }}</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-gray-500">服务器版本</span>
+                                <span class="text-gray-700 dark:text-gray-300">{{ serverVersion }}</span>
+                            </div>
+                            <div v-if="userInfo.version === 'trial'" class="flex justify-between items-center">
+                                <span class="text-gray-500">体验倒计时</span>
+                                <span class="text-orange-600 dark:text-orange-400">{{ trialCountdownText }}</span>
                             </div>
                         </div>
                     </div>
@@ -1366,6 +1377,8 @@
                     showLoginModal: false,
                     loginForm: { username: '', password: '' },
                     displayUsername: '',
+                    frontendVersion: 'v2.5.2',
+                    serverVersion: '获取中...',
                     loginLoading: false,
                     loadingChart: false,
                     chartInstance: null,
@@ -1390,14 +1403,41 @@
                     currentOrder: null,
                     purchaseLoading: false,
                     features: {
-                        'trial': { ai: 'Daily 1', raid: 'No Access', review: 'No Access', desc: '10 Mins' },
-                        'basic': { ai: 'Daily 5', raid: 'No Access', review: 'No Access', desc: 'Starter' },
-                        'advanced': { ai: 'Daily 10', raid: 'Daily 3', review: 'Daily 1', desc: 'Pro' },
-                        'flagship': { ai: 'Daily 1000', raid: 'Daily 50', review: 'Daily 5', desc: 'Vip' }
+                        'trial': { ai: '每日1次', raid: '暂不支持', review: '暂不支持', desc: '体验10分钟' },
+                        'basic': { ai: '每日5次', raid: '暂不支持', review: '暂不支持', desc: '入门版' },
+                        'advanced': { ai: '每日10次', raid: '每日3次', review: '每日1次', desc: '进阶版' },
+                        'flagship': { ai: '每日1000次', raid: '每日50次', review: '每日5次', desc: '旗舰版' }
                     }
                 }
             },
             computed: {
+                trialCountdownText() {
+                    if (this.userInfo.version !== 'trial') return '--:--:--';
+                    if (this.userInfo.is_expired) return '已结束';
+
+                    if (this.userInfo.expires_at) {
+                        const nowMs = this.currentTime ? this.currentTime.getTime() : Date.now();
+                        const endMs = new Date(this.userInfo.expires_at).getTime();
+                        const remainMs = endMs - nowMs;
+                        if (!Number.isFinite(remainMs) || remainMs <= 0) return '已结束';
+
+                        const totalSeconds = Math.floor(remainMs / 1000);
+                        const hours = Math.floor(totalSeconds / 3600);
+                        const minutes = Math.floor((totalSeconds % 3600) / 60);
+                        const seconds = totalSeconds % 60;
+                        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                    }
+
+                    if (typeof this.userInfo.trial_duration === 'number' && this.userInfo.trial_duration > 0) {
+                        const totalSeconds = Math.floor(this.userInfo.trial_duration);
+                        const hours = Math.floor(totalSeconds / 3600);
+                        const minutes = Math.floor((totalSeconds % 3600) / 60);
+                        const seconds = totalSeconds % 60;
+                        return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+                    }
+
+                    return '获取中';
+                },
                 // Time-based visibility logic
                 isPreMarketTime() {
                     const now = new Date();
@@ -3139,6 +3179,7 @@
                 fetch(API_BASE_URL + '/api/status')
                     .then(res => res.json())
                     .then(data => {
+                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.5.0';
                         if (data.status === 'success') {
                             const isMarketOpenDay = data.is_market_open_day;
                             
@@ -3164,6 +3205,7 @@
                     })
                     .catch(e => {
                         console.error("Failed to check market status", e);
+                        this.serverVersion = '未连接';
                         // Fallback to local logic
                         if (this.isMobile) {
                             if (!isWeekend && timeVal >= 930 && timeVal < 1500) {
@@ -3224,10 +3266,10 @@
                 // User said "1 minute refresh is fine"
                 setInterval(this.fetchMarketSentiment, 60000); 
 
-                // Update time every minute for visibility logic
+                // Update time every second for trial countdown / visibility logic
                 setInterval(() => {
                     this.currentTime = new Date();
-                }, 60000);
+                }, 1000);
                 
                 // Initialize visibility based on time
                 // Reuse time variables calculated above
