@@ -115,11 +115,11 @@ async def get_pricing(
     db: Session = Depends(get_db),
 ):
     if not x_device_id:
-        return purchase_manager.get_pricing_options()
+        raise HTTPException(status_code=401, detail="Missing Device ID")
 
     user = db.query(models.User).filter(models.User.device_id == x_device_id).first()
     if not user:
-        return purchase_manager.get_pricing_options()
+        raise HTTPException(status_code=401, detail="Invalid Device ID")
 
     used_trials = (
         db.query(models.PurchaseOrder.target_version)
@@ -190,11 +190,17 @@ async def create_order(
 async def confirm_payment(
     request: Request,
     order_code: str = Body(..., embed=True),
+    x_device_id: str = Header(None, alias="X-Device-ID"),
     db: Session = Depends(get_db),
 ):
+    if not x_device_id:
+        raise HTTPException(status_code=401, detail="Missing Device ID")
+
     order = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.order_code == order_code).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if not order.user or order.user.device_id != x_device_id:
+        raise HTTPException(status_code=403, detail="Order access denied")
 
     if order.status != "pending":
         # Allow re-confirm if status is waiting_verification, but block if completed
@@ -216,11 +222,17 @@ async def confirm_payment(
 @router.post("/cancel_order")
 async def cancel_order(
     order_code: str = Body(..., embed=True),
+    x_device_id: str = Header(None, alias="X-Device-ID"),
     db: Session = Depends(get_db),
 ):
+    if not x_device_id:
+        raise HTTPException(status_code=401, detail="Missing Device ID")
+
     order = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.order_code == order_code).first()
     if not order:
         raise HTTPException(status_code=404, detail="Order not found")
+    if not order.user or order.user.device_id != x_device_id:
+        raise HTTPException(status_code=403, detail="Order access denied")
 
     order.status = "cancelled"
     db.commit()

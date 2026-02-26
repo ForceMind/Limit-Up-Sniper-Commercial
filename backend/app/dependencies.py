@@ -59,3 +59,14 @@ async def check_review_permission(user: models.User = Depends(get_current_user))
     if not user_service.check_quota(user, 'review'):
          raise QuotaLimitExceeded(detail="Daily Review limit reached")
     return user
+
+
+async def check_data_permission(user: models.User = Depends(get_current_user)):
+    """
+    Generic data-access permission:
+    - Guest/trial users are allowed while not expired.
+    - Expired users are denied.
+    """
+    if user.expires_at and user.expires_at < datetime.utcnow():
+        raise UpgradeRequired(detail="License expired")
+    return user

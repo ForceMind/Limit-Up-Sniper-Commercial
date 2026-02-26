@@ -23,7 +23,7 @@ from app.core.ai_cache import ai_cache
 from app.core.config_manager import SYSTEM_CONFIG, save_config, DEFAULT_SCHEDULE
 from app.api import auth, admin, payment
 from app.db import database, models
-from app.dependencies import get_current_user, check_ai_permission, check_raid_permission, check_review_permission, QuotaLimitExceeded, UpgradeRequired
+from app.dependencies import get_current_user, check_ai_permission, check_raid_permission, check_review_permission, check_data_permission, QuotaLimitExceeded, UpgradeRequired
 from app.core import user_service
 from app.core import watchlist_stats
 
@@ -86,7 +86,7 @@ async def get_system_status():
     }
 
 @app.get("/api/news_history/clear")
-async def clear_news_history(range: str = "all"):
+async def clear_news_history(range: str = "all", user: models.User = Depends(check_data_permission)):
     """清理新闻历史
     range: all, before_today, before_3d, before_7d
     """
@@ -213,7 +213,7 @@ def reload_watchlist_globals():
     WATCH_LIST = list(set(list(watchlist_map.keys()) + list(favorites_map.keys())))
 
 @app.get("/api/news_history")
-async def get_news_history():
+async def get_news_history(user: models.User = Depends(check_data_permission)):
     """获取新闻历史记录"""
     history_file = DATA_DIR / "news_history.json"
     if history_file.exists():
@@ -289,7 +289,7 @@ async def get_status():
     }
 
 @app.get("/api/add_watchlist")
-async def add_to_watchlist_api(code: str, name: str, reason: str = "手动添加"):
+async def add_to_watchlist_api(code: str, name: str, reason: str = "手动添加", user: models.User = Depends(check_data_permission)):
     global favorites_data, watchlist_map
     
     # Check if exists in favorites
@@ -327,7 +327,7 @@ async def add_to_watchlist_api(code: str, name: str, reason: str = "手动添加
     return {"status": "ok", "msg": "添加成功"}
 
 @app.get("/api/remove_watchlist")
-async def remove_from_watchlist_api(code: str):
+async def remove_from_watchlist_api(code: str, user: models.User = Depends(check_data_permission)):
     global favorites_data, watchlist_data
     
     removed = False
@@ -522,7 +522,7 @@ async def websocket_endpoint(websocket: WebSocket):
         manager.disconnect(websocket)
 
 @app.get("/api/search")
-async def search_stock(q: str):
+async def search_stock(q: str, user: models.User = Depends(check_data_permission)):
     """
     搜索股票 (支持代码、拼音、名称)
     """
@@ -551,7 +551,7 @@ class FavoriteStatRequest(BaseModel):
 
 
 @app.get("/api/favorites/quotes")
-async def api_favorite_quotes(codes: str = ""):
+async def api_favorite_quotes(codes: str = "", user: models.User = Depends(check_data_permission)):
     code_list = [normalize_stock_code(c) for c in codes.split(",") if c.strip()]
     code_list = [c for c in code_list if c]
     if not code_list:
@@ -595,7 +595,7 @@ async def remove_watchlist_stat(payload: FavoriteStatRequest, user: models.User 
     return {"status": "success"}
 
 @app.post("/api/add_stock")
-async def add_stock(code: str):
+async def add_stock(code: str, user: models.User = Depends(check_data_permission)):
     """手动添加股票到监控列表"""
     global watchlist_data, watchlist_map, WATCH_LIST
     
@@ -783,7 +783,7 @@ async def run_initial_scan():
         print(f"初始扫描错误: {e}")
 
 @app.get("/api/config")
-async def get_config():
+async def get_config(user: models.User = Depends(check_data_permission)):
     return SYSTEM_CONFIG
 
 class ConfigUpdate(BaseModel):
@@ -795,7 +795,7 @@ class ConfigUpdate(BaseModel):
     news_auto_clean_days: Optional[int] = 14
 
 @app.post("/api/config")
-async def update_config(config: ConfigUpdate):
+async def update_config(config: ConfigUpdate, user: models.User = Depends(check_data_permission)):
     global SYSTEM_CONFIG
     SYSTEM_CONFIG["auto_analysis_enabled"] = config.auto_analysis_enabled
     SYSTEM_CONFIG["use_smart_schedule"] = config.use_smart_schedule
@@ -1127,7 +1127,7 @@ def get_stock_quotes():
         return []
 
 @app.post("/api/watchlist/remove")
-async def remove_from_watchlist(request: Request):
+async def remove_from_watchlist(request: Request, user: models.User = Depends(check_data_permission)):
     """从自选列表中移除股票"""
     global watchlist_data, watchlist_map, WATCH_LIST, favorites_data, favorites_map
     try:
@@ -1158,23 +1158,23 @@ async def remove_from_watchlist(request: Request):
         return {"status": "error", "message": str(e)}
 
 @app.get("/api/stocks")
-async def api_stocks():
+async def api_stocks(user: models.User = Depends(check_data_permission)):
     return get_stock_quotes()
 
 @app.get("/api/indices")
-async def api_indices():
+async def api_indices(user: models.User = Depends(check_data_permission)):
     """快速获取大盘指数"""
     return data_provider.fetch_indices()
 
 @app.get("/api/limit_up_pool")
-async def api_limit_up_pool():
+async def api_limit_up_pool(user: models.User = Depends(check_data_permission)):
     return {
         "limit_up": limit_up_pool_data,
         "broken": broken_limit_pool_data
     }
 
 @app.get("/api/intraday_pool")
-async def api_intraday_pool(user: models.User = Depends(get_current_user)):
+async def api_intraday_pool(user: models.User = Depends(check_data_permission)):
     """直接获取盘中打板扫描结果 (优先返回缓存)"""
     global intraday_pool_data
     if intraday_pool_data:
@@ -1189,7 +1189,7 @@ async def api_intraday_pool(user: models.User = Depends(get_current_user)):
     return stocks
 
 @app.get("/api/market_sentiment")
-async def api_market_sentiment():
+async def api_market_sentiment(user: models.User = Depends(check_data_permission)):
     """获取大盘情绪数据"""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, get_market_overview)
@@ -1285,17 +1285,17 @@ class LHBConfigRequest(BaseModel):
     min_amount: int
 
 @app.get("/api/lhb/config")
-async def get_lhb_config():
+async def get_lhb_config(user: models.User = Depends(check_data_permission)):
     lhb_manager.load_config()
     return lhb_manager.config
 
 @app.post("/api/lhb/config")
-async def update_lhb_config(config: LHBConfigRequest):
+async def update_lhb_config(config: LHBConfigRequest, user: models.User = Depends(check_data_permission)):
     lhb_manager.update_settings(config.enabled, config.days, config.min_amount)
     return {"status": "ok", "config": lhb_manager.config}
 
 @app.post("/api/lhb/sync")
-async def sync_lhb_data(background_tasks: BackgroundTasks, days: Optional[int] = Query(None)):
+async def sync_lhb_data(background_tasks: BackgroundTasks, days: Optional[int] = Query(None), user: models.User = Depends(check_data_permission)):
     """Trigger LHB sync in background"""
     if lhb_manager.is_syncing:
         return {"status": "error", "message": "同步任务正在进行中"}
@@ -1304,15 +1304,15 @@ async def sync_lhb_data(background_tasks: BackgroundTasks, days: Optional[int] =
     return {"status": "ok", "message": "龙虎榜同步已启动"}
 
 @app.get("/api/lhb/status")
-async def get_lhb_status():
+async def get_lhb_status(user: models.User = Depends(check_data_permission)):
     return {"is_syncing": lhb_manager.is_syncing}
 
 @app.get("/api/lhb/dates")
-async def get_lhb_dates():
+async def get_lhb_dates(user: models.User = Depends(check_data_permission)):
     return lhb_manager.get_available_dates()
 
 @app.get("/api/lhb/history")
-async def get_lhb_history(date: str):
+async def get_lhb_history(date: str, user: models.User = Depends(check_data_permission)):
     return lhb_manager.get_daily_data(date)
 
 class LHBAnalyzeRequest(BaseModel):
@@ -1340,7 +1340,7 @@ async def get_lhb_analysis_api(date: str, user: models.User = Depends(get_curren
     return {"status": "ok", "analysis": cached}
 
 @app.get("/api/data/backup")
-async def download_data_backup():
+async def download_data_backup(user: models.User = Depends(check_data_permission)):
     """
     Pack 'data' directory into a zip file and return for download
     """
@@ -1387,7 +1387,7 @@ class AnalyzeRequest(BaseModel):
     kline_data: Optional[List] = None
 
 @app.post("/api/lhb/fetch")
-async def fetch_lhb_data(background_tasks: BackgroundTasks):
+async def fetch_lhb_data(background_tasks: BackgroundTasks, user: models.User = Depends(check_data_permission)):
     """手动触发龙虎榜数据抓取"""
     if lhb_manager.is_syncing:
         return {"status": "error", "message": "同步任务正在进行中，请稍后再试"}
@@ -1439,7 +1439,7 @@ async def analyze_stock_manual(request: AnalyzeRequest, user: models.User = Depe
     return {"status": "success", "result": result}
 
 @app.get("/api/stock/kline")
-async def get_stock_kline(code: str, type: str = "1min"):
+async def get_stock_kline(code: str, type: str = "1min", user: models.User = Depends(check_data_permission)):
     """获取个股K线数据"""
     try:
         clean_code = "".join(filter(str.isdigit, code))
@@ -1468,7 +1468,7 @@ async def get_stock_kline(code: str, type: str = "1min"):
     return {"status": "error", "message": "No data found"}
 
 @app.get("/api/stock/ai_markers")
-async def get_ai_markers(code: str, type: str = None, user: models.User = Depends(get_current_user)):
+async def get_ai_markers(code: str, type: str = None, user: models.User = Depends(check_data_permission)):
     """获取个股的AI分析历史标记"""
     # Determine priority based on type
     keys = []

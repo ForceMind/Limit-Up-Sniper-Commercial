@@ -61,7 +61,7 @@
 <body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-mono h-screen p-2 md:p-4 overflow-hidden flex flex-col transition-colors duration-300">
     <div id="app" v-cloak class="container mx-auto max-w-full flex-1 flex flex-col overflow-hidden">
         <!-- Version Tag -->
-        <div class="fixed top-1 left-1 text-[10px] text-gray-500 z-[99999]" style="opacity: 0.5;">v2.5.2</div>
+        <div class="fixed bottom-1 right-1 text-[10px] text-gray-500 z-[99999]" style="opacity: 0.5;">{{ serverVersion }}</div>
         <!-- Header -->
         <header class="flex flex-col md:flex-row justify-between items-center mb-2 md:mb-4 border-b border-gray-200 dark:border-gray-700 pb-2 px-2 md:px-4 shrink-0 gap-2">
             <div class="flex items-center gap-2 w-full md:w-auto justify-between md:justify-start">
@@ -181,10 +181,12 @@
         <div class="mb-4 px-2 md:px-4" v-if="marketSentiment">
             <div class="relative bg-gray-800/80 dark:bg-gray-800/80 bg-white border border-gray-200 dark:border-gray-700 rounded-lg p-3 grid grid-cols-3 md:grid-cols-5 gap-2 md:gap-4 text-xs md:text-sm shadow-lg">
                 <!-- Refresh Status & Button -->
-                <div class="absolute top-1 right-1 flex items-center gap-1 z-10">
-                    <span class="text-[10px] text-gray-400 scale-90 origin-right" v-if="sentimentLastUpdate">
+                <div class="absolute top-1 left-1 z-10">
+                    <span class="text-[10px] text-gray-400 scale-90 origin-left" v-if="sentimentLastUpdate">
                         {{ sentimentLastUpdate }}
                     </span>
+                </div>
+                <div class="absolute top-1 right-1 z-10">
                     <button @click="fetchMarketSentiment" 
                             class="p-1 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors"
                             :class="{'animate-spin': sentimentLoading}"
@@ -348,7 +350,7 @@
                 <!-- Scrollable Table Container -->
                 <div class="flex-1 overflow-auto relative">
                     <!-- MASK for Pre-Market -->
-                    <div v-if="shouldShowMask('pre')" class="absolute inset-0 bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
+                    <div v-if="shouldShowMask('pre')" class="permission-mask bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
                         <div class="text-xl font-bold text-red-500 mb-2">需要会员权限</div>
                         <div class="text-sm text-gray-300 mb-4">当前功能仅限正式会员使用</div>
                         <button @click="openSubscription('basic')" class="bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-2 rounded-full font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all text-sm">
@@ -434,7 +436,7 @@
                 <!-- Scrollable Table Container -->
                 <div class="flex-1 overflow-auto relative">
                     <!-- MASK for Intraday -->
-                    <div v-if="shouldShowMask('intra')" class="absolute inset-0 bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
+                    <div v-if="shouldShowMask('intra')" class="permission-mask bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
                         <div class="text-xl font-bold text-red-500 mb-2">需要会员权限</div>
                         <div class="text-sm text-gray-300 mb-4">当前功能仅限正式会员使用</div>
                         <button @click="openSubscription('basic')" class="bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-2 rounded-full font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all text-sm">
@@ -660,7 +662,7 @@
                     <!-- Scrollable Table Container -->
                     <div class="flex-1 overflow-auto relative" v-show="!isMobile || activePoolTab === 'limit_up'">
                         <!-- MASK for Limit Up Pool -->
-                        <div v-if="shouldShowMask('pool')" class="absolute inset-0 bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
+                        <div v-if="shouldShowMask('pool')" class="permission-mask bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
                              <div class="text-xl font-bold text-red-500 mb-2">需要会员权限</div>
                              <div class="text-sm text-gray-300 mb-4">当前功能仅限正式会员使用</div>
                              <button @click="openSubscription('basic')" class="bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-2 rounded-full font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all text-sm">
@@ -746,7 +748,7 @@
                     <!-- Scrollable Table Container -->
                     <div class="flex-1 overflow-auto relative" v-show="!isMobile || activePoolTab === 'broken'">
                         <!-- MASK for Broken Pool (same as pool permission) -->
-                        <div v-if="shouldShowMask('pool')" class="absolute inset-0 bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
+                        <div v-if="shouldShowMask('pool')" class="permission-mask bg-gray-900/90 z-50 flex flex-col items-center justify-center backdrop-blur-sm text-center p-4">
                             <div class="text-xl font-bold text-red-500 mb-2">需要会员权限</div>
                             <div class="text-sm text-gray-300 mb-4">当前功能仅限正式会员使用</div>
                             <button @click="openSubscription('basic')" class="bg-gradient-to-r from-red-600 to-pink-600 text-white px-6 py-2 rounded-full font-bold shadow-lg hover:shadow-xl transform hover:scale-105 transition-all text-sm">
@@ -1511,6 +1513,9 @@
                 showTenMinuteTrialUsedHint() {
                     return this.isRegisteredAccount && !this.isPaidMember && this.userInfo.version === 'trial' && !this.accountCanApplyTrial;
                 },
+                hasDataAccess() {
+                    return !!this.deviceId && !this.userInfo.is_expired;
+                },
                 // Time-based visibility logic
                 isPreMarketTime() {
                     const now = new Date();
@@ -1703,6 +1708,10 @@
                     localStorage.setItem(this.getFavoritesStorageKey(), JSON.stringify(this.localFavorites));
                 },
                 async fetchLocalFavoriteQuotes() {
+                    if (!this.hasDataAccess) {
+                        this.localFavoriteQuotes = [];
+                        return;
+                    }
                     const codes = Object.keys(this.localFavorites || {});
                     if (codes.length === 0) {
                         this.localFavoriteQuotes = [];
@@ -1959,9 +1968,12 @@
 
                     this.showSubscriptionModal = true;
                     this.purchaseStep = 1;
+                    const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
                     
                     try {
-                        const res = await fetch(`${API_BASE_URL}/api/payment/pricing`);
+                        const res = await fetch(`${API_BASE_URL}/api/payment/pricing`, {
+                            headers: deviceId ? { 'X-Device-ID': deviceId } : {}
+                        });
                         this.pricingOptions = await res.json();
 
                         const availableVersions = this.purchaseableVersions;
@@ -2013,13 +2025,17 @@
                     else if (this.selectedDuration.endsWith('y')) dm = parseInt(this.selectedDuration) * 12; // Years
 
                     try {
+                        const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
                         const res = await fetch(`${API_BASE_URL}/api/payment/create_order`, {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: {
+                                'Content-Type': 'application/json',
+                                ...(deviceId ? { 'X-Device-ID': deviceId } : {})
+                            },
                             body: JSON.stringify({
                                 target_version: this.selectedVersion,
                                 duration_months: dm,
-                                x_device_id: this.deviceId
+                                x_device_id: deviceId
                             })
                         });
                         const data = await res.json();
@@ -2041,9 +2057,13 @@
                     if (!confirmed) return;
                     try {
                         this.purchaseLoading = true;
+                        const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
                         const res = await fetch(`${API_BASE_URL}/api/payment/confirm_payment`, {
                             method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
+                            headers: {
+                                'Content-Type': 'application/json',
+                                ...(deviceId ? { 'X-Device-ID': deviceId } : {})
+                            },
                             body: JSON.stringify({ order_code: this.currentOrder.order_code })
                         });
                         this.purchaseStep = 3;
@@ -2116,6 +2136,10 @@
                 },
 
                 async openNewsCenter() {
+                    if (!this.hasDataAccess) {
+                        this.showMsg('当前无权限访问数据，请先开通或续费', 'error');
+                        return;
+                    }
                     this.showNewsModal = true;
                     try {
                         const res = await fetch(API_BASE_URL + '/api/news_history');
@@ -2148,6 +2172,7 @@
                     }
                 },
                 async clearNewsHistory(range = 'all') {
+                    if (!this.hasDataAccess) return;
                     const labels = {
                         'all': '全部',
                         'before_today': '今天以前',
@@ -2177,6 +2202,7 @@
                     }, 200);
                 },
                 async fetchLHBConfig() {
+                    if (!this.hasDataAccess) return;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/lhb/config');
                         const data = await response.json();
@@ -2190,6 +2216,10 @@
                     }
                 },
                 async syncLHB() {
+                    if (!this.hasDataAccess) {
+                        this.showMsg('当前无权限同步数据', 'error');
+                        return;
+                    }
                     if (this.isSyncingLHB) return;
                     this.isSyncingLHB = true;
                     // Save config first
@@ -2220,6 +2250,7 @@
                     }
                 },
                 async checkLHBStatus() {
+                    if (!this.hasDataAccess) return;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/lhb/status');
                         const data = await response.json();
@@ -2229,6 +2260,7 @@
                     }
                 },
                 async fetchConfig() {
+                    if (!this.hasDataAccess) return;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/config');
                         const data = await response.json();
@@ -2238,6 +2270,7 @@
                     }
                 },
                 async saveConfig() {
+                    if (!this.hasDataAccess) return;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/config', {
                             method: 'POST',
@@ -2315,6 +2348,10 @@
                 onSearchInput() {
                     if (this.searchTimeout) clearTimeout(this.searchTimeout);
                     this.searchTimeout = setTimeout(async () => {
+                        if (!this.hasDataAccess) {
+                            this.searchResults = [];
+                            return;
+                        }
                         if (!this.searchQuery || this.searchQuery.length < 2) {
                             this.searchResults = [];
                             return;
@@ -2334,6 +2371,7 @@
                 },
                 
                 connectWebSocket() {
+                    if (!this.hasDataAccess) return;
                     // Use API_BASE_URL to determine WS URL
                     let wsBase = API_BASE_URL.replace(/^http/, 'ws');
                     // Handle case where API_BASE_URL has no protocol (e.g. relative path, though unlikely in this setup)
@@ -2353,7 +2391,9 @@
                     
                     ws.onclose = () => {
                         this.wsConnected = false;
-                        setTimeout(this.connectWebSocket, 3000); // Reconnect
+                        if (this.hasDataAccess) {
+                            setTimeout(this.connectWebSocket, 3000); // Reconnect
+                        }
                     };
                 },
                 addLog(msg) {
@@ -2405,6 +2445,7 @@
                     }
                 },
                 fetchData() {
+                    if (!this.hasDataAccess) return;
                     if (!this._fetchDataImpl) return;
                     
                     const now = Date.now();
@@ -2414,6 +2455,7 @@
                     this._fetchDataImpl();
                 },
                 async _fetchDataImpl() {
+                    if (!this.hasDataAccess) return;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/stocks');
                         const data = await response.json();
@@ -2446,6 +2488,7 @@
                     }
                 },
                 async fetchIndices() {
+                    if (!this.hasDataAccess) return;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/indices');
                         const data = await response.json();
@@ -2459,6 +2502,7 @@
                     }
                 },
                 async fetchLimitUpPool() {
+                    if (!this.hasDataAccess) return;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/limit_up_pool');
                         const data = await response.json();
@@ -2474,6 +2518,7 @@
                     }
                 },
                 async fetchMarketSentiment() {
+                    if (!this.hasDataAccess) return;
                     this.sentimentLoading = true;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/market_sentiment');
@@ -2534,6 +2579,7 @@
                     }
                 },
                 async removeStock(stock, listType = 'all') {
+                    if (!this.hasDataAccess) return;
                     const confirmed = await this.showConfirm(`确定要删除 ${stock.name} (${stock.code}) 吗？`);
                     if (!confirmed) return;
                     
@@ -2756,6 +2802,10 @@
                     if (this.typewriterInterval) clearInterval(this.typewriterInterval);
                 },
                 openChart(stock) {
+                    if (!this.hasDataAccess) {
+                        this.showMsg('当前无权限查看图表数据', 'error');
+                        return;
+                    }
                     this.currentStock = stock;
                     this.showChartModal = true;
                     this.aiAnalysisResult = null;
@@ -2833,6 +2883,7 @@
                     ]);
                 },
                 async fetchKline(type) {
+                    if (!this.hasDataAccess) return;
                     const code = this.currentStock.code;
                     // this.chartType = type; // Already set in switchChartType
                     this.loadingChart = true;
@@ -3302,6 +3353,7 @@
                     }
                 },
                 async fetchAIMarkers() {
+                    if (!this.hasDataAccess) return;
                     try {
                         const res = await fetch(API_BASE_URL + `/api/stock/ai_markers?code=${this.currentStock.code}&type=${this.chartType}`);
                         if (!res.ok) return;
@@ -3373,7 +3425,15 @@
                 this.loadLocalFavorites();
                 
                 // Init User
-                this.checkLogin();
+                this.checkLogin().then(() => {
+                    if (this.hasDataAccess) {
+                        this.fetchData();
+                        this.fetchLimitUpPool();
+                        this.fetchMarketSentiment();
+                        this.fetchIndices();
+                        this.connectWebSocket();
+                    }
+                });
                 this.startUserTimers();
                 
                 // Event listener for auth errors
@@ -3475,14 +3535,9 @@
                         }
                     });
 
-                this.fetchData();
-                this.fetchLimitUpPool();
-                this.fetchMarketSentiment();
-                this.fetchIndices(); // Initial fetch
-                this.connectWebSocket();
-                
                 // Intelligent Polling
                 setInterval(() => {
+                    if (!this.hasDataAccess) return;
                     const now = new Date();
                     const day = now.getDay();
                     // Weekend check (0=Sun, 6=Sat)
@@ -3501,9 +3556,13 @@
                 }, 3000);
 
                 // Poll LHB Status
-                setInterval(this.checkLHBStatus, 5000);
+                setInterval(() => {
+                    if (!this.hasDataAccess) return;
+                    this.checkLHBStatus();
+                }, 5000);
 
                 setInterval(() => {
+                    if (!this.hasDataAccess) return;
                     const now = new Date();
                     const day = now.getDay();
                     if (day === 0 || day === 6) return;
@@ -3523,7 +3582,10 @@
 
                 // 3. Market Sentiment: 60s always (or just trading?)
                 // User said "1 minute refresh is fine"
-                setInterval(this.fetchMarketSentiment, 60000); 
+                setInterval(() => {
+                    if (!this.hasDataAccess) return;
+                    this.fetchMarketSentiment();
+                }, 60000); 
 
                 // Update time every second for trial countdown / visibility logic
                 setInterval(() => {
@@ -3558,6 +3620,15 @@
         }
         .list-leave-active {
             position: absolute;
+        }
+
+        /* Keep permission mask fixed to the visible area while horizontal scrolling */
+        .permission-mask {
+            position: sticky;
+            left: 0;
+            top: 0;
+            width: 100%;
+            min-height: 100%;
         }
         
         /* Scrollbar Styling */

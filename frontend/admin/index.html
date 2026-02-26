@@ -40,8 +40,9 @@
             <div v-if="!token" class="absolute inset-0 bg-gray-100 z-50 flex items-center justify-center">
                 <div class="bg-white p-8 rounded shadow-lg w-96">
                     <h2 class="text-xl font-bold mb-4">管理员登录</h2>
-                    <p class="text-xs text-gray-500 mb-4">请输入管理员令牌 (查看 backend/data/admin_token.txt)</p>
-                    <input type="password" v-model="inputToken" @keyup.enter="login" class="w-full border p-2 rounded mb-4" placeholder="Admin Token">
+                    <p class="text-xs text-gray-500 mb-4">请输入管理员用户名和密码</p>
+                    <input type="text" v-model="loginForm.username" @keyup.enter="login" class="w-full border p-2 rounded mb-3" placeholder="用户名">
+                    <input type="password" v-model="loginForm.password" @keyup.enter="login" class="w-full border p-2 rounded mb-4" placeholder="密码">
                     <button @click="login" class="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">进入</button>
                     <p class="text-xs text-red-400 mt-2 text-center">注意：连续5次错误将被锁定IP</p>
                 </div>
@@ -244,7 +245,7 @@
                         <section class="mb-8 border-b pb-8">
                             <h3 class="text-xl font-semibold mb-4 text-gray-700">管理员账户</h3>
                             <div class="bg-gray-50 border border-gray-200 rounded p-4">
-                                <p class="text-sm text-gray-500 mb-4">修改管理员登录密码 (Token)</p>
+                                <p class="text-sm text-gray-500 mb-4">修改管理员登录密码</p>
                                 <div class="flex items-end gap-4 max-w-md">
                                     <div class="flex-1">
                                         <label class="block text-sm font-bold text-gray-700 mb-1">新密码</label>
@@ -493,12 +494,13 @@
             data() {
                 return {
                     token: localStorage.getItem('admin_token') || '',
-                    inputToken: '',
+                    loginForm: { username: 'admin', password: '' },
                     currentView: 'dashboard',
                     config: {},
                     users: [],
                     orders: [],
                     msgModal: { show: false, msg: '', type: 'info' },
+                    msgTimer: null,
                     confirmModal: { show: false, msg: '', resolve: null },
                     addTimeModal: { show: false, user: null, minutes: 60 },
                     // Logs
@@ -533,39 +535,68 @@
             },
             methods: {
                 showMsg(msg, type = 'info') {
+                    if (this.msgTimer) {
+                        clearTimeout(this.msgTimer);
+                        this.msgTimer = null;
+                    }
                     this.msgModal = { show: true, msg, type };
-                        this.msgModal = { show: true, msg: msg, type: type };
+                    const timeout = type === 'error' ? 4000 : 2500;
+                    this.msgTimer = setTimeout(() => {
+                        if (this.msgModal.msg === msg) this.msgModal.show = false;
+                    }, timeout);
+                },
+                showConfirm(msg) {
+                    return new Promise((resolve) => {
+                        this.confirmModal = { show: true, msg: msg, resolve: resolve };
+                    });
+                },
+                handleConfirm(result) {
+                    this.confirmModal.show = false;
+                    if (this.confirmModal.resolve) {
+                        this.confirmModal.resolve(result);
+                        this.confirmModal.resolve = null;
+                    }
+                },
+                getHeaders() {
+                    return {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Token': this.token
+                    };
+                },
+                clearAuth(showTip = false) {
+                    this.token = '';
+                    localStorage.removeItem('admin_token');
+                    if (showTip) this.showMsg('登录已失效，请重新登录', 'error');
+                },
+                async login() {
+                    const username = (this.loginForm.username || '').trim();
+                    const password = (this.loginForm.password || '').trim();
+                    if (!username || !password) {
+                        this.showMsg('请输入用户名和密码', 'error');
+                        return;
+                    }
 
-                        if (type === 'success' || type === 'info') {
-                            setTimeout(() => { if (this.msgModal.msg === msg) this.msgModal.show = false; }, 3000);
-                        }
-                    },
-                    showConfirm(msg) {
-                        return new Promise((resolve) => {
-                            this.confirmModal = { show: true, msg: msg, resolve: resolve };
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/login', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username, password })
                         });
-                    },
-                    handleConfirm(result) {
-                        this.confirmModal.show = false;
-                        if (this.confirmModal.resolve) {
-                            this.confirmModal.resolve(result);
-                            this.confirmModal.resolve = null;
-                        }
-                    },
-                    getHeaders() {
-                        return {
-                            'Content-Type': 'application/json',
-                            'X-Admin-Token': this.token
-                        };
-                    },
-                    login() {
-                        this.token = this.inputToken;
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '登录失败');
+
+                        this.token = data.token;
                         localStorage.setItem('admin_token', this.token);
+                        this.loginForm.password = '';
+                        this.showMsg('登录成功', 'success');
                         this.fetchConfig();
                         this.fetchUsers();
                         this.fetchOrders();
                         this.fetchWatchlistStats();
-                    },
+                    } catch (e) {
+                        this.showMsg(e.message || '登录失败', 'error');
+                    }
+                },
                 async fetchLogs(type) {
                         try {
                             const headers = { 'X-Admin-Token': this.token };
@@ -575,7 +606,7 @@
                             else if (type === 'ai_cache') url = '/api/admin/monitor/ai_cache';
                             
                             const res = await fetch(API_BASE_URL + url, { headers: headers });
-                            if (res.status === 403) { this.token = ''; return; }
+                            if (res.status === 403) { this.clearAuth(true); return; }
                             const data = await res.json();
                             
                             if (type === 'system') this.sysLogs = data.logs || [];
@@ -588,7 +619,7 @@
             async fetchConfig() {
                     try {
                         const res = await fetch(API_BASE_URL + '/api/admin/config', { headers: this.getHeaders() });
-                        if (res.status === 403) { this.token = ''; return; }
+                        if (res.status === 403) { this.clearAuth(true); return; }
                         if (!res.ok) {
                             throw new Error(`Config Load Failed: ${res.status} ${res.statusText}`);
                         }
@@ -612,7 +643,7 @@
                             method: 'POST',
                             headers: this.getHeaders(),
                             body: JSON.stringify({
-                                old_password: "", // Not used yet, rely on Token auth
+                                old_password: "",
                                 new_password: pwd
                             })
                         });
@@ -621,7 +652,7 @@
                             this.showMsg("密码修改成功，请重新登录", "success");
                             this.newAdminPassword = '';
                             setTimeout(() => {
-                                localStorage.removeItem('admin_token');
+                                this.clearAuth(false);
                                 location.reload();
                             }, 1500);
                         } else {
@@ -662,7 +693,7 @@
                 async fetchUsers() {
                     try {
                         const res = await fetch(API_BASE_URL + '/api/admin/users', { headers: this.getHeaders() });
-                        if (res.status === 403) { this.token = ''; this.showMsg("Session expired, please login again.", "error"); return; }
+                        if (res.status === 403) { this.clearAuth(true); return; }
                         if (!res.ok) throw new Error(`Users Load Failed: ${res.status}`);
                         this.users = await res.json();
                     } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
@@ -672,7 +703,7 @@
                 async fetchOrders() {
                     try {
                         const res = await fetch(API_BASE_URL + '/api/admin/orders', { headers: this.getHeaders() });
-                        if (res.status === 403) { this.token = ''; return; }
+                        if (res.status === 403) { this.clearAuth(true); return; }
                         if (!res.ok) throw new Error(`Orders Load Failed: ${res.status}`);
                         this.orders = await res.json();
                     } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
@@ -681,7 +712,7 @@
                 async fetchWatchlistStats() {
                     try {
                         const res = await fetch(API_BASE_URL + '/api/admin/watchlist_stats', { headers: this.getHeaders() });
-                        if (res.status === 403) { this.token = ''; return; }
+                        if (res.status === 403) { this.clearAuth(true); return; }
                         if (!res.ok) throw new Error(`Watchlist Stats Load Failed: ${res.status}`);
                         const data = await res.json();
                         const stats = Array.isArray(data.stats)
@@ -749,7 +780,3 @@
     </script>
 </body>
 </html>
-
-
-
-
