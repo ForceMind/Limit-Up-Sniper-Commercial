@@ -14,6 +14,7 @@ class DataProvider:
         self._last_failure_ts = 0
         self._base_info_df = None
         self._base_info_ts = 0
+        self._base_info_retry_ts = 0
         self._lock = threading.Lock() # Global lock for heavy operations (market overview)
 
     def log(self, msg):
@@ -124,9 +125,23 @@ class DataProvider:
             return None
 
     def _fetch_quotes_sina(self, codes):
+        # Ensure base info exists for circulation value / turnover calculation
+        now_ts = time.time()
+        need_refresh = (
+            self._base_info_df is None
+            or self._base_info_df.empty
+            or (now_ts - self._base_info_ts > 3600)
+        )
+        if need_refresh and (now_ts - self._base_info_retry_ts > 300):
+            self._base_info_retry_ts = now_ts
+            try:
+                self.update_base_info()
+            except Exception as e:
+                self.log(f"[!] update_base_info failed in fetch_quotes: {e}")
+
         # Prepare base info map for CircMV calculation
         base_map = {}
-        if self._base_info_df is not None:
+        if self._base_info_df is not None and not self._base_info_df.empty:
             # Create a dict for fast lookup: code -> circ_shares
             # Assuming _base_info_df has 'code' and 'circ_shares'
             try:

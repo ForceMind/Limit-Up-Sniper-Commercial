@@ -1183,6 +1183,24 @@ def get_stock_quotes():
         # Fetch raw quotes
         raw_stocks = data_provider.fetch_quotes(WATCH_LIST)
         
+        # Build quick maps for enrichment: /api/stocks should inherit seats/flow value from pool scanners.
+        limit_up_map = {s.get("code"): s for s in (limit_up_pool_data or []) if s.get("code")}
+        intraday_map = {s.get("code"): s for s in (intraday_pool_data or []) if s.get("code")}
+        market_map = {}
+        try:
+            market_df = data_provider.fetch_all_market_data()
+            if market_df is not None and not market_df.empty:
+                for _, row in market_df.iterrows():
+                    mcode = str(row.get("code", "")).strip()
+                    if not mcode:
+                        continue
+                    try:
+                        market_map[mcode] = float(row.get("circ_mv", 0) or 0)
+                    except Exception:
+                        market_map[mcode] = 0.0
+        except Exception:
+            market_map = {}
+        
         # Enrich with strategy info
         enriched_stocks = []
         for stock in raw_stocks:
@@ -1241,6 +1259,22 @@ def get_stock_quotes():
             # Set strategy to AI strategy (so it appears in AI columns)
             # Frontend will handle 'is_favorite' for Manual column
             stock['strategy'] = ai_strategy
+
+            # Enrich likely seats and circulation value from intraday / limit-up pools.
+            seat_src = intraday_map.get(code) or limit_up_map.get(code)
+            if seat_src:
+                if seat_src.get("likely_seats"):
+                    stock["likely_seats"] = seat_src.get("likely_seats")
+                if (not stock.get("circulation_value")) and seat_src.get("circulation_value"):
+                    stock["circulation_value"] = seat_src.get("circulation_value")
+                if not stock.get("concept") and seat_src.get("concept"):
+                    stock["concept"] = seat_src.get("concept")
+
+            # Final fallback for circulation value from all-market snapshot.
+            if not stock.get("circulation_value"):
+                circ_mv = market_map.get(code, 0)
+                if circ_mv:
+                    stock["circulation_value"] = circ_mv
             
             enriched_stocks.append(stock)
             
