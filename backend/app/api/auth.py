@@ -1,14 +1,14 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, Body
+from fastapi import APIRouter, Depends, HTTPException, Header, Body, Request
 from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
-import hashlib
 import json
 import os
 
 from app.db import schemas, database, models
-from app.core import user_service
+from app.core import user_service, account_store
+from app.core.config_manager import SYSTEM_CONFIG
 from app.core.runtime_logs import add_runtime_log
 from app.core.operation_log import log_user_operation
 
@@ -45,11 +45,11 @@ def _save_json(path: Path, data):
 
 
 def _load_accounts():
-    return _load_json(ACCOUNTS_FILE, {})
+    return account_store.load_accounts()
 
 
 def _save_accounts(data):
-    _save_json(ACCOUNTS_FILE, data)
+    account_store.save_accounts(data)
 
 
 def _load_trial_fingerprints():
@@ -61,11 +61,11 @@ def _save_trial_fingerprints(data):
 
 
 def _hash_password(password: str, salt: str) -> str:
-    return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+    return account_store.hash_password(password, salt)
 
 
 def _make_device_id(username: str) -> str:
-    return "user_" + hashlib.md5(username.encode("utf-8")).hexdigest()[:12]
+    return account_store.make_device_id(username)
 
 
 def _is_guest_device(device_id: str) -> bool:
@@ -88,6 +88,40 @@ def _can_apply_trial(account: dict, user: models.User) -> bool:
     if user.version in PAID_VERSIONS:
         return False
     return True
+
+
+def _community_config() -> dict:
+    cfg = SYSTEM_CONFIG.get("community_config", {})
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _referral_config() -> dict:
+    cfg = SYSTEM_CONFIG.get("referral_config", {})
+    return cfg if isinstance(cfg, dict) else {}
+
+
+def _default_share_template() -> str:
+    return "我在用涨停狙击手，注册链接：{invite_link}，邀请码：{invite_code}。注册后在充值页填写邀请码，可获得赠送权益。"
+
+
+def _fill_share_template(template: str, invite_code: str, invite_link: str) -> str:
+    text = (template or _default_share_template()).strip() or _default_share_template()
+    return text.replace("{invite_code}", invite_code).replace("{invite_link}", invite_link)
+
+
+def _build_invite_link(request: Request, invite_code: str) -> str:
+    cfg = _referral_config()
+    base_url = str(cfg.get("share_base_url", "")).strip()
+    if not base_url:
+        origin = (request.headers.get("origin") or "").strip()
+        if not origin:
+            host = (request.headers.get("host") or "").strip()
+            if host:
+                origin = f"{request.url.scheme}://{host}"
+        base_url = origin or "/"
+
+    sep = "&" if "?" in base_url else "?"
+    return f"{base_url}{sep}invite={invite_code}"
 
 
 def _build_user_payload(user):
@@ -126,6 +160,7 @@ async def login(data: schemas.UserCreate, db: Session = Depends(get_db)):
     if not device_id:
         raise HTTPException(status_code=400, detail="缺少设备标识")
 
+    account_store.ensure_device_not_banned(device_id)
     created = db.query(models.User).filter(models.User.device_id == device_id).first() is None
     user = user_service.get_or_create_user(db, device_id)
 
@@ -165,7 +200,9 @@ async def register(data: dict = Body(...), db: Session = Depends(get_db)):
         "device_id": device_id,
         "created_at": datetime.utcnow().isoformat(),
         "trial_applied": False,
+        "is_banned": False,
     }
+    invite_code = account_store.ensure_account_invite_code(username, accounts)
     _save_accounts(accounts)
 
     # 注册后默认未开通高级权限（需申请体验或购买）
@@ -192,8 +229,12 @@ async def register(data: dict = Body(...), db: Session = Depends(get_db)):
     return {
         "token": device_id,
         "username": username,
+        "invite_code": invite_code,
         "can_apply_trial": _can_apply_trial(accounts[username], user),
         "user": _build_user_payload(user),
+        "qq_group_number": str(_community_config().get("qq_group_number", "")).strip(),
+        "qq_group_link": str(_community_config().get("qq_group_link", "")).strip(),
+        "qq_group_welcome_text": str(_community_config().get("welcome_text", "")).strip(),
     }
 
 
@@ -217,6 +258,8 @@ async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
             detail="account_not_found",
         )
         raise HTTPException(status_code=404, detail="用户不存在，请先注册")
+
+    account_store.ensure_device_not_banned(str(account.get("device_id", "")).strip(), accounts=accounts)
 
     if _hash_password(password, account.get("salt", "")) != account.get("password_hash"):
         log_user_operation(
@@ -258,26 +301,62 @@ async def account_meta(x_device_id: str = Header(None), db: Session = Depends(ge
     if not x_device_id:
         raise HTTPException(status_code=400, detail="Missing Device ID")
 
+    account_store.ensure_device_not_banned(x_device_id)
     accounts = _load_accounts()
-    matched = None
-    for account in accounts.values():
-        if account.get("device_id") == x_device_id:
-            matched = account
-            break
+    username, matched = account_store.get_account_by_device_id(x_device_id, accounts=accounts)
 
-    if not matched:
+    if not matched or not username:
         return {
             "is_registered": False,
             "username": "",
             "can_apply_trial": False,
         }
 
+    invite_code = account_store.ensure_account_invite_code(username, accounts)
+    _save_accounts(accounts)
     user = user_service.get_or_create_user(db, x_device_id)
     return {
         "is_registered": True,
-        "username": matched.get("username", ""),
+        "username": username,
+        "invite_code": invite_code,
         "can_apply_trial": _can_apply_trial(matched, user),
         "user": _build_user_payload(user),
+    }
+
+
+@router.get("/invite_info")
+async def invite_info(request: Request, x_device_id: str = Header(None, alias="X-Device-ID")):
+    if not x_device_id:
+        raise HTTPException(status_code=400, detail="Missing Device ID")
+
+    account_store.ensure_device_not_banned(x_device_id)
+    accounts = _load_accounts()
+    username, account = account_store.get_account_by_device_id(x_device_id, accounts=accounts)
+    if not username or not account:
+        raise HTTPException(status_code=403, detail="请先注册账号后再使用邀请功能")
+
+    invite_code = account_store.ensure_account_invite_code(username, accounts)
+    _save_accounts(accounts)
+
+    referral_cfg = _referral_config()
+    try:
+        reward_days = int(referral_cfg.get("reward_days", 30) or 30)
+    except Exception:
+        reward_days = 30
+    reward_days = max(1, min(reward_days, 365))
+    invite_link = _build_invite_link(request, invite_code)
+    share_text = _fill_share_template(
+        str(referral_cfg.get("share_template", "")),
+        invite_code,
+        invite_link,
+    )
+
+    return {
+        "enabled": bool(referral_cfg.get("enabled", True)),
+        "invite_code": invite_code,
+        "invite_link": invite_link,
+        "reward_days": reward_days,
+        "share_text": share_text,
     }
 
 
@@ -289,6 +368,8 @@ async def apply_trial(
 ):
     if not x_device_id:
         raise HTTPException(status_code=400, detail="请先登录后再申请体验")
+
+    account_store.ensure_device_not_banned(x_device_id)
 
     fingerprint_id = (data.get("fingerprint_id") or "").strip()
     if not fingerprint_id:
@@ -358,6 +439,7 @@ async def apply_trial(
 async def check_status(x_device_id: str = Header(None), db: Session = Depends(get_db)):
     if not x_device_id:
         raise HTTPException(status_code=400, detail="Missing Device ID")
+    account_store.ensure_device_not_banned(x_device_id)
 
     user = user_service.get_or_create_user(db, x_device_id)
 

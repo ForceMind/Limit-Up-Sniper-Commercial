@@ -227,6 +227,53 @@
                             </div>
                         </section>
 
+                        <!-- Invite & Community -->
+                        <section class="mb-8 border-b pb-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-700">邀请与社群</h3>
+                            <div class="bg-gray-50 border border-gray-200 rounded p-4 space-y-4">
+                                <div>
+                                    <div class="text-sm font-bold text-gray-700 mb-2">QQ群配置（注册成功弹窗）</div>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">QQ群号</label>
+                                            <input type="text" v-model="config.community_config.qq_group_number" class="w-full border rounded p-2 text-sm font-mono" placeholder="123456789">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">加群链接（可选）</label>
+                                            <input type="text" v-model="config.community_config.qq_group_link" class="w-full border rounded p-2 text-sm" placeholder="https://qm.qq.com/...">
+                                        </div>
+                                    </div>
+                                    <div class="mt-2">
+                                        <label class="block text-xs text-gray-500 mb-1">弹窗文案</label>
+                                        <input type="text" v-model="config.community_config.welcome_text" class="w-full border rounded p-2 text-sm" placeholder="欢迎加入技术交流群...">
+                                    </div>
+                                </div>
+
+                                <div class="border-t pt-4">
+                                    <div class="text-sm font-bold text-gray-700 mb-2">邀请裂变配置</div>
+                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                                        <label class="flex items-center gap-2 text-sm">
+                                            <input type="checkbox" v-model="config.referral_config.enabled">
+                                            <span>启用邀请奖励</span>
+                                        </label>
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">奖励天数</label>
+                                            <input type="number" v-model.number="config.referral_config.reward_days" class="w-full border rounded p-2 text-sm">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">分享地址（可选）</label>
+                                            <input type="text" v-model="config.referral_config.share_base_url" class="w-full border rounded p-2 text-sm" placeholder="https://your-domain.com">
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-500 mb-1">分享文案模板</label>
+                                        <textarea v-model="config.referral_config.share_template" rows="3" class="w-full border rounded p-2 text-sm" placeholder="支持变量 {invite_link} {invite_code}"></textarea>
+                                        <div class="text-xs text-gray-500 mt-1">可用变量：`{invite_link}`、`{invite_code}`</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
                         <!-- Admin Panel Path -->
                         <section class="mb-8 border-b pb-8">
                             <h3 class="text-xl font-semibold mb-4 text-gray-700">后台地址</h3>
@@ -371,7 +418,10 @@
                 <div v-if="currentView === 'users'" class="max-w-6xl mx-auto">
                     <div class="flex justify-between items-center mb-6">
                         <h2 class="text-2xl font-bold">用户管理</h2>
-                        <div class="flex items-center gap-4">
+                        <div class="flex items-center gap-2">
+                            <button @click="setUserFilter('all')" :class="userFilter === 'all' ? 'bg-gray-900 text-white' : 'bg-white border'" class="px-3 py-1 rounded text-sm">全部</button>
+                            <button @click="setUserFilter('registered')" :class="userFilter === 'registered' ? 'bg-gray-900 text-white' : 'bg-white border'" class="px-3 py-1 rounded text-sm">正式注册</button>
+                            <button @click="setUserFilter('guest')" :class="userFilter === 'guest' ? 'bg-gray-900 text-white' : 'bg-white border'" class="px-3 py-1 rounded text-sm">游客</button>
                             <button @click="fetchUsers" class="text-blue-500 hover:text-blue-700">刷新</button>
                         </div>
                     </div>
@@ -383,6 +433,7 @@
                                     <th class="p-3 font-semibold text-gray-600">ID</th>
                                     <th class="p-3 font-semibold text-gray-600">设备指纹</th>
                                     <th class="p-3 font-semibold text-gray-600">用户名</th>
+                                    <th class="p-3 font-semibold text-gray-600">账号类型</th>
                                     <th class="p-3 font-semibold text-gray-600">版本</th>
                                     <th class="p-3 font-semibold text-gray-600">状态</th>
                                     <th class="p-3 font-semibold text-gray-600">过期时间</th>
@@ -399,6 +450,11 @@
                                         <span v-else class="text-gray-400">未注册</span>
                                     </td>
                                     <td class="p-3">
+                                        <span :class="u.is_registered ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'" class="px-2 py-1 rounded-full text-xs">
+                                            {{ u.is_registered ? '正式注册' : '游客' }}
+                                        </span>
+                                    </td>
+                                    <td class="p-3">
                                         <span :class="{
                                             'text-gray-500': u.version==='trial',
                                             'text-blue-500 font-bold': u.version==='basic',
@@ -407,17 +463,23 @@
                                         }">{{ u.version }}</span>
                                     </td>
                                     <td class="p-3">
-                                        <span v-if="u.is_expired" class="bg-red-100 text-red-800 px-2 py-1 rounded-full text-xs">过期</span>
+                                        <span v-if="u.is_banned" class="bg-red-100 text-red-700 px-2 py-1 rounded-full text-xs">已封禁</span>
+                                        <span v-else-if="u.is_expired" class="bg-amber-100 text-amber-700 px-2 py-1 rounded-full text-xs">过期</span>
                                         <span v-else class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs">正常</span>
+                                        <div v-if="u.is_banned && u.banned_reason" class="text-[11px] text-red-500 mt-1">{{ u.banned_reason }}</div>
                                     </td>
                                     <td class="p-3 text-xs">{{ u.expires_at ? new Date(u.expires_at).toLocaleString() : '永久' }}</td>
                                     <td class="p-3 text-xs font-mono">
                                         {{ u.daily_ai_count }} / {{ u.daily_raid_count }} / {{ u.daily_review_count }}
                                     </td>
                                     <td class="p-3">
-                                        <div class="flex gap-2">
-                                            <button @click="openAddTime(u)" class="text-blue-500 hover:text-blue-700 text-xs border border-blue-500 rounded px-2 py-1">增加时长</button>
+                                        <div class="flex gap-2 flex-wrap">
+                                            <button @click="openAddTime(u)" :disabled="!u.is_registered" class="text-blue-500 hover:text-blue-700 text-xs border border-blue-500 rounded px-2 py-1 disabled:opacity-40">增加时长</button>
+                                            <button @click="setMembership(u)" :disabled="!u.is_registered" class="text-indigo-600 hover:text-indigo-700 text-xs border border-indigo-500 rounded px-2 py-1 disabled:opacity-40">设会员</button>
                                             <button @click="resetUserPassword(u)" :disabled="!u.is_registered" class="text-amber-600 hover:text-amber-700 text-xs border border-amber-500 rounded px-2 py-1 disabled:opacity-40">重置密码</button>
+                                            <button @click="toggleUserBan(u)" :disabled="!u.is_registered" class="text-xs border rounded px-2 py-1 disabled:opacity-40" :class="u.is_banned ? 'text-emerald-600 border-emerald-500 hover:text-emerald-700' : 'text-red-600 border-red-500 hover:text-red-700'">
+                                                {{ u.is_banned ? '解封' : '封禁' }}
+                                            </button>
                                         </div>
                                     </td>
                                 </tr>
@@ -695,8 +757,21 @@
                     token: localStorage.getItem('admin_token') || '',
                     loginForm: { username: 'admin', password: '' },
                     currentView: 'dashboard',
-                    config: {},
+                    config: {
+                        community_config: {
+                            qq_group_number: '',
+                            qq_group_link: '',
+                            welcome_text: ''
+                        },
+                        referral_config: {
+                            enabled: true,
+                            reward_days: 30,
+                            share_base_url: '',
+                            share_template: ''
+                        }
+                    },
                     users: [],
+                    userFilter: 'all',
                     orders: [],
                     orderStats: {},
                     msgModal: { show: false, msg: '', type: 'info' },
@@ -847,14 +922,30 @@
                             console.error("Fetch Logs Error:", e);
                         }
                     },
-            async fetchConfig() {
+                async fetchConfig() {
                     try {
                         const res = await fetch(API_BASE_URL + '/api/admin/config', { headers: this.getHeaders() });
                         if (res.status === 403) { this.clearAuth(true); return; }
                         if (!res.ok) {
                             throw new Error(`Config Load Failed: ${res.status} ${res.statusText}`);
                         }
-                        this.config = await res.json();
+                        const data = await res.json();
+                        this.config = {
+                            ...data,
+                            community_config: {
+                                qq_group_number: '',
+                                qq_group_link: '',
+                                welcome_text: '',
+                                ...(data.community_config || {})
+                            },
+                            referral_config: {
+                                enabled: true,
+                                reward_days: 30,
+                                share_base_url: '',
+                                share_template: '',
+                                ...(data.referral_config || {})
+                            }
+                        };
                     } catch(e) { 
                         console.error("Fetch Config Error:", e);
                         this.showMsg(e.message, 'error'); 
@@ -941,6 +1032,8 @@
                                 lhb_min_amount: this.config.lhb_min_amount,
                                 email_config: this.config.email_config,
                                 api_keys: this.config.api_keys,
+                                community_config: this.config.community_config,
+                                referral_config: this.config.referral_config,
                                 pricing_config: this.config.pricing_config
                             })
                         });
@@ -954,9 +1047,14 @@
                 
 
                 // Users
+                setUserFilter(mode) {
+                    this.userFilter = mode || 'all';
+                    this.fetchUsers();
+                },
                 async fetchUsers() {
                     try {
-                        const res = await fetch(API_BASE_URL + '/api/admin/users', { headers: this.getHeaders() });
+                        const qs = new URLSearchParams({ account_type: this.userFilter || 'all' }).toString();
+                        const res = await fetch(API_BASE_URL + `/api/admin/users?${qs}`, { headers: this.getHeaders() });
                         if (res.status === 403) { this.clearAuth(true); return; }
                         if (!res.ok) throw new Error(`Users Load Failed: ${res.status}`);
                         this.users = await res.json();
@@ -1121,6 +1219,76 @@
                         this.showMsg(`已重置 ${data.username} 密码: ${data.new_password}`, 'success');
                     } catch (e) {
                         this.showMsg(e.message || '重置密码失败', 'error');
+                    }
+                },
+                async toggleUserBan(user) {
+                    if (!user || !user.id || !user.is_registered) {
+                        this.showMsg('游客账号不支持封禁管理', 'info');
+                        return;
+                    }
+                    const nextBanned = !user.is_banned;
+                    let reason = '';
+                    if (nextBanned) {
+                        reason = prompt('请输入封禁原因（可选）', user.banned_reason || '违规使用') || '';
+                    }
+                    const confirmed = await this.showConfirm(nextBanned ? `确认封禁用户 ${user.username || user.device_id}？` : `确认解封用户 ${user.username || user.device_id}？`);
+                    if (!confirmed) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/users/ban', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                user_id: user.id,
+                                username: user.username || '',
+                                device_id: user.device_id || '',
+                                banned: nextBanned,
+                                reason
+                            })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '操作失败');
+                        this.showMsg(nextBanned ? '已封禁该用户' : '已解封该用户', 'success');
+                        this.fetchUsers();
+                    } catch (e) {
+                        this.showMsg(e.message || '封禁操作失败', 'error');
+                    }
+                },
+                async setMembership(user) {
+                    if (!user || !user.id || !user.is_registered) {
+                        this.showMsg('游客账号不支持会员状态设置', 'info');
+                        return;
+                    }
+                    const version = (prompt('请输入版本：trial/basic/advanced/flagship', user.version || 'basic') || '').trim().toLowerCase();
+                    if (!['trial', 'basic', 'advanced', 'flagship'].includes(version)) {
+                        this.showMsg('版本无效', 'error');
+                        return;
+                    }
+                    const daysText = prompt('请输入到期天数（从现在开始计算）', '30');
+                    const days = Number(daysText);
+                    if (!Number.isFinite(days) || days < 0) {
+                        this.showMsg('天数无效', 'error');
+                        return;
+                    }
+                    const confirmed = await this.showConfirm(`确认将用户 ${user.username || user.device_id} 设置为 ${version}，到期天数 ${Math.floor(days)} 天？`);
+                    if (!confirmed) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/users/set_membership', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                user_id: user.id,
+                                version,
+                                days: Math.floor(days)
+                            })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '设置失败');
+                        this.showMsg('会员状态已更新', 'success');
+                        this.fetchUsers();
+                    } catch (e) {
+                        this.showMsg(e.message || '设置会员失败', 'error');
                     }
                 },
 

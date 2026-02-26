@@ -77,11 +77,14 @@ USER_OP_LOG_SKIP_PREFIXES = (
     "/api/admin/panel_path",
     "/api/admin/users/reset_password",
     "/api/admin/users/add_time",
+    "/api/admin/users/ban",
+    "/api/admin/users/set_membership",
     "/api/admin/orders/approve",
     "/api/admin/config",
     "/api/auth/login_user",
     "/api/auth/register",
     "/api/auth/apply_trial",
+    "/api/auth/invite_info",
 )
 
 

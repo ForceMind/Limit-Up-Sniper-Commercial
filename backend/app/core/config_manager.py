@@ -45,6 +45,17 @@ SYSTEM_CONFIG = {
         "aliyun": "",
         "other": ""
     },
+    "community_config": {
+        "qq_group_number": "",
+        "qq_group_link": "",
+        "welcome_text": "欢迎加入技术交流群，获取版本更新与使用答疑。"
+    },
+    "referral_config": {
+        "enabled": True,
+        "reward_days": 30,
+        "share_base_url": "",
+        "share_template": "我在用涨停狙击手，注册链接：{invite_link}，邀请码：{invite_code}。注册后在充值页填写邀请码，可获得赠送权益。"
+    },
     "pricing_config": {
         "basic": {
             "3d": {"days": 3, "price": 9.9, "label": "3天体验"},
@@ -79,9 +90,9 @@ def load_config():
             with open(config_path, "r", encoding="utf-8") as f:
                 saved_config = json.load(f)
                 # Update only persistent fields
-                for key in ["auto_analysis_enabled", "use_smart_schedule", "fixed_interval_minutes", 
-                           "schedule_plan", "news_auto_clean_enabled", "news_auto_clean_days", 
-                           "email_config", "api_keys", "pricing_config"]:
+                for key in ["auto_analysis_enabled", "use_smart_schedule", "fixed_interval_minutes",
+                           "schedule_plan", "news_auto_clean_enabled", "news_auto_clean_days",
+                           "email_config", "api_keys", "community_config", "referral_config", "pricing_config"]:
                     if key in saved_config:
                         SYSTEM_CONFIG[key] = saved_config[key]
         except Exception as e:
@@ -101,6 +112,8 @@ def save_config():
                 "news_auto_clean_days": SYSTEM_CONFIG.get("news_auto_clean_days", 14),
                 "email_config": SYSTEM_CONFIG.get("email_config", {}),
                 "api_keys": SYSTEM_CONFIG.get("api_keys", {}),
+                "community_config": SYSTEM_CONFIG.get("community_config", {}),
+                "referral_config": SYSTEM_CONFIG.get("referral_config", {}),
                 "pricing_config": SYSTEM_CONFIG.get("pricing_config", {})
             }
             json.dump(export_data, f, indent=2, ensure_ascii=False)

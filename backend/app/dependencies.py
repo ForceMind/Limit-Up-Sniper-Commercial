@@ -1,7 +1,7 @@
 from fastapi import Header, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.db import database, models
-from app.core import user_service
+from app.core import user_service, account_store
 from datetime import datetime
 
 class QuotaLimitExceeded(HTTPException):
@@ -22,6 +22,7 @@ def get_db():
 async def get_current_user(x_device_id: str = Header(..., alias="X-Device-ID"), db: Session = Depends(get_db)):
     if not x_device_id:
         raise HTTPException(status_code=400, detail="Missing Device ID")
+    account_store.ensure_device_not_banned(x_device_id)
     return user_service.get_or_create_user(db, x_device_id)
 
 async def check_ai_permission(user: models.User = Depends(get_current_user)):

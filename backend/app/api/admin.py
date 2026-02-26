@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks
 from sqlalchemy.orm import Session
 from sqlalchemy import func
 from app.db import models, schemas, database
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Tuple
 import secrets
 import os
 import json
@@ -11,7 +11,7 @@ import re
 from pathlib import Path
 from app.core.config_manager import SYSTEM_CONFIG, save_config
 from app.core.lhb_manager import lhb_manager
-from app.core import user_service, purchase_manager
+from app.core import user_service, purchase_manager, account_store
 from app.core import watchlist_stats
 from app.core.ai_cache import ai_cache
 from app.core.runtime_logs import get_runtime_logs, add_runtime_log
@@ -53,12 +53,11 @@ def _save_json(path: Path, data):
 
 
 def _load_user_accounts() -> Dict[str, dict]:
-    data = _load_json(USER_ACCOUNTS_FILE, {})
-    return data if isinstance(data, dict) else {}
+    return account_store.load_accounts()
 
 
 def _save_user_accounts(data: Dict[str, dict]):
-    _save_json(USER_ACCOUNTS_FILE, data)
+    account_store.save_accounts(data)
 
 
 def _normalize_admin_panel_path(raw_path: str) -> str:
@@ -348,8 +347,14 @@ async def update_admin_panel_path_api(
 
 # --- User / Order Management ---
 @router.get("/users")
-async def list_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), authorized: bool = Depends(verify_admin)):
-    users = db.query(models.User).offset(skip).limit(limit).all()
+async def list_users(
+    skip: int = 0,
+    limit: int = 100,
+    account_type: str = "all",
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_admin),
+):
+    users = db.query(models.User).order_by(models.User.created_at.desc()).all()
     accounts = _load_user_accounts()
     device_to_username: Dict[str, str] = {}
     for username, account in accounts.items():
@@ -359,15 +364,28 @@ async def list_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_
         if did:
             device_to_username[did] = username
 
-    res = []
+    filter_mode = (account_type or "all").strip().lower()
+    if filter_mode not in {"all", "guest", "registered"}:
+        raise HTTPException(status_code=400, detail="Invalid account_type, must be all/guest/registered")
+
+    res: List[Dict[str, Any]] = []
     for u in users:
         quotas = user_service.get_user_quota(u.version)
         username = device_to_username.get(u.device_id, "")
+        is_registered = bool(username)
+        if filter_mode == "guest" and is_registered:
+            continue
+        if filter_mode == "registered" and not is_registered:
+            continue
+        account = accounts.get(username, {}) if is_registered else {}
         res.append({
             "id": u.id,
             "device_id": u.device_id,
             "username": username,
-            "is_registered": bool(username),
+            "is_registered": is_registered,
+            "account_type": "registered" if is_registered else "guest",
+            "is_banned": bool(account.get("is_banned", False)) if isinstance(account, dict) else False,
+            "banned_reason": str(account.get("banned_reason", "")).strip() if isinstance(account, dict) else "",
             "version": u.version,
             "expires_at": u.expires_at,
             "created_at": u.created_at,
@@ -379,13 +397,55 @@ async def list_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_
             "remaining_review": quotas['review'] - u.daily_review_count,
             "is_expired": (u.expires_at and u.expires_at < datetime.utcnow())
         })
-    return res
+    safe_skip = max(0, int(skip or 0))
+    safe_limit = max(1, min(int(limit or 100), 1000))
+    return res[safe_skip:safe_skip + safe_limit]
 
 
 class ResetUserPasswordSchema(BaseModel):
     user_id: Optional[int] = None
     username: Optional[str] = None
     device_id: Optional[str] = None
+
+
+class SetUserBanSchema(BaseModel):
+    user_id: Optional[int] = None
+    username: Optional[str] = None
+    device_id: Optional[str] = None
+    banned: bool = True
+    reason: Optional[str] = None
+
+
+class SetUserMembershipSchema(BaseModel):
+    user_id: int
+    version: str
+    days: int = 30
+
+
+def _resolve_target_username(
+    payload_username: Optional[str],
+    payload_device_id: Optional[str],
+    payload_user_id: Optional[int],
+    db: Session,
+    accounts: Dict[str, dict],
+) -> Tuple[str, str]:
+    target_username = (payload_username or "").strip()
+    target_device_id = (payload_device_id or "").strip()
+
+    if not target_device_id and payload_user_id:
+        user = db.query(models.User).filter(models.User.id == payload_user_id).first()
+        if user:
+            target_device_id = str(user.device_id or "").strip()
+
+    if not target_username and target_device_id:
+        target_username = account_store.get_username_by_device_id(target_device_id, accounts=accounts)
+
+    if target_username and not target_device_id:
+        account = accounts.get(target_username, {})
+        if isinstance(account, dict):
+            target_device_id = str(account.get("device_id", "")).strip()
+
+    return target_username, target_device_id
 
 
 @router.post("/users/reset_password")
@@ -447,6 +507,56 @@ async def reset_user_password(
     }
 
 
+@router.post("/users/ban")
+async def set_user_ban_status(
+    payload: SetUserBanSchema,
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_admin),
+):
+    accounts = _load_user_accounts()
+    if not accounts:
+        raise HTTPException(status_code=404, detail="No registered accounts found")
+
+    target_username, target_device_id = _resolve_target_username(
+        payload.username,
+        payload.device_id,
+        payload.user_id,
+        db,
+        accounts,
+    )
+    if not target_username or target_username not in accounts:
+        raise HTTPException(status_code=404, detail="Registered account not found for this user")
+
+    reason = (payload.reason or "").strip()
+    account_store.set_account_ban_status(
+        target_username,
+        banned=bool(payload.banned),
+        reason=reason,
+        accounts=accounts,
+    )
+
+    add_runtime_log(
+        f"[ADMIN] User ban status changed: username={target_username}, device={target_device_id}, banned={bool(payload.banned)}"
+    )
+    log_user_operation(
+        "set_user_ban",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/users/ban",
+        username=target_username,
+        device_id=target_device_id,
+        detail=f"banned={bool(payload.banned)}, reason={reason}",
+    )
+    return {
+        "status": "success",
+        "username": target_username,
+        "device_id": target_device_id,
+        "is_banned": bool(payload.banned),
+        "reason": reason,
+    }
+
+
 @router.post("/users/add_time")
 async def add_time_to_user(
     action: schemas.AdminAddTime,
@@ -456,6 +566,8 @@ async def add_time_to_user(
     user = db.query(models.User).filter(models.User.id == action.user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
+    if not account_store.get_username_by_device_id(user.device_id):
+        raise HTTPException(status_code=400, detail="该用户为游客账号，请先注册后再操作")
 
     now = datetime.utcnow()
     if user.expires_at and user.expires_at > now:
@@ -474,6 +586,51 @@ async def add_time_to_user(
         detail=f"user_id={user.id}, minutes={action.minutes}",
     )
     return {"message": "success", "new_expires_at": user.expires_at}
+
+
+@router.post("/users/set_membership")
+async def set_user_membership(
+    payload: SetUserMembershipSchema,
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_admin),
+):
+    user = db.query(models.User).filter(models.User.id == payload.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    if not account_store.get_username_by_device_id(user.device_id):
+        raise HTTPException(status_code=400, detail="该用户为游客账号，请先注册后再操作")
+
+    version = (payload.version or "").strip().lower()
+    allowed_versions = {"trial", "basic", "advanced", "flagship"}
+    if version not in allowed_versions:
+        raise HTTPException(status_code=400, detail="Invalid version")
+
+    days = int(payload.days or 0)
+    days = max(0, min(days, 3650))
+    now = datetime.utcnow()
+    user.version = version
+    user.expires_at = now + timedelta(days=days) if days > 0 else now
+    db.commit()
+    db.refresh(user)
+
+    add_runtime_log(
+        f"[ADMIN] Membership updated: user_id={user.id}, device={user.device_id}, version={version}, days={days}"
+    )
+    log_user_operation(
+        "set_user_membership",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/users/set_membership",
+        device_id=user.device_id,
+        detail=f"user_id={user.id}, version={version}, days={days}",
+    )
+    return {
+        "status": "success",
+        "user_id": user.id,
+        "version": user.version,
+        "expires_at": user.expires_at,
+    }
 
 
 @router.get("/orders", response_model=List[schemas.OrderInfo])
@@ -539,6 +696,7 @@ async def approve_order(
     if action.action == "reject":
         order.status = "rejected"
         db.commit()
+        account_store.update_order_invite_status(order.order_code, "rejected", reason="order_rejected")
         add_runtime_log(f"[ORDER] Rejected order={order.order_code}")
         log_user_operation(
             "order_reject",
@@ -597,6 +755,41 @@ async def approve_order(
 
     order.status = "completed"
     db.commit()
+    referral_reward_info = None
+    reward_record = account_store.claim_order_invite_reward(order.order_code)
+    if reward_record:
+        inviter_device_id = str(reward_record.get("inviter_device_id", "")).strip()
+        if inviter_device_id:
+            reward_days = int(reward_record.get("reward_days", 30) or 30)
+            reward_days = max(1, min(reward_days, 365))
+            inviter_user = user_service.get_or_create_user(db, inviter_device_id)
+            inviter_base = now
+            if inviter_user.expires_at and inviter_user.expires_at > now:
+                inviter_base = inviter_user.expires_at
+            inviter_user.expires_at = inviter_base + timedelta(days=reward_days)
+            if inviter_user.version == "trial":
+                inviter_user.version = "basic"
+            db.commit()
+            referral_reward_info = {
+                "inviter_device_id": inviter_device_id,
+                "reward_days": reward_days,
+                "bonus_token": str(reward_record.get("bonus_token", "")).strip(),
+                "invite_code": str(reward_record.get("invite_code", "")).strip(),
+                "inviter_username": str(reward_record.get("inviter_username", "")).strip(),
+            }
+            add_runtime_log(
+                f"[ORDER] Referral rewarded: order={order.order_code}, inviter_device={inviter_device_id}, reward_days={reward_days}"
+            )
+            await ws_hub.push_device_event(inviter_device_id, {
+                "event": "invite_reward_credited",
+                "order_code": order.order_code,
+                "reward_days": reward_days,
+                "bonus_token": referral_reward_info["bonus_token"],
+                "message": f"你的邀请码已生效，已获赠 {reward_days} 天会员权益。",
+            })
+        else:
+            account_store.update_order_invite_status(order.order_code, "invalid", reason="missing_inviter_device")
+
     add_runtime_log(
         f"[ORDER] Approved order={order.order_code}, device={user.device_id}, version={user.version}, bonus_days={bonus_days}"
     )
@@ -616,6 +809,8 @@ async def approve_order(
         "version": user.version,
         "expires_at": user.expires_at.isoformat() if user.expires_at else None,
         "bonus_days": int(bonus_days),
+        "referral_bonus_token": referral_reward_info["bonus_token"] if referral_reward_info else "",
+        "referral_bonus_days": int(referral_reward_info["reward_days"]) if referral_reward_info else 0,
         "message": "会员审批已通过，权益已生效。",
     })
 
@@ -623,6 +818,7 @@ async def approve_order(
         "status": "success",
         "new_expiry": user.expires_at,
         "bonus_days": bonus_days,
+        "referral_reward": referral_reward_info,
     }
 
 
@@ -637,6 +833,8 @@ class AdminConfigUpdate(BaseModel):
     lhb_min_amount: Optional[int] = None
     email_config: Optional[dict] = None
     api_keys: Optional[dict] = None
+    community_config: Optional[dict] = None
+    referral_config: Optional[dict] = None
     pricing_config: Optional[dict] = None
 
 
@@ -677,6 +875,19 @@ async def get_admin_config(authorized: bool = Depends(verify_admin)):
             "aliyun": "",
             "other": ""
         }
+    if 'community_config' not in config:
+        config['community_config'] = {
+            "qq_group_number": "",
+            "qq_group_link": "",
+            "welcome_text": "欢迎加入技术交流群，获取版本更新与使用答疑。",
+        }
+    if 'referral_config' not in config:
+        config['referral_config'] = {
+            "enabled": True,
+            "reward_days": 30,
+            "share_base_url": "",
+            "share_template": "我在用涨停狙击手，注册链接：{invite_link}，邀请码：{invite_code}。注册后在充值页填写邀请码，可获得赠送权益。",
+        }
 
     config['pricing_config'] = purchase_manager.PRICING_CONFIG
     return config
@@ -698,6 +909,12 @@ async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depe
 
     if config.api_keys is not None:
         SYSTEM_CONFIG["api_keys"] = config.api_keys
+
+    if config.community_config is not None:
+        SYSTEM_CONFIG["community_config"] = config.community_config
+
+    if config.referral_config is not None:
+        SYSTEM_CONFIG["referral_config"] = config.referral_config
 
     if config.pricing_config is not None:
         SYSTEM_CONFIG["pricing_config"] = config.pricing_config

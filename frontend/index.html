@@ -1167,6 +1167,43 @@
             </div>
         </div>
 
+        <!-- QQ Group Invite Modal -->
+        <div v-if="showQQInviteModal" class="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-sm p-6">
+                <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 mb-2">加入技术交流群</h3>
+                <p class="text-sm text-gray-600 dark:text-gray-300 mb-3">
+                    {{ qqInviteInfo.qq_group_welcome_text || '欢迎加入技术交流群，获取版本更新与使用答疑。' }}
+                </p>
+                <div class="bg-gray-50 dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700 p-3 mb-4">
+                    <div class="text-xs text-gray-500 mb-1">QQ群号</div>
+                    <div class="text-xl font-mono font-bold text-blue-600 dark:text-blue-400">
+                        {{ qqInviteInfo.qq_group_number || '暂未配置' }}
+                    </div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <button @click="showQQInviteModal = false" class="py-2 rounded border border-gray-300 text-sm">稍后再说</button>
+                    <button @click="copyQQGroupInfo" class="py-2 rounded bg-blue-600 text-white text-sm font-bold">复制群号</button>
+                </div>
+                <button v-if="qqInviteInfo.qq_group_link" @click="openQQGroupLink" class="w-full mt-2 py-2 rounded bg-emerald-600 text-white text-sm font-bold">一键加群</button>
+            </div>
+        </div>
+
+        <!-- New User Onboarding -->
+        <div v-if="showOnboardingModal" class="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-md p-6">
+                <div class="text-xs text-blue-600 dark:text-blue-400 font-bold mb-2">
+                    新手引导 {{ onboardingStep + 1 }} / {{ onboardingSteps.length }}
+                </div>
+                <h3 class="text-xl font-bold text-gray-900 dark:text-gray-100 mb-2">{{ onboardingSteps[onboardingStep]?.title }}</h3>
+                <p class="text-sm text-gray-600 dark:text-gray-300 mb-5 leading-relaxed">
+                    {{ onboardingSteps[onboardingStep]?.desc }}
+                </p>
+                <button @click="nextOnboardingStep" class="w-full py-2 rounded bg-red-600 hover:bg-red-700 text-white text-sm font-bold">
+                    {{ onboardingStep === onboardingSteps.length - 1 ? '我看明白了，开始使用' : '我看明白了，下一步' }}
+                </button>
+            </div>
+        </div>
+
         <!-- Subscription Modal -->
         <div v-if="showSubscriptionModal" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
@@ -1190,6 +1227,23 @@
                             {{ loginLoading ? '处理中...' : '立即申请10分钟体验' }}
                         </button>
                         <div v-else class="text-[11px] text-orange-700 dark:text-orange-300">10分钟体验资格已使用，可直接购买3天体验或正式会员。</div>
+                    </div>
+
+                    <div v-if="inviteInfo.enabled !== false" class="mb-4 rounded border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 p-3">
+                        <div class="flex items-center justify-between gap-2 mb-2">
+                            <div class="text-xs text-blue-700 dark:text-blue-300">我的邀请码</div>
+                            <button @click="copyInviteShare" class="text-xs text-blue-600 font-bold">复制分享文案</button>
+                        </div>
+                        <div class="w-full bg-white/70 dark:bg-gray-900/60 rounded border border-dashed border-blue-300 dark:border-blue-700 px-3 py-2 text-sm font-mono tracking-wider">
+                            {{ inviteLoading ? '加载中...' : (inviteInfo.invite_code || '暂不可用') }}
+                        </div>
+                        <div class="text-[11px] text-blue-700/80 dark:text-blue-300/80 mt-2">
+                            分享后，对方在充值页填写你的邀请码，订单通过后可获赠 {{ inviteInfo.reward_days || 30 }} 天权益。
+                        </div>
+                        <div class="mt-3">
+                            <label class="block text-xs text-gray-500 mb-1">填写邀请码（可选）</label>
+                            <input type="text" v-model="inviteInputCode" @input="inviteInputCode = (inviteInputCode || '').toUpperCase()" maxlength="20" placeholder="输入好友邀请码" class="w-full border rounded px-3 py-2 text-sm dark:bg-gray-900 dark:border-gray-600 dark:text-gray-100">
+                        </div>
                     </div>
 
                     <!-- Version Tabs -->
@@ -1237,12 +1291,16 @@
                 <!-- Step 2: Payment -->
                 <div v-if="purchaseStep === 2" class="p-6 flex flex-col items-center text-center">
                     <div class="bg-yellow-50 dark:bg-yellow-900/20 text-yellow-800 dark:text-yellow-200 p-3 rounded text-xs mb-4 w-full text-left">
-                        1. 复制下方口令<br>2. 打开支付宝 -> 红包 -> 口令红包<br>3. 粘贴口令，输入金额 <span class="font-bold text-red-500">{{ currentOrder?.amount }} 元</span><br>4. 塞钱进红包
+                        1. 复制下方口令<br>2. 打开支付宝 -> 红包 -> 口令红包<br>3. 粘贴自定义口令，输入金额 <span class="font-bold text-red-500">{{ currentOrder?.amount }} 元，红包个数 1</span><br>4. 点击发红包并付款
                     </div>
                     
                     <div class="w-full bg-gray-100 dark:bg-gray-900 p-4 rounded mb-4 flex items-center justify-between border-2 border-dashed border-gray-300 dark:border-gray-600">
                         <span class="text-xl font-mono font-bold tracking-widest">{{ currentOrder?.order_code }}</span>
                         <button @click="copyCode" class="text-blue-500 text-sm font-bold">复制</button>
+                    </div>
+
+                    <div v-if="currentOrder?.invite_bonus_token" class="w-full bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded p-3 mb-4 text-xs text-left">
+                        邀请奖励口令：<span class="font-mono font-bold">{{ currentOrder.invite_bonus_token }}</span>
                     </div>
                     
                     <div class="text-xs text-gray-400 mb-6">
@@ -1438,6 +1496,7 @@
                     // LOGIN DATA
                     showLoginModal: false,
                     showGuestReminderModal: false,
+                    showQQInviteModal: false,
                     loginForm: { username: '', password: '' },
                     displayUsername: '',
                     isRegisteredAccount: false,
@@ -1472,11 +1531,35 @@
                     selectedDuration: '1m',
                     currentOrder: null,
                     purchaseLoading: false,
+                    inviteLoading: false,
+                    inviteInputCode: '',
+                    inviteInfo: {
+                        enabled: true,
+                        invite_code: '',
+                        invite_link: '',
+                        share_text: '',
+                        reward_days: 30
+                    },
+                    qqInviteInfo: {
+                        qq_group_number: '',
+                        qq_group_link: '',
+                        qq_group_welcome_text: ''
+                    },
+                    showOnboardingModal: false,
+                    onboardingStep: 0,
+                    onboardingUsername: '',
+                    onboardingSteps: [
+                        { title: '竞价页面', desc: '用于查看开盘前的核心候选股与竞价信号，适合盘前制定计划。' },
+                        { title: '涨停页面', desc: '用于观察涨停池与炸板池变化，判断板块强弱与市场热度。' },
+                        { title: '盘中页面', desc: '用于执行盘中突击与实时跟踪，快速捕捉异动机会。' },
+                        { title: '自选页面', desc: '用于管理你自己的重点股票清单，便于持续追踪。' },
+                        { title: '会员与充值', desc: '在会员中心可续费、升级，并可使用邀请码获得赠送权益。' }
+                    ],
                     features: {
                         'trial': { ai: '每日1次', raid: '暂不支持', review: '暂不支持', desc: '体验10分钟' },
-                        'basic': { ai: '每日5次', raid: '暂不支持', review: '暂不支持', desc: '入门版' },
-                        'advanced': { ai: '每日10次', raid: '每日3次', review: '每日1次', desc: '进阶版' },
-                        'flagship': { ai: '每日1000次', raid: '每日50次', review: '每日5次', desc: '旗舰版' }
+                        'basic': { ai: '每日5次', raid: '暂不支持', review: '暂不支持', desc: '入门首选' },
+                        'advanced': { ai: '每日10次', raid: '每日3次', review: '每日1次', desc: '进利器' },
+                        'flagship': { ai: '每日1000次', raid: '每日50次', review: '每日5次', desc: '专业游资' }
                     }
                 }
             },
@@ -1646,6 +1729,122 @@
                         }
                     }, 10000);
                 },
+                getOnboardingStorageKey() {
+                    const username = (this.displayUsername || localStorage.getItem('sniper_username') || '').trim();
+                    return username ? `sniper_onboarding_done_${username}` : '';
+                },
+                maybeStartOnboarding(forceStart = false) {
+                    if (!this.isRegisteredAccount) return;
+                    const key = this.getOnboardingStorageKey();
+                    if (!key) return;
+                    if (forceStart) localStorage.removeItem(key);
+                    if (localStorage.getItem(key) === '1') return;
+                    this.onboardingUsername = this.displayUsername || localStorage.getItem('sniper_username') || '';
+                    this.onboardingStep = 0;
+                    this.showOnboardingModal = true;
+                },
+                nextOnboardingStep() {
+                    if (this.onboardingStep < this.onboardingSteps.length - 1) {
+                        this.onboardingStep += 1;
+                        return;
+                    }
+                    const key = this.getOnboardingStorageKey();
+                    if (key) localStorage.setItem(key, '1');
+                    this.showOnboardingModal = false;
+                },
+                captureInviteCodeFromUrl() {
+                    try {
+                        const q = new URLSearchParams(window.location.search || '');
+                        const invite = (q.get('invite') || '').trim().toUpperCase();
+                        if (invite) {
+                            localStorage.setItem('sniper_pending_invite_code', invite);
+                        }
+                    } catch (e) {}
+                },
+                async copyText(content, successMsg = '已复制') {
+                    const text = String(content || '').trim();
+                    if (!text) return false;
+                    try {
+                        await navigator.clipboard.writeText(text);
+                        this.showMsg(successMsg, 'success');
+                        return true;
+                    } catch (e) {
+                        this.showMsg('复制失败，请手动复制', 'error');
+                        return false;
+                    }
+                },
+                async copyInviteShare() {
+                    if (!this.inviteInfo || !this.inviteInfo.share_text) {
+                        this.showMsg('邀请码信息未准备好', 'info');
+                        return;
+                    }
+                    await this.copyText(this.inviteInfo.share_text, '邀请文案已复制');
+                },
+                async fetchInviteInfo() {
+                    if (!this.isRegisteredAccount) {
+                        this.inviteInfo = {
+                            enabled: true,
+                            invite_code: '',
+                            invite_link: '',
+                            share_text: '',
+                            reward_days: 30
+                        };
+                        return;
+                    }
+                    this.inviteLoading = true;
+                    try {
+                        const res = await fetch(`${API_BASE_URL}/api/auth/invite_info`);
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '邀请码获取失败');
+
+                        const inviteCode = (data.invite_code || '').trim().toUpperCase();
+                        const inviteLink = (data.invite_link || '').trim();
+                        this.inviteInfo = {
+                            enabled: data.enabled !== false,
+                            invite_code: inviteCode,
+                            invite_link: inviteLink,
+                            share_text: (data.share_text || '').trim(),
+                            reward_days: Number(data.reward_days || 30)
+                        };
+                        if (!this.inviteInfo.share_text && inviteCode) {
+                            const fallbackLink = inviteLink || `${window.location.origin}${window.location.pathname}?invite=${inviteCode}`;
+                            this.inviteInfo.share_text = `我在用涨停狙击手，注册链接：${fallbackLink}，邀请码：${inviteCode}。注册后在充值页填写邀请码，可获得赠送权益。`;
+                        }
+
+                        if (!this.inviteInputCode) {
+                            const pendingInvite = (localStorage.getItem('sniper_pending_invite_code') || '').trim().toUpperCase();
+                            if (pendingInvite && pendingInvite !== inviteCode) {
+                                this.inviteInputCode = pendingInvite;
+                            }
+                        }
+                    } catch (e) {
+                        this.inviteInfo = {
+                            enabled: true,
+                            invite_code: '',
+                            invite_link: '',
+                            share_text: '',
+                            reward_days: 30
+                        };
+                    } finally {
+                        this.inviteLoading = false;
+                    }
+                },
+                async copyQQGroupInfo() {
+                    const groupNo = (this.qqInviteInfo.qq_group_number || '').trim();
+                    if (!groupNo) {
+                        this.showMsg('暂未配置QQ群号', 'info');
+                        return;
+                    }
+                    await this.copyText(groupNo, 'QQ群号已复制');
+                },
+                openQQGroupLink() {
+                    const link = (this.qqInviteInfo.qq_group_link || '').trim();
+                    if (!link) {
+                        this.showMsg('暂未配置QQ群链接', 'info');
+                        return;
+                    }
+                    window.open(link, '_blank');
+                },
                 // --- User & Auth Methods ---
                 normalizeStockCode(code) {
                     if (!code) return '';
@@ -1792,9 +1991,14 @@
                             this.accountCanApplyTrial = !!meta.can_apply_trial;
                             this.loadLocalFavorites();
                             await this.fetchLocalFavoriteQuotes();
+                            await this.fetchInviteInfo();
+                            this.maybeStartOnboarding(false);
                             return;
                         } catch (e) {
                             console.error("Session restore failed", e);
+                            if (String(e.message || '').includes('封禁')) {
+                                this.showMsg(e.message, 'error');
+                            }
                             localStorage.removeItem('sniper_token');
                             localStorage.removeItem('sniper_username');
                         }
@@ -1850,6 +2054,7 @@
                         this.accountCanApplyTrial = !!data.can_apply_trial;
                         this.loadLocalFavorites();
                         await this.fetchLocalFavoriteQuotes();
+                        await this.fetchInviteInfo();
                         this.showLoginModal = false;
                         this.showSettingsModal = false;
                         if (this.hasDataAccess) {
@@ -1859,6 +2064,19 @@
                             this.fetchMarketSentiment();
                             this.fetchIndices();
                             if (!this.wsConnected) this.connectWebSocket();
+                        }
+                        if (mode === 'register') {
+                            this.qqInviteInfo = {
+                                qq_group_number: (data.qq_group_number || '').trim(),
+                                qq_group_link: (data.qq_group_link || '').trim(),
+                                qq_group_welcome_text: (data.qq_group_welcome_text || '').trim()
+                            };
+                            if (this.qqInviteInfo.qq_group_number || this.qqInviteInfo.qq_group_link) {
+                                this.showQQInviteModal = true;
+                            }
+                            this.maybeStartOnboarding(true);
+                        } else {
+                            this.maybeStartOnboarding(false);
                         }
                         this.showMsg(mode === 'register' ? '注册成功' : '登录成功', 'success');
                         
@@ -1920,6 +2138,9 @@
                     this.displayUsername = '';
                     this.deviceId = '';
                     this.accountCanApplyTrial = false;
+                    this.inviteInputCode = '';
+                    this.inviteInfo = { enabled: true, invite_code: '', invite_link: '', share_text: '', reward_days: 30 };
+                    this.showOnboardingModal = false;
                     this.showMsg('已退出登录', 'info');
                     window.location.reload();
                 },
@@ -2005,9 +2226,15 @@
 
                     this.showSubscriptionModal = true;
                     this.purchaseStep = 1;
+                    this.currentOrder = null;
                     const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
+                    if (!this.inviteInputCode) {
+                        const pendingInvite = (localStorage.getItem('sniper_pending_invite_code') || '').trim().toUpperCase();
+                        if (pendingInvite) this.inviteInputCode = pendingInvite;
+                    }
                     
                     try {
+                        await this.fetchInviteInfo();
                         const res = await fetch(`${API_BASE_URL}/api/payment/pricing`, {
                             headers: deviceId ? { 'X-Device-ID': deviceId } : {}
                         });
@@ -2072,13 +2299,20 @@
                             body: JSON.stringify({
                                 target_version: this.selectedVersion,
                                 duration_months: dm,
-                                x_device_id: deviceId
+                                x_device_id: deviceId,
+                                invite_code: (this.inviteInputCode || '').trim().toUpperCase()
                             })
                         });
                         const data = await res.json();
                         if (data.order_code) {
                             this.currentOrder = data;
                             this.purchaseStep = 2;
+                            if ((this.inviteInputCode || '').trim()) {
+                                localStorage.removeItem('sniper_pending_invite_code');
+                            }
+                            if (data.invite_bonus_message) {
+                                this.showMsg(data.invite_bonus_message, 'info');
+                            }
                         } else {
                             this.showMsg(data.detail || '创建订单失败', 'error');
                         }
@@ -2484,6 +2718,13 @@
 
                         if (payload.event === 'membership_approved') {
                             this.showMsg(payload.message || '会员审批已通过，权益已生效', 'success');
+                            if (payload.referral_bonus_token) {
+                                const days = Number(payload.referral_bonus_days || 0);
+                                const bonusMsg = days > 0
+                                    ? `邀请码奖励已触发，赠送口令：${payload.referral_bonus_token}（${days}天）`
+                                    : `邀请码奖励已触发，赠送口令：${payload.referral_bonus_token}`;
+                                this.showMsg(bonusMsg, 'info');
+                            }
                             await this.refreshCurrentUserInfo();
                             if (this.hasDataAccess) {
                                 this.initialDataLoading = true;
@@ -3544,6 +3785,7 @@
                 this.showLoginModal = false;
                 this.msgModal.show = false;
                 this.initFingerprintId();
+                this.captureInviteCodeFromUrl();
                 this.loadLocalFavorites();
                 
                 // Init User

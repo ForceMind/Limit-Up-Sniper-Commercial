@@ -49,6 +49,8 @@ class OrderResponse(BaseModel):
     order_code: str
     amount: float
     status: str
+    invite_bonus_token: Optional[str] = None
+    invite_bonus_message: Optional[str] = None
 
 class OrderInfo(BaseModel):
     id: int
