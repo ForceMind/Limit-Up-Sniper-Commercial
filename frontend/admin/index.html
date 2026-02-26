@@ -321,7 +321,21 @@
                 <div v-if="currentView === 'users'" class="max-w-6xl mx-auto">
                     <div class="flex justify-between items-center mb-6">
                         <h2 class="text-2xl font-bold">用户管理</h2>
-                        <button @click="fetchUsers" class="text-blue-500 hover:text-blue-700">刷新</button>
+                        <div class="flex items-center gap-4">
+                            <button @click="fetchWatchlistStats" class="text-purple-500 hover:text-purple-700">刷新自选统计</button>
+                            <button @click="fetchUsers" class="text-blue-500 hover:text-blue-700">刷新</button>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded shadow p-4 mb-4">
+                        <h3 class="text-sm font-bold text-gray-700 mb-3">自选股热度统计（按加入人数）</h3>
+                        <div v-if="watchlistStats.length === 0" class="text-xs text-gray-400">暂无统计数据</div>
+                        <div v-else class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                            <div v-for="item in watchlistStats" :key="item.code" class="border rounded px-2 py-1 text-xs bg-gray-50 flex justify-between">
+                                <span class="font-mono text-gray-700">{{ item.code }}</span>
+                                <span class="text-red-600 font-bold">{{ item.count }}人</span>
+                            </div>
+                        </div>
                     </div>
 
                     <div class="bg-white rounded shadow overflow-hidden">
@@ -492,6 +506,7 @@
                     sysLogs: [],
                     loginLogs: [],
                     aiCacheStats: {},
+                    watchlistStats: [],
                     // Admin Account
                     newAdminPassword: '',
                     passwordMsg: ''
@@ -503,11 +518,15 @@
                     // Pre-fetch
                     this.fetchUsers();
                     this.fetchOrders();
+                    this.fetchWatchlistStats();
                 }
             },
             watch: {
                 currentView(val) {
-                    if (val === 'users') this.fetchUsers();
+                    if (val === 'users') {
+                        this.fetchUsers();
+                        this.fetchWatchlistStats();
+                    }
                     if (val === 'orders') this.fetchOrders();
                     if (val === 'logs') this.fetchLogs('system');
                 }
@@ -545,6 +564,7 @@
                         this.fetchConfig();
                         this.fetchUsers();
                         this.fetchOrders();
+                        this.fetchWatchlistStats();
                     },
                 async fetchLogs(type) {
                         try {
@@ -655,6 +675,19 @@
                         if (res.status === 403) { this.token = ''; return; }
                         if (!res.ok) throw new Error(`Orders Load Failed: ${res.status}`);
                         this.orders = await res.json();
+                    } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
+                },
+
+                async fetchWatchlistStats() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/watchlist_stats', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.token = ''; return; }
+                        if (!res.ok) throw new Error(`Watchlist Stats Load Failed: ${res.status}`);
+                        const data = await res.json();
+                        const stats = Array.isArray(data.stats)
+                            ? data.stats
+                            : (Array.isArray(data.data) ? data.data : []);
+                        this.watchlistStats = stats;
                     } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
                 },
 

@@ -25,6 +25,7 @@ from app.api import auth, admin, payment
 from app.db import database, models
 from app.dependencies import get_current_user, check_ai_permission, check_raid_permission, check_review_permission, QuotaLimitExceeded, UpgradeRequired
 from app.core import user_service
+from app.core import watchlist_stats
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -37,6 +38,7 @@ DATA_DIR.mkdir(exist_ok=True)
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
+SERVER_VERSION = "v2.5.0"
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
@@ -79,7 +81,8 @@ async def get_system_status():
         "status": "success",
         "is_trading_time": is_trading_time(),
         "is_market_open_day": is_market_open_day(),
-        "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "server_version": SERVER_VERSION
     }
 
 @app.get("/api/news_history/clear")
@@ -278,8 +281,11 @@ async def update_intraday_pool():
 @app.get("/api/status")
 async def get_status():
     return {
+        "status": "success",
         "is_trading": is_trading_time(),
-        "server_time": datetime.now().strftime("%H:%M:%S")
+        "is_market_open_day": is_market_open_day(),
+        "server_time": datetime.now().strftime("%H:%M:%S"),
+        "server_version": SERVER_VERSION
     }
 
 @app.get("/api/add_watchlist")
@@ -522,6 +528,71 @@ async def search_stock(q: str):
     """
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, lambda: data_provider.search_stock(q))
+
+
+def normalize_stock_code(code: str):
+    if not code:
+        return ""
+    raw = code.strip().lower()
+    if raw.startswith("sh") or raw.startswith("sz") or raw.startswith("bj"):
+        return raw
+    if len(raw) == 6 and raw.isdigit():
+        if raw.startswith("6"):
+            return f"sh{raw}"
+        if raw.startswith("0") or raw.startswith("3"):
+            return f"sz{raw}"
+        if raw.startswith("8") or raw.startswith("4") or raw.startswith("9"):
+            return f"bj{raw}"
+    return raw
+
+
+class FavoriteStatRequest(BaseModel):
+    code: str
+
+
+@app.get("/api/favorites/quotes")
+async def api_favorite_quotes(codes: str = ""):
+    code_list = [normalize_stock_code(c) for c in codes.split(",") if c.strip()]
+    code_list = [c for c in code_list if c]
+    if not code_list:
+        return []
+
+    unique_codes = list(dict.fromkeys(code_list))
+    try:
+        raw_stocks = data_provider.fetch_quotes(unique_codes)
+    except Exception:
+        return []
+
+    enriched = []
+    for stock in raw_stocks:
+        code = stock.get("code", "")
+        if not code:
+            continue
+        metrics = calculate_metrics(code)
+        stock.update(metrics)
+        stock["is_favorite"] = True
+        stock["strategy"] = "Manual"
+        stock["news_summary"] = stock.get("news_summary") or "本地自选"
+        enriched.append(stock)
+    return enriched
+
+
+@app.post("/api/watchlist/stat/add")
+async def add_watchlist_stat(payload: FavoriteStatRequest, user: models.User = Depends(get_current_user)):
+    code = normalize_stock_code(payload.code)
+    if not code:
+        return {"status": "error", "message": "Invalid code"}
+    watchlist_stats.add_favorite_stat(str(user.id), code)
+    return {"status": "success"}
+
+
+@app.post("/api/watchlist/stat/remove")
+async def remove_watchlist_stat(payload: FavoriteStatRequest, user: models.User = Depends(get_current_user)):
+    code = normalize_stock_code(payload.code)
+    if not code:
+        return {"status": "error", "message": "Invalid code"}
+    watchlist_stats.remove_favorite_stat(str(user.id), code)
+    return {"status": "success"}
 
 @app.post("/api/add_stock")
 async def add_stock(code: str):

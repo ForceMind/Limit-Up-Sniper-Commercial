@@ -27,22 +27,13 @@ def check_and_reset_daily_stats(user: models.User, db: Session):
 def get_or_create_user(db: Session, device_id: str) -> models.User:
     user = db.query(models.User).filter(models.User.device_id == device_id).first()
     if not user:
-        # Create Trial User
+        # Create user with trial locked by default (must apply trial explicitly)
         user = models.User(
             device_id=device_id,
             version="trial",
-            # Trial expires in 10 minutes from creation? 
-            # Logic: Frontend handles 10 min timer. Backend just checks if created_at + 10min < now for trial users.
-            # But the requirement says "Trial time expires... popup".
-            # Let's set expires_at for consistency if we want to enforce it strictly on backend.
-            # expires_at=datetime.utcnow() + timedelta(minutes=10) # We'll do this calculation dynamically or set it.
-            # For simplicity, let's leave expires_at Null for trial, and compute it on logic or set it.
-            # Actually, robust way: Set it.
+            expires_at=datetime.utcnow()
         )
-        # Import timedelta here
-        from datetime import timedelta
-        user.expires_at = datetime.utcnow() + timedelta(minutes=10)
-        
+
         db.add(user)
         db.commit()
         db.refresh(user)

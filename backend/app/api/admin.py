@@ -10,6 +10,7 @@ from pathlib import Path
 from app.core.config_manager import SYSTEM_CONFIG, save_config
 from app.core.lhb_manager import lhb_manager
 from app.core import user_service
+from app.core import watchlist_stats
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 
@@ -258,6 +259,14 @@ class AdminConfigUpdate(BaseModel):
     api_keys: Optional[dict] = None
     # Pricing Config
     pricing_config: Optional[dict] = None
+
+
+@router.get("/watchlist_stats")
+async def get_watchlist_stats(authorized: bool = Depends(verify_admin)):
+    return {
+        "status": "success",
+        "data": watchlist_stats.list_favorite_stats()
+    }
 
 @router.get("/config")
 async def get_admin_config(authorized: bool = Depends(verify_admin)):

@@ -922,8 +922,26 @@
                             <span>{{ userInfo.version === 'trial' ? '申请体验 / 升级' : '查看会员详情 / 续费' }}</span>
                         </div>
                     </div>
+
+                    <!-- 1. 账号与体验 -->
+                    <div class="pt-4 border-t border-gray-100 dark:border-gray-700">
+                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
+                            <span>👤</span> 系统账号
+                        </h4>
+                        <div class="space-y-2">
+                            <input type="text" v-model="loginForm.username" class="w-full border rounded p-2 text-sm dark:bg-gray-700 dark:border-gray-600" placeholder="用户名">
+                            <input type="password" v-model="loginForm.password" class="w-full border rounded p-2 text-sm dark:bg-gray-700 dark:border-gray-600" placeholder="密码">
+                            <div class="grid grid-cols-2 gap-2">
+                                <button @click="handleAuth('login')" :disabled="loginLoading" class="py-2 rounded bg-blue-600 text-white text-sm font-bold disabled:opacity-50">{{ loginLoading ? '处理中...' : '登录' }}</button>
+                                <button @click="handleAuth('register')" :disabled="loginLoading" class="py-2 rounded border border-gray-300 text-sm font-bold disabled:opacity-50">注册</button>
+                            </div>
+                            <button @click="applyTrialExperience" :disabled="!accountCanApplyTrial || loginLoading" class="w-full py-2 rounded bg-orange-500 text-white text-sm font-bold disabled:opacity-50">
+                                {{ accountCanApplyTrial ? '申请体验（系统自动审批）' : '体验资格已使用' }}
+                            </button>
+                        </div>
+                    </div>
                 
-                    <!-- 1. Filter Settings -->
+                    <!-- 2. Filter Settings -->
                     <div>
                         <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
                             <span>🔍</span> 市场过滤
@@ -960,7 +978,7 @@
                         </div>
                     </div>
 
-                    <!-- 2. System Info (Read Only) -->
+                    <!-- 3. System Info (Read Only) -->
                     <div class="pt-4 border-t border-gray-100 dark:border-gray-700">
                         <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
                             <span>ℹ️</span> 系统状态
@@ -999,6 +1017,18 @@
                     <a href="help.html" target="_blank" class="text-xs text-blue-500 hover:underline flex items-center justify-center gap-1">
                         <span>📖</span> 查看使用帮助与功能说明
                     </a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Guest Reminder Modal -->
+        <div v-if="showGuestReminderModal" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-sm p-6">
+                <h3 class="text-lg font-bold mb-2 text-gray-900 dark:text-gray-100">首次使用提醒</h3>
+                <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">体验资格需要先注册系统账号后申请。每台设备仅可申请一次体验。</p>
+                <div class="flex gap-2">
+                    <button @click="showGuestReminderModal = false" class="flex-1 py-2 border rounded text-sm">我知道了</button>
+                    <button @click="showGuestReminderModal = false; showSettingsModal = true" class="flex-1 py-2 bg-blue-600 text-white rounded text-sm">去注册</button>
                 </div>
             </div>
         </div>
@@ -1113,7 +1143,7 @@
                 <div class='text-xs text-center text-gray-400 mt-2 font-mono'>v2.5.1 (Build 2026.02.26)</div>
                 
                 <div class="text-xs text-gray-400 text-center mt-2">
-                    游客将使用临时ID，清除缓存后失效。建议注册账户。
+                    体验资格需先注册系统账号后申请，每台设备仅可申请一次。
                 </div>
             </div>
         </div>
@@ -1375,8 +1405,11 @@
                     
                     // LOGIN DATA
                     showLoginModal: false,
+                    showGuestReminderModal: false,
                     loginForm: { username: '', password: '' },
                     displayUsername: '',
+                    accountCanApplyTrial: false,
+                    fingerprintId: '',
                     frontendVersion: 'v2.5.2',
                     serverVersion: '获取中...',
                     loginLoading: false,
@@ -1390,11 +1423,13 @@
                     // --- New User & Subscription Data ---
                     userInfo: {
                         version: 'trial', 
-                        is_expired: false,
+                        is_expired: true,
                         remaining_ai: 0,
                         remaining_raid: 0,
                         remaining_review: 0
                     },
+                    localFavorites: {},
+                    localFavoriteQuotes: [],
                     showSubscriptionModal: false,
                     purchaseStep: 1, // 1: Pricing, 2: Payment, 3: Completed/Waiting
                     pricingOptions: {},
@@ -1489,9 +1524,8 @@
                 },
                 // Manual Strategy (Favorites)
                 manualStocks() {
-                    return this.stocks
-                        .filter(s => s.is_favorite) // Removed checkBoardVisibility to ensure favorites are always visible
-                        // Sort by added_time desc (newest first), then score
+                    return this.localFavoriteQuotes
+                        .filter(s => this.checkBoardVisibility(s.code))
                         .sort((a, b) => {
                             const timeA = a.added_time || 0;
                             const timeB = b.added_time || 0;
@@ -1554,44 +1588,91 @@
                             }
                         }
                     }, 10000);
-
-
-                    // 30 Seconds Popup for Trial (Only once per session/device?)
-                    // Req: "试用版... 第一次打开时... 试用30秒后... 弹出"
-                    if (this.userInfo.version === 'trial' && !localStorage.getItem('trial_popup_shown')) {
-                        this.trialTimer = setTimeout(async () => {
-                            if (this.userInfo.version === 'trial' && !this.userInfo.is_expired && !this.showSubscriptionModal) {
-                                // this.showConfirm ...
-                                // Req: "增加弹窗" -> Force Login/Register/Pay explicitly
-                                this.showLoginModal = true; 
-                                localStorage.setItem('trial_popup_shown', 'true');
-                            }
-                        }, 30000); // 30s
-                    }
                 },
                 // --- User & Auth Methods ---
-                // --- User & Auth Methods ---
+                normalizeStockCode(code) {
+                    if (!code) return '';
+                    const raw = String(code).trim().toLowerCase();
+                    if (raw.startsWith('sh') || raw.startsWith('sz') || raw.startsWith('bj')) return raw;
+                    if (raw.length === 6 && /^\d+$/.test(raw)) {
+                        if (raw.startsWith('6')) return `sh${raw}`;
+                        if (raw.startsWith('0') || raw.startsWith('3')) return `sz${raw}`;
+                        if (raw.startsWith('8') || raw.startsWith('4') || raw.startsWith('9')) return `bj${raw}`;
+                    }
+                    return raw;
+                },
+                initFingerprintId() {
+                    const cached = localStorage.getItem('sniper_fingerprint_id');
+                    if (cached) {
+                        this.fingerprintId = cached;
+                        return;
+                    }
+                    const seed = [
+                        navigator.userAgent || '',
+                        navigator.platform || '',
+                        navigator.language || '',
+                        String(screen.width || 0),
+                        String(screen.height || 0),
+                        String(new Date().getTimezoneOffset())
+                    ].join('|');
+                    const fp = btoa(unescape(encodeURIComponent(seed))).slice(0, 48);
+                    this.fingerprintId = fp;
+                    localStorage.setItem('sniper_fingerprint_id', fp);
+                },
+                getFavoritesStorageKey() {
+                    const username = (this.displayUsername || localStorage.getItem('sniper_username') || 'guest').trim();
+                    return `sniper_local_favorites_${username}`;
+                },
+                loadLocalFavorites() {
+                    try {
+                        const raw = localStorage.getItem(this.getFavoritesStorageKey());
+                        this.localFavorites = raw ? JSON.parse(raw) : {};
+                    } catch (e) {
+                        this.localFavorites = {};
+                    }
+                },
+                saveLocalFavorites() {
+                    localStorage.setItem(this.getFavoritesStorageKey(), JSON.stringify(this.localFavorites));
+                },
+                async fetchLocalFavoriteQuotes() {
+                    const codes = Object.keys(this.localFavorites || {});
+                    if (codes.length === 0) {
+                        this.localFavoriteQuotes = [];
+                        return;
+                    }
+                    try {
+                        const res = await fetch(API_BASE_URL + `/api/favorites/quotes?codes=${codes.join(',')}`);
+                        const data = await res.json();
+                        const enriched = (Array.isArray(data) ? data : []).map(item => ({
+                            ...item,
+                            is_favorite: true,
+                            added_time: this.localFavorites[item.code]?.added_time || 0,
+                            strategy: 'Manual'
+                        }));
+                        this.localFavoriteQuotes = enriched;
+                    } catch (e) {
+                        console.error('Failed to fetch local favorite quotes', e);
+                    }
+                },
+                async reportFavoriteStat(action, code) {
+                    const token = localStorage.getItem('sniper_token');
+                    if (!token) return;
+                    try {
+                        await fetch(API_BASE_URL + `/api/watchlist/stat/${action}`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ code })
+                        });
+                    } catch (e) {
+                        console.error('Favorite stat report failed', e);
+                    }
+                },
                 async checkLogin() {
                     let token = localStorage.getItem('sniper_token');
-
-                    // Auto-visit/Guest logic if no token?
-                    // No, for Commercial version we might prefer forcing them to see login or start as Trial Guest.
-                    // If no token, we can create a temporary guest token?
-                    // The backend supports strict "username/password" but maybe we want a "Guest Mode" for trial?
-                    // The backend `login` endpoint supported `device_id`.
-                    // Let's first try to restore the session if token exists.
                     if (token) {
                         try {
-                            // Verify status
-                            // We use the token to check status.
-                            // Ideally, we want full user info.
-                            // We can use the logic "login with known token" if the backend allows it.
-                            // Since we don't have "get_me", let's assume if we have token, we are somewhat okay
-                            // OR we can't easily get full profile without `login_user`.
-                            // Wait, the backend's `login` endpoint (legacy) takes `device_id`.
-                            // If we treat `token` as `device_id` (which `register` does return as `token`), 
-                            // we can call `POST /api/auth/login` with `{device_id: token}` to get full profile!
-                            // This unifies Guest and User flows!
+                            this.deviceId = token;
+                            localStorage.setItem('sniper_device_id', token);
                             const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
@@ -1599,26 +1680,30 @@
                             });
                             const data = await res.json();
                             this.userInfo = data;
+
+                            const metaRes = await fetch(`${API_BASE_URL}/api/auth/account_meta`);
+                            const meta = await metaRes.json();
+                            this.displayUsername = meta.username || localStorage.getItem('sniper_username') || '';
+                            this.accountCanApplyTrial = !!meta.can_apply_trial;
+                            this.loadLocalFavorites();
+                            await this.fetchLocalFavoriteQuotes();
                             return;
                         } catch(e) { console.error("Session restore failed", e); }
                     }
 
-                    // If no token or failed, start as fresh Guest
-                    // Create a random device_id for guest trial
-                    token = 'guest_' + Math.random().toString(36).substr(2, 9);
-                    localStorage.setItem('sniper_token', token);
-                    
-                    // Register this guest automatically?
-                    // Yes, call login to create it in DB
-                     try {
-                        const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ device_id: token })
-                        });
-                        const data = await res.json();
-                        this.userInfo = data;
-                    } catch(e) { console.error("Guest init failed", e); }
+                    this.userInfo = {
+                        ...this.userInfo,
+                        version: 'trial',
+                        is_expired: true
+                    };
+                    this.accountCanApplyTrial = false;
+                    this.localFavorites = {};
+                    this.localFavoriteQuotes = [];
+
+                    if (!localStorage.getItem('guest_reminder_shown')) {
+                        this.showGuestReminderModal = true;
+                        localStorage.setItem('guest_reminder_shown', '1');
+                    }
                 },
 
                 async handleAuth(mode) {
@@ -1639,15 +1724,19 @@
                         const data = await res.json();
                         if (!res.ok) throw new Error(data.detail || 'Auth failed');
 
-                        // Success
                         this.userInfo = data.user;
-                        localStorage.setItem('sniper_token', data.token); // Save token
-                        localStorage.setItem('sniper_username', this.loginForm.username);
-                        this.displayUsername = this.loginForm.username;
+                        localStorage.setItem('sniper_token', data.token);
+                        localStorage.setItem('sniper_device_id', data.token);
+                        localStorage.setItem('sniper_username', data.username || this.loginForm.username);
+                        this.deviceId = data.token;
+                        this.displayUsername = data.username || this.loginForm.username;
+                        this.accountCanApplyTrial = !!data.can_apply_trial;
+                        this.loadLocalFavorites();
+                        await this.fetchLocalFavoriteQuotes();
                         this.showLoginModal = false;
+                        this.showSettingsModal = false;
                         this.showMsg(mode === 'register' ? '注册成功' : '登录成功', 'success');
                         
-                        // Clear sensitive data?
                         this.loginForm.password = '';
                     } catch (e) {
                         this.showMsg(e.message || '操作失败', 'error');
@@ -1655,13 +1744,45 @@
                         this.loginLoading = false;
                     }
                 },
+                async applyTrialExperience() {
+                    const token = localStorage.getItem('sniper_token');
+                    if (!token) {
+                        this.showMsg('请先登录后再申请体验', 'error');
+                        return;
+                    }
+                    if (!this.accountCanApplyTrial) {
+                        this.showMsg('当前账号体验资格已使用', 'info');
+                        return;
+                    }
+                    this.loginLoading = true;
+                    try {
+                        const res = await fetch(`${API_BASE_URL}/api/auth/apply_trial`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ fingerprint_id: this.fingerprintId })
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '申请体验失败');
+                        this.userInfo = data.user;
+                        this.deviceId = token;
+                        localStorage.setItem('sniper_device_id', token);
+                        this.accountCanApplyTrial = false;
+                        this.showMsg('体验申请已通过，资格已开通', 'success');
+                    } catch (e) {
+                        this.showMsg(e.message || '申请体验失败', 'error');
+                    } finally {
+                        this.loginLoading = false;
+                    }
+                },
                 
                 logout() {
                     localStorage.removeItem('sniper_token');
+                    localStorage.removeItem('sniper_device_id');
                     localStorage.removeItem('sniper_username');
                     this.displayUsername = '';
+                    this.deviceId = '';
+                    this.accountCanApplyTrial = false;
                     this.showMsg('已退出登录', 'info');
-                    // Reload to reset state safely
                     window.location.reload();
                 },
 
@@ -2156,16 +2277,21 @@
                 },
                 async addStock(code) {
                     if (!code) return;
+                    const normalizedCode = this.normalizeStockCode(code);
+                    if (this.localFavorites[normalizedCode]) {
+                        this.showMsg('该股票已在自选中', 'info');
+                        return;
+                    }
                     
                     try {
-                        // Use new API endpoint
-                        const response = await fetch(API_BASE_URL + `/api/add_watchlist?code=${code}&name=手动添加`, { method: 'GET' });
-                        const result = await response.json();
-                        if (result.status === 'ok') {
-                            await this.fetchData();
-                        } else {
-                            this.showMsg('添加失败: ' + result.msg, 'error');
-                        }
+                        this.localFavorites[normalizedCode] = {
+                            code: normalizedCode,
+                            added_time: Date.now()
+                        };
+                        this.saveLocalFavorites();
+                        await this.fetchLocalFavoriteQuotes();
+                        await this.reportFavoriteStat('add', normalizedCode);
+                        this.showMsg('已加入本地自选', 'success');
                     } catch (error) {
                         this.showMsg('添加错误', 'error');
                     }
@@ -2194,9 +2320,18 @@
                                 stock.speed = "0.00";
                             }
                             this.previousPrices[stock.code] = stock.current;
+
+                            const normalized = this.normalizeStockCode(stock.code);
+                            if (this.localFavorites[normalized]) {
+                                stock.is_favorite = true;
+                                stock.added_time = this.localFavorites[normalized].added_time;
+                            } else {
+                                stock.is_favorite = false;
+                            }
                         });
 
                         this.stocks = data;
+                        await this.fetchLocalFavoriteQuotes();
                         this.lastUpdated = new Date().toLocaleTimeString();
                     } catch (error) {
                         console.error('Data fetch failed:', error);
@@ -2295,6 +2430,18 @@
                     if (!confirmed) return;
                     
                     try {
+                        if (listType === 'favorite') {
+                            const normalizedCode = this.normalizeStockCode(stock.code);
+                            if (this.localFavorites[normalizedCode]) {
+                                delete this.localFavorites[normalizedCode];
+                                this.saveLocalFavorites();
+                                await this.fetchLocalFavoriteQuotes();
+                                await this.reportFavoriteStat('remove', normalizedCode);
+                            }
+                            this.showMsg('已从本地自选删除', 'success');
+                            return;
+                        }
+
                         const response = await fetch(API_BASE_URL + '/api/watchlist/remove', { 
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -3112,6 +3259,8 @@
                 this.confirmModal = { show: false, msg: '', resolve: null };
                 this.showLoginModal = false;
                 this.msgModal.show = false;
+                this.initFingerprintId();
+                this.loadLocalFavorites();
                 
                 // Init User
                 this.checkLogin(true); // true = silent/restore mode

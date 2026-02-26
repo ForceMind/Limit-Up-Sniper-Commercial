@@ -1,10 +1,82 @@
 from fastapi import APIRouter, Depends, HTTPException, Header, Body
 from sqlalchemy.orm import Session
-from datetime import datetime
-from app.db import models, schemas, database
+from datetime import datetime, timedelta
+from pathlib import Path
+import hashlib
+import json
+import os
+from app.db import schemas, database
 from app.core import user_service
 
 router = APIRouter()
+
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+DATA_DIR = BASE_DIR / "data"
+ACCOUNTS_FILE = DATA_DIR / "user_accounts.json"
+TRIAL_FP_FILE = DATA_DIR / "trial_fingerprints.json"
+
+
+def _ensure_data_dir():
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _load_json(path: Path, default):
+    if not path.exists():
+        return default
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return default
+
+
+def _save_json(path: Path, data):
+    _ensure_data_dir()
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _load_accounts():
+    return _load_json(ACCOUNTS_FILE, {})
+
+
+def _save_accounts(data):
+    _save_json(ACCOUNTS_FILE, data)
+
+
+def _load_trial_fingerprints():
+    return _load_json(TRIAL_FP_FILE, {})
+
+
+def _save_trial_fingerprints(data):
+    _save_json(TRIAL_FP_FILE, data)
+
+
+def _hash_password(password: str, salt: str) -> str:
+    return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+
+def _make_device_id(username: str) -> str:
+    return "user_" + hashlib.md5(username.encode("utf-8")).hexdigest()[:12]
+
+
+def _build_user_payload(user):
+    quotas = user_service.get_user_quota(user.version)
+    is_expired = bool(user.expires_at and user.expires_at < datetime.utcnow())
+    return {
+        "id": user.id,
+        "device_id": user.device_id,
+        "version": user.version,
+        "expires_at": user.expires_at,
+        "created_at": user.created_at,
+        "daily_ai_count": user.daily_ai_count,
+        "daily_raid_count": user.daily_raid_count,
+        "daily_review_count": user.daily_review_count,
+        "remaining_ai": quotas["ai"] - user.daily_ai_count,
+        "remaining_raid": quotas["raid"] - user.daily_raid_count,
+        "remaining_review": quotas["review"] - user.daily_review_count,
+        "is_expired": is_expired
+    }
 
 def get_db():
     db = database.SessionLocal()
@@ -16,142 +88,177 @@ def get_db():
 
 @router.post("/login", response_model=schemas.UserInfo)
 async def login(data: schemas.UserCreate, db: Session = Depends(get_db)):
-    """Device ID login, creates user if not exists (Trial)"""
-    # Simulate Username/Password logic for now using the provided DeviceID as a key
-    # If the frontend sends username/password, we should handle it.
-    # But schema UserCreate only has device_id? Let's check schema.
-    
-    # Check if 'username' is in the request body (by inspecting raw request or updating schema)
-    # Since we can't easily change schema without seeing it, we stick to device_id logic 
-    # BUT we map username/password from frontend to a deterministic device_id if needed?
-    # Or better: We assume the Frontend handles the hashing or we just accept device_id is the key.
-    
-    # Requirement: "增加需要注册用户名密码"
-    # We will assume the frontend sends `username` and `password` in the body, but mapped to `device_id` field?
-    # No, that's hacky.
-    # Let's check `schemas.UserCreate`.
-    
     user = user_service.get_or_create_user(db, data.device_id)
-    
-    # Calculate expiry
-    is_expired = False
-    if user.expires_at and user.expires_at < datetime.utcnow():
-        is_expired = True
-
-    quotas = user_service.get_user_quota(user.version)
-    
-    return {
-        "id": user.id,
-        "device_id": user.device_id,
-        "version": user.version,
-        "expires_at": user.expires_at,
-        "created_at": user.created_at,
-        "daily_ai_count": user.daily_ai_count,
-        "daily_raid_count": user.daily_raid_count,
-        "daily_review_count": user.daily_review_count,
-        "remaining_ai": quotas['ai'] - user.daily_ai_count,
-        "remaining_raid": quotas['raid'] - user.daily_raid_count,
-        "remaining_review": quotas['review'] - user.daily_review_count,
-        "is_expired": is_expired
-    }
+    return _build_user_payload(user)
 
 @router.post("/register")
 async def register(data: dict = Body(...), db: Session = Depends(get_db)):
-    """New Endpoint: Register with Username/Password (Mock implementation wrapping DeviceID)"""
-    username = data.get("username")
-    password = data.get("password")
+    username = (data.get("username") or "").strip()
+    password = (data.get("password") or "").strip()
     if not username or not password:
-        raise HTTPException(status_code=400, detail="Missing username or password")
-    
-    # Mock: Create a deterministic device_id from username to link them
-    # In a real app, we'd have a UserAuth table.
-    import hashlib
-    mock_device_id = "user_" + hashlib.md5(username.encode()).hexdigest()[:12]
-    
-    # Check if already exists?
-    # get_or_create_user handles it.
-    
-    user = user_service.get_or_create_user(db, mock_device_id)
-    # Return same format as login
-    
-    quotas = user_service.get_user_quota(user.version)
-    is_expired = (user.expires_at and user.expires_at < datetime.utcnow())
-    
-    # Return with token (mock token = device_id for simplicity in this no-jwt commercial version)
+        raise HTTPException(status_code=400, detail="请输入用户名和密码")
+    if len(username) < 3 or len(password) < 6:
+        raise HTTPException(status_code=400, detail="用户名至少3位，密码至少6位")
+
+    accounts = _load_accounts()
+    if username in accounts:
+        raise HTTPException(status_code=400, detail="用户名已存在")
+
+    salt = os.urandom(8).hex()
+    password_hash = _hash_password(password, salt)
+    device_id = _make_device_id(username)
+    accounts[username] = {
+        "username": username,
+        "salt": salt,
+        "password_hash": password_hash,
+        "device_id": device_id,
+        "created_at": datetime.utcnow().isoformat(),
+        "trial_applied": False
+    }
+    _save_accounts(accounts)
+
+    user = user_service.get_or_create_user(db, device_id)
+    user.version = "trial"
+    user.expires_at = datetime.utcnow()
+    user.daily_ai_count = 0
+    user.daily_raid_count = 0
+    user.daily_review_count = 0
+    db.commit()
+    db.refresh(user)
+
     return {
-        "token": mock_device_id, 
-        "user": {
-            "id": user.id,
-            "device_id": user.device_id,
-            "version": user.version,
-            "expires_at": user.expires_at,
-            "created_at": user.created_at,
-            "daily_ai_count": user.daily_ai_count,
-            "daily_raid_count": user.daily_raid_count,
-            "daily_review_count": user.daily_review_count,
-            "remaining_ai": quotas['ai'] - user.daily_ai_count,
-            "remaining_raid": quotas['raid'] - user.daily_raid_count,
-            "remaining_review": quotas['review'] - user.daily_review_count,
-            "is_expired": is_expired
-        }
+        "token": device_id,
+        "username": username,
+        "can_apply_trial": True,
+        "user": _build_user_payload(user)
     }
 
 @router.post("/login_user")
 async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
-    """New Endpoint: Login with Username/Password"""
-    username = data.get("username")
-    password = data.get("password")
-    
-    # In a real app, Verify password hash. 
-    # Here we just re-generate the ID and check if it exists in DB?
-    # Since we don't store passwords in this simple version, we trust the "registration" mapping.
-    # DISCLAIMER: This is NOT SECURE for real handling of passwords, but fits the current "File-based/Simple DB" architecture without migration.
-    
-    import hashlib
-    mock_device_id = "user_" + hashlib.md5(username.encode()).hexdigest()[:12]
-    
-    # Retrieve
-    # We need to check if user actually exists first to avoid auto-registering on login?
-    # user_service.get_user_by_device_id doesn't exist? get_or_create does.
-    # We'll use get_or_create for now to ensure smooth UX even if "first time logging in".
-    user = user_service.get_or_create_user(db, mock_device_id)
-    
-    quotas = user_service.get_user_quota(user.version)
-    is_expired = (user.expires_at and user.expires_at < datetime.utcnow())
+    username = (data.get("username") or "").strip()
+    password = (data.get("password") or "").strip()
+    if not username or not password:
+        raise HTTPException(status_code=400, detail="请输入用户名和密码")
+
+    accounts = _load_accounts()
+    account = accounts.get(username)
+    if not account:
+        raise HTTPException(status_code=404, detail="用户不存在，请先注册")
+
+    if _hash_password(password, account.get("salt", "")) != account.get("password_hash"):
+        raise HTTPException(status_code=401, detail="密码错误")
+
+    device_id = account["device_id"]
+    user = user_service.get_or_create_user(db, device_id)
 
     return {
-        "token": mock_device_id,
-        "user": {
-            "id": user.id,
-            "device_id": user.device_id,
-            "version": user.version,
-            "expires_at": user.expires_at,
-            "created_at": user.created_at,
-            "daily_ai_count": user.daily_ai_count,
-            "daily_raid_count": user.daily_raid_count,
-            "daily_review_count": user.daily_review_count,
-            "remaining_ai": quotas['ai'] - user.daily_ai_count,
-            "remaining_raid": quotas['raid'] - user.daily_raid_count,
-            "remaining_review": quotas['review'] - user.daily_review_count,
-            "is_expired": is_expired
+        "token": device_id,
+        "username": username,
+        "can_apply_trial": not bool(account.get("trial_applied")),
+        "user": _build_user_payload(user)
+    }
+
+
+@router.get("/account_meta")
+async def account_meta(x_device_id: str = Header(None), db: Session = Depends(get_db)):
+    if not x_device_id:
+        raise HTTPException(status_code=400, detail="Missing Device ID")
+
+    accounts = _load_accounts()
+    matched = None
+    for _, account in accounts.items():
+        if account.get("device_id") == x_device_id:
+            matched = account
+            break
+
+    if not matched:
+        return {
+            "is_registered": False,
+            "username": "",
+            "can_apply_trial": False
         }
+
+    user = user_service.get_or_create_user(db, x_device_id)
+    return {
+        "is_registered": True,
+        "username": matched.get("username", ""),
+        "can_apply_trial": not bool(matched.get("trial_applied")),
+        "user": _build_user_payload(user)
+    }
+
+
+@router.post("/apply_trial")
+async def apply_trial(
+    data: dict = Body(...),
+    x_device_id: str = Header(None),
+    db: Session = Depends(get_db)
+):
+    if not x_device_id:
+        raise HTTPException(status_code=400, detail="请先登录后申请体验")
+
+    fingerprint_id = (data.get("fingerprint_id") or "").strip()
+    if not fingerprint_id:
+        raise HTTPException(status_code=400, detail="缺少设备标识")
+
+    accounts = _load_accounts()
+    account_key = None
+    for username, account in accounts.items():
+        if account.get("device_id") == x_device_id:
+            account_key = username
+            break
+
+    if not account_key:
+        raise HTTPException(status_code=403, detail="请先注册并登录后申请体验")
+
+    account = accounts[account_key]
+    if account.get("trial_applied"):
+        raise HTTPException(status_code=400, detail="当前账号已申请过体验")
+
+    fp_used = _load_trial_fingerprints()
+    if fp_used.get(fingerprint_id):
+        raise HTTPException(status_code=400, detail="当前设备已使用过体验资格")
+
+    fp_used[fingerprint_id] = {
+        "username": account_key,
+        "applied_at": datetime.utcnow().isoformat()
+    }
+    _save_trial_fingerprints(fp_used)
+
+    account["trial_applied"] = True
+    account["trial_applied_at"] = datetime.utcnow().isoformat()
+    accounts[account_key] = account
+    _save_accounts(accounts)
+
+    user = user_service.get_or_create_user(db, x_device_id)
+    user.version = "trial"
+    user.expires_at = datetime.utcnow() + timedelta(minutes=10)
+    user.daily_ai_count = 0
+    user.daily_raid_count = 0
+    user.daily_review_count = 0
+    db.commit()
+    db.refresh(user)
+
+    return {
+        "status": "success",
+        "message": "体验申请已自动通过",
+        "can_apply_trial": False,
+        "user": _build_user_payload(user)
     }
 
 
 @router.get("/status")
 async def check_status(x_device_id: str = Header(None), db: Session = Depends(get_db)):
-    """检查当前设备的权限状态 - Compatible with legacy calls but redirected to new logic"""
     if not x_device_id:
          raise HTTPException(status_code=400, detail="Missing Device ID")
-    
+
     user = user_service.get_or_create_user(db, x_device_id)
-    
+
     status = "active"
     if user.expires_at and user.expires_at < datetime.utcnow():
         status = "expired"
-        
+
     return {
         "status": status,
-        "type": user.version, 
+        "type": user.version,
         "expiry": user.expires_at.strftime("%Y-%m-%d %H:%M") if user.expires_at else "永久"
     }
