@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends
-from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy.orm import Session
@@ -23,6 +23,7 @@ from app.core.ai_cache import ai_cache
 from app.core.config_manager import SYSTEM_CONFIG, save_config, DEFAULT_SCHEDULE
 from app.core.ws_hub import ws_hub
 from app.core.runtime_logs import add_runtime_log
+from app.core.operation_log import log_user_operation
 from app.api import auth, admin, payment
 from app.db import database, models
 from app.dependencies import get_current_user, check_ai_permission, check_raid_permission, check_review_permission, check_data_permission, QuotaLimitExceeded, UpgradeRequired
@@ -54,6 +55,123 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+FRONTEND_DIR = BASE_DIR.parent / "frontend"
+ADMIN_INDEX_FILE = FRONTEND_DIR / "admin" / "index.html"
+USER_OP_LOG_SKIP_PREFIXES = (
+    "/api/stocks",
+    "/api/indices",
+    "/api/limit_up_pool",
+    "/api/intraday_pool",
+    "/api/market_sentiment",
+    "/api/lhb/status",
+    "/api/status",
+    "/api/config",
+    "/api/admin/logs/system",
+    "/api/admin/logs/user_ops",
+    "/api/admin/monitor/ai_cache",
+    "/api/admin/monitor/ai_cache/item",
+    "/api/admin/login",
+    "/api/admin/logout",
+    "/api/admin/update_password",
+    "/api/admin/panel_path",
+    "/api/admin/users/reset_password",
+    "/api/admin/users/add_time",
+    "/api/admin/orders/approve",
+    "/api/admin/config",
+    "/api/auth/login_user",
+    "/api/auth/register",
+    "/api/auth/apply_trial",
+)
+
+
+def _client_ip_from_request(request: Request) -> str:
+    forwarded = request.headers.get("X-Forwarded-For", "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return ""
+
+
+def _should_log_api_path(path: str) -> bool:
+    if not path.startswith("/api/"):
+        return False
+    return not any(path.startswith(prefix) for prefix in USER_OP_LOG_SKIP_PREFIXES)
+
+
+def _resolve_actor(path: str, request: Request) -> str:
+    if path.startswith("/api/admin/"):
+        return "admin"
+    device_id = (request.headers.get("X-Device-ID") or "").strip()
+    if device_id.startswith("guest") or device_id.startswith("visitor_"):
+        return "guest"
+    if device_id:
+        return "user"
+    return "anonymous"
+
+
+@app.middleware("http")
+async def admin_panel_custom_path_guard(request: Request, call_next):
+    path = request.url.path
+    if path.startswith("/api/"):
+        return await call_next(request)
+
+    admin_path = admin.get_admin_panel_path()
+    normalized = path.rstrip("/") or "/"
+
+    if admin_path != "/admin" and (normalized == "/admin" or normalized.startswith("/admin/")):
+        return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+    if ADMIN_INDEX_FILE.exists():
+        if normalized == admin_path and path.endswith("/") and path != "/":
+            return RedirectResponse(url=admin_path, status_code=307)
+        if normalized == admin_path or normalized.startswith(admin_path + "/"):
+            return FileResponse(str(ADMIN_INDEX_FILE))
+
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def user_operation_logger(request: Request, call_next):
+    path = request.url.path
+    method = request.method
+    start_ts = time.time()
+
+    try:
+        response = await call_next(request)
+    except Exception as e:
+        if _should_log_api_path(path):
+            log_user_operation(
+                "api_call",
+                status="failed",
+                actor=_resolve_actor(path, request),
+                method=method,
+                path=path,
+                ip=_client_ip_from_request(request),
+                username=(request.headers.get("X-User-Name") or "").strip(),
+                device_id=(request.headers.get("X-Device-ID") or "").strip(),
+                detail=f"exception={str(e)}",
+            )
+        raise
+
+    if _should_log_api_path(path):
+        status_code = int(getattr(response, "status_code", 0) or 0)
+        latency_ms = int((time.time() - start_ts) * 1000)
+        log_user_operation(
+            "api_call",
+            status="success" if status_code < 400 else "failed",
+            actor=_resolve_actor(path, request),
+            method=method,
+            path=path,
+            ip=_client_ip_from_request(request),
+            username=(request.headers.get("X-User-Name") or "").strip(),
+            device_id=(request.headers.get("X-Device-ID") or "").strip(),
+            detail=f"status_code={status_code}, latency_ms={latency_ms}",
+            extra={"status_code": status_code, "latency_ms": latency_ms},
+        )
+
+    return response
 
 @app.get("/api/status")
 async def get_system_status():
@@ -1523,6 +1641,5 @@ async def get_ai_markers(code: str, type: str = None, user: models.User = Depend
 # --- Static Files Deployment ---
 # Serve frontend from root URL
 # Must be last to not override API routes
-FRONTEND_DIR = BASE_DIR.parent / "frontend"
 if FRONTEND_DIR.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")

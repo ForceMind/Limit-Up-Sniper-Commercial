@@ -7,6 +7,7 @@ import secrets
 import os
 import json
 import hashlib
+import re
 from pathlib import Path
 from app.core.config_manager import SYSTEM_CONFIG, save_config
 from app.core.lhb_manager import lhb_manager
@@ -15,6 +16,7 @@ from app.core import watchlist_stats
 from app.core.ai_cache import ai_cache
 from app.core.runtime_logs import get_runtime_logs, add_runtime_log
 from app.core.ws_hub import ws_hub
+from app.core.operation_log import log_user_operation, get_recent_user_operations
 from datetime import datetime, timedelta
 from pydantic import BaseModel
 
@@ -26,6 +28,8 @@ DATA_DIR = BASE_DIR / "data"
 ADMIN_SECRET_FILE = DATA_DIR / "admin_token.txt"
 ADMIN_CREDENTIALS_FILE = DATA_DIR / "admin_credentials.json"
 ADMIN_SESSIONS_FILE = DATA_DIR / "admin_sessions.json"
+ADMIN_PANEL_PATH_FILE = DATA_DIR / "admin_panel_path.json"
+USER_ACCOUNTS_FILE = DATA_DIR / "user_accounts.json"
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX_ATTEMPTS = 5
 SESSION_EXPIRE_HOURS = 24
@@ -46,6 +50,59 @@ def _save_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _load_user_accounts() -> Dict[str, dict]:
+    data = _load_json(USER_ACCOUNTS_FILE, {})
+    return data if isinstance(data, dict) else {}
+
+
+def _save_user_accounts(data: Dict[str, dict]):
+    _save_json(USER_ACCOUNTS_FILE, data)
+
+
+def _normalize_admin_panel_path(raw_path: str) -> str:
+    path = (raw_path or "").strip()
+    if not path:
+        return "/admin"
+    if not path.startswith("/"):
+        path = "/" + path
+    parts = [p for p in path.split("/") if p]
+    path = "/" + "/".join(parts)
+    if path in {"", "/"}:
+        raise ValueError("后台地址不能为根路径")
+    if path.startswith("/api"):
+        raise ValueError("后台地址不能以 /api 开头")
+    if not re.fullmatch(r"/[A-Za-z0-9/_-]+", path):
+        raise ValueError("后台地址只允许字母、数字、/、_、-")
+    return path
+
+
+def get_admin_panel_path() -> str:
+    data = _load_json(ADMIN_PANEL_PATH_FILE, {})
+    if isinstance(data, dict):
+        try:
+            return _normalize_admin_panel_path(data.get("path", "/admin"))
+        except ValueError:
+            return "/admin"
+    return "/admin"
+
+
+def _save_admin_panel_path(path: str):
+    normalized = _normalize_admin_panel_path(path)
+    _save_json(
+        ADMIN_PANEL_PATH_FILE,
+        {
+            "path": normalized,
+            "updated_at": datetime.utcnow().isoformat(),
+        },
+    )
+
+
+def _generate_random_password(length: int = 10) -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    size = max(8, min(int(length or 10), 24))
+    return "".join(secrets.choice(alphabet) for _ in range(size))
 
 
 def _hash_password(password: str, salt: str) -> str:
@@ -136,6 +193,10 @@ class UpdatePasswordSchema(BaseModel):
     new_password: str
 
 
+class UpdateAdminPanelPathSchema(BaseModel):
+    path: str
+
+
 @router.post("/login")
 async def admin_login(data: AdminLoginSchema, request_ip: str = Header(None, alias="X-Forwarded-For")):
     client_ip = (request_ip or "local").split(",")[0].strip()
@@ -155,6 +216,16 @@ async def admin_login(data: AdminLoginSchema, request_ip: str = Header(None, ali
         attempts.append(now_ts)
         failed_attempts[client_ip] = attempts
         add_runtime_log(f"[ADMIN] Login failed from ip={client_ip}, username={username}")
+        log_user_operation(
+            "admin_login",
+            status="failed",
+            actor="admin",
+            method="POST",
+            path="/api/admin/login",
+            username=username,
+            ip=client_ip,
+            detail="invalid_username_or_password",
+        )
         raise HTTPException(status_code=403, detail="用户名或密码错误")
 
     # Success, reset failed attempts
@@ -172,6 +243,16 @@ async def admin_login(data: AdminLoginSchema, request_ip: str = Header(None, ali
     }
     _save_sessions(sessions)
     add_runtime_log(f"[ADMIN] Login success: ip={client_ip}, username={cred.get('username')}")
+    log_user_operation(
+        "admin_login",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/login",
+        username=cred.get("username", ""),
+        ip=client_ip,
+        detail="login_success",
+    )
 
     return {
         "status": "success",
@@ -184,9 +265,20 @@ async def admin_login(data: AdminLoginSchema, request_ip: str = Header(None, ali
 @router.post("/logout")
 async def admin_logout(x_admin_token: str = Header(..., alias="X-Admin-Token")):
     sessions = _cleanup_sessions(_load_sessions())
+    session = sessions.get(x_admin_token, {}) if isinstance(sessions, dict) else {}
     if x_admin_token in sessions:
         sessions.pop(x_admin_token, None)
         _save_sessions(sessions)
+    log_user_operation(
+        "admin_logout",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/logout",
+        username=str(session.get("username", "")),
+        ip=str(session.get("ip", "")),
+        detail="logout_success",
+    )
     return {"status": "success"}
 
 
@@ -211,19 +303,71 @@ async def update_admin_password(
 
     # Force all sessions to re-login after password change
     _save_sessions({})
+    log_user_operation(
+        "update_admin_password",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/update_password",
+        username=cred.get("username", ""),
+        detail="admin_password_updated",
+    )
     return {"status": "success", "message": "Admin password updated successfully"}
 
 
+@router.get("/panel_path")
+async def get_admin_panel_path_api(authorized: bool = Depends(verify_admin)):
+    return {
+        "status": "success",
+        "path": get_admin_panel_path(),
+    }
+
+
+@router.post("/panel_path")
+async def update_admin_panel_path_api(
+    payload: UpdateAdminPanelPathSchema,
+    authorized: bool = Depends(verify_admin),
+):
+    try:
+        _save_admin_panel_path(payload.path)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    final_path = get_admin_panel_path()
+    add_runtime_log(f"[ADMIN] Updated admin panel path: {final_path}")
+    log_user_operation(
+        "update_admin_panel_path",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/panel_path",
+        detail=final_path,
+    )
+    return {"status": "success", "path": final_path}
+
+
 # --- User / Order Management ---
-@router.get("/users", response_model=List[schemas.UserInfo])
+@router.get("/users")
 async def list_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_db), authorized: bool = Depends(verify_admin)):
     users = db.query(models.User).offset(skip).limit(limit).all()
+    accounts = _load_user_accounts()
+    device_to_username: Dict[str, str] = {}
+    for username, account in accounts.items():
+        if not isinstance(account, dict):
+            continue
+        did = str(account.get("device_id", "")).strip()
+        if did:
+            device_to_username[did] = username
+
     res = []
     for u in users:
         quotas = user_service.get_user_quota(u.version)
+        username = device_to_username.get(u.device_id, "")
         res.append({
             "id": u.id,
             "device_id": u.device_id,
+            "username": username,
+            "is_registered": bool(username),
             "version": u.version,
             "expires_at": u.expires_at,
             "created_at": u.created_at,
@@ -236,6 +380,71 @@ async def list_users(skip: int = 0, limit: int = 100, db: Session = Depends(get_
             "is_expired": (u.expires_at and u.expires_at < datetime.utcnow())
         })
     return res
+
+
+class ResetUserPasswordSchema(BaseModel):
+    user_id: Optional[int] = None
+    username: Optional[str] = None
+    device_id: Optional[str] = None
+
+
+@router.post("/users/reset_password")
+async def reset_user_password(
+    payload: ResetUserPasswordSchema,
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_admin),
+):
+    accounts = _load_user_accounts()
+    if not accounts:
+        raise HTTPException(status_code=404, detail="No registered accounts found")
+
+    target_username = (payload.username or "").strip()
+    target_device_id = (payload.device_id or "").strip()
+
+    if not target_device_id and payload.user_id:
+        user = db.query(models.User).filter(models.User.id == payload.user_id).first()
+        if user:
+            target_device_id = user.device_id
+
+    if not target_username and target_device_id:
+        for username, account in accounts.items():
+            if isinstance(account, dict) and str(account.get("device_id", "")).strip() == target_device_id:
+                target_username = username
+                break
+
+    if not target_username or target_username not in accounts:
+        raise HTTPException(status_code=404, detail="Registered account not found for this user")
+
+    account = accounts.get(target_username) or {}
+    if not isinstance(account, dict):
+        account = {}
+
+    new_password = _generate_random_password()
+    salt = os.urandom(8).hex()
+    account["salt"] = salt
+    account["password_hash"] = _hash_password(new_password, salt)
+    account["password_updated_at"] = datetime.utcnow().isoformat()
+    accounts[target_username] = account
+    _save_user_accounts(accounts)
+
+    device_id = str(account.get("device_id", "")).strip()
+    add_runtime_log(f"[ADMIN] Reset user password: username={target_username}, device={device_id}")
+    log_user_operation(
+        "reset_user_password",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/users/reset_password",
+        username=target_username,
+        device_id=device_id,
+        detail="random_password_generated",
+    )
+    return {
+        "status": "success",
+        "username": target_username,
+        "device_id": device_id,
+        "new_password": new_password,
+    }
 
 
 @router.post("/users/add_time")
@@ -255,6 +464,15 @@ async def add_time_to_user(
         user.expires_at = now + timedelta(minutes=action.minutes)
 
     db.commit()
+    log_user_operation(
+        "add_user_time",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/users/add_time",
+        device_id=user.device_id,
+        detail=f"user_id={user.id}, minutes={action.minutes}",
+    )
     return {"message": "success", "new_expires_at": user.expires_at}
 
 
@@ -322,6 +540,15 @@ async def approve_order(
         order.status = "rejected"
         db.commit()
         add_runtime_log(f"[ORDER] Rejected order={order.order_code}")
+        log_user_operation(
+            "order_reject",
+            status="success",
+            actor="admin",
+            method="POST",
+            path="/api/admin/orders/approve",
+            device_id=order.user.device_id if order.user else "",
+            detail=f"order_code={order.order_code}",
+        )
         await ws_hub.push_device_event(order.user.device_id, {
             "event": "membership_rejected",
             "order_code": order.order_code,
@@ -372,6 +599,15 @@ async def approve_order(
     db.commit()
     add_runtime_log(
         f"[ORDER] Approved order={order.order_code}, device={user.device_id}, version={user.version}, bonus_days={bonus_days}"
+    )
+    log_user_operation(
+        "order_approve",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/orders/approve",
+        device_id=user.device_id,
+        detail=f"order_code={order.order_code}, version={user.version}, bonus_days={bonus_days}",
     )
     await ws_hub.push_device_event(user.device_id, {
         "event": "membership_approved",
@@ -468,6 +704,14 @@ async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depe
         purchase_manager.update_pricing(config.pricing_config)
 
     save_config()
+    log_user_operation(
+        "update_admin_config",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/config",
+        detail="system_config_updated",
+    )
 
     if config.lhb_enabled is not None:
         lhb_manager.update_settings(config.lhb_enabled, config.lhb_days, config.lhb_min_amount)
@@ -543,16 +787,17 @@ async def get_system_logs(lines: int = 200, authorized: bool = Depends(verify_ad
 
 @router.get("/logs/login")
 async def get_login_logs(authorized: bool = Depends(verify_admin)):
-    logs = []
-    for ip, times in failed_attempts.items():
-        for t in times:
-            logs.append({
-                "ip": ip,
-                "time": datetime.fromtimestamp(t),
-                "status": "Failed"
-            })
-    logs.sort(key=lambda x: x["time"], reverse=True)
-    return logs
+    logs = get_recent_user_operations(limit=1000)
+    return [
+        x for x in logs
+        if str(x.get("action", "")).endswith("login") or "/login" in str(x.get("path", ""))
+    ][:300]
+
+
+@router.get("/logs/user_ops")
+async def get_user_operation_logs(limit: int = 300, authorized: bool = Depends(verify_admin)):
+    safe_limit = max(50, min(int(limit or 300), 2000))
+    return {"logs": get_recent_user_operations(limit=safe_limit)}
 
 
 @router.get("/monitor/ai_cache")

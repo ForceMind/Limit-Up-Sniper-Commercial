@@ -10,6 +10,7 @@ import os
 from app.db import schemas, database, models
 from app.core import user_service
 from app.core.runtime_logs import add_runtime_log
+from app.core.operation_log import log_user_operation
 
 router = APIRouter()
 
@@ -177,6 +178,16 @@ async def register(data: dict = Body(...), db: Session = Depends(get_db)):
     db.commit()
     db.refresh(user)
     add_runtime_log(f"[AUTH] Register success: username={username}, device={device_id}")
+    log_user_operation(
+        "user_register",
+        status="success",
+        actor="user",
+        method="POST",
+        path="/api/auth/register",
+        username=username,
+        device_id=device_id,
+        detail="register_success",
+    )
 
     return {
         "token": device_id,
@@ -196,14 +207,43 @@ async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
     accounts = _load_accounts()
     account = accounts.get(username)
     if not account:
+        log_user_operation(
+            "user_login",
+            status="failed",
+            actor="user",
+            method="POST",
+            path="/api/auth/login_user",
+            username=username,
+            detail="account_not_found",
+        )
         raise HTTPException(status_code=404, detail="用户不存在，请先注册")
 
     if _hash_password(password, account.get("salt", "")) != account.get("password_hash"):
+        log_user_operation(
+            "user_login",
+            status="failed",
+            actor="user",
+            method="POST",
+            path="/api/auth/login_user",
+            username=username,
+            device_id=account.get("device_id", ""),
+            detail="password_incorrect",
+        )
         raise HTTPException(status_code=401, detail="密码错误")
 
     device_id = account["device_id"]
     user = user_service.get_or_create_user(db, device_id)
     add_runtime_log(f"[AUTH] Login success: username={username}, device={device_id}")
+    log_user_operation(
+        "user_login",
+        status="success",
+        actor="user",
+        method="POST",
+        path="/api/auth/login_user",
+        username=username,
+        device_id=device_id,
+        detail="login_success",
+    )
 
     return {
         "token": device_id,
@@ -295,6 +335,16 @@ async def apply_trial(
     db.commit()
     db.refresh(user)
     add_runtime_log(f"[AUTH] Trial applied: username={account_key}, device={x_device_id}")
+    log_user_operation(
+        "apply_trial",
+        status="success",
+        actor="user",
+        method="POST",
+        path="/api/auth/apply_trial",
+        username=account_key,
+        device_id=x_device_id,
+        detail="trial_10min_applied",
+    )
 
     return {
         "status": "success",

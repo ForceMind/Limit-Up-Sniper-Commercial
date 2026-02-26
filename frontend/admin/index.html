@@ -25,6 +25,7 @@
             <nav class="flex-1 p-4 space-y-2">
                 <button @click="currentView='dashboard'" :class="currentView=='dashboard'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">概览 & 配置</button>
                 <button @click="currentView='users'" :class="currentView=='users'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">用户管理</button>
+                <button @click="currentView='watchlist'" :class="currentView=='watchlist'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">自选统计</button>
                 <button @click="currentView='orders'" :class="currentView=='orders'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">订单管理</button>
                 <button @click="currentView='lhb'" :class="currentView=='lhb'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">龙虎榜管理</button>
                 <button @click="currentView='logs'" :class="currentView=='logs'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">系统日志</button>
@@ -226,6 +227,22 @@
                             </div>
                         </section>
 
+                        <!-- Admin Panel Path -->
+                        <section class="mb-8 border-b pb-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-700">后台地址</h3>
+                            <div class="bg-gray-50 border border-gray-200 rounded p-4 max-w-2xl">
+                                <p class="text-sm text-gray-500 mb-3">自定义后台访问地址（默认：`/admin`）。示例：`/ops-2026`</p>
+                                <div class="flex gap-3 items-end">
+                                    <div class="flex-1">
+                                        <label class="block text-sm font-bold text-gray-700 mb-1">后台路径</label>
+                                        <input type="text" v-model="adminPanelPath" class="w-full border rounded p-2 text-sm font-mono" placeholder="/admin">
+                                    </div>
+                                    <button @click="saveAdminPanelPath" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700 whitespace-nowrap">保存路径</button>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-2">当前生效：<span class="font-mono">{{ adminPanelPath || '/admin' }}</span></div>
+                            </div>
+                        </section>
+
                         <!-- Admin Account Configuration -->
                         <section class="mb-8 border-b pb-8">
                             <h3 class="text-xl font-semibold mb-4 text-gray-700">管理员账户</h3>
@@ -253,7 +270,7 @@
                     <!-- Tabs -->
                     <div class="flex gap-4 border-b border-gray-200 pb-2">
                         <button @click="activeLogTab='system'; fetchLogs('system')" :class="activeLogTab=='system'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">系统日志 (Stdout)</button>
-                        <button @click="activeLogTab='login'; fetchLogs('login')" :class="activeLogTab=='login'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">登录失败日志</button>
+                        <button @click="activeLogTab='user_ops'; fetchLogs('user_ops')" :class="activeLogTab=='user_ops'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">用户操作日志</button>
                         <button @click="activeLogTab='ai_cache'; fetchLogs('ai_cache')" :class="activeLogTab=='ai_cache'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">AI 缓存监控</button>
                     </div>
 
@@ -263,23 +280,36 @@
                         <div v-for="(line, i) in sysLogs" :key="i" class="whitespace-pre-wrap border-b border-gray-800 pb-1 mb-1">{{ line }}</div>
                     </div>
 
-                    <!-- Login Logs -->
-                    <div v-if="activeLogTab === 'login'" class="flex-1 bg-white rounded shadow text-sm overflow-auto">
+                    <!-- User Operation Logs -->
+                    <div v-if="activeLogTab === 'user_ops'" class="flex-1 bg-white rounded shadow text-sm overflow-auto">
                         <table class="w-full text-left">
                             <thead class="bg-gray-50 text-gray-500">
                                 <tr>
                                     <th class="p-3">时间</th>
-                                    <th class="p-3">IP地址</th>
+                                    <th class="p-3">角色</th>
+                                    <th class="p-3">动作</th>
+                                    <th class="p-3">接口</th>
+                                    <th class="p-3">账号/设备</th>
+                                    <th class="p-3">IP</th>
                                     <th class="p-3">状态</th>
+                                    <th class="p-3">详情</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y">
-                                <tr v-for="(log, i) in loginLogs" :key="i">
+                                <tr v-for="(log, i) in userOpsLogs" :key="i">
                                     <td class="p-3">{{ log.time }}</td>
-                                    <td class="p-3 font-mono">{{ log.ip }}</td>
-                                    <td class="p-3 text-red-500 font-bold">{{ log.status }}</td>
+                                    <td class="p-3">{{ log.actor || '-' }}</td>
+                                    <td class="p-3">{{ log.action || '-' }}</td>
+                                    <td class="p-3 font-mono text-xs">{{ (log.method || '-') + ' ' + (log.path || '-') }}</td>
+                                    <td class="p-3 text-xs">
+                                        <div class="font-mono">{{ log.username || '-' }}</div>
+                                        <div class="text-gray-400">{{ log.device_id || '-' }}</div>
+                                    </td>
+                                    <td class="p-3 font-mono text-xs">{{ log.ip || '-' }}</td>
+                                    <td class="p-3 font-bold" :class="(log.status || '').toLowerCase() === 'success' ? 'text-green-600' : 'text-red-500'">{{ log.status || '-' }}</td>
+                                    <td class="p-3 text-xs text-gray-600">{{ log.detail || '-' }}</td>
                                 </tr>
-                                <tr v-if="loginLogs.length === 0"><td colspan="3" class="p-4 text-center text-gray-400">暂无异常登录记录</td></tr>
+                                <tr v-if="userOpsLogs.length === 0"><td colspan="8" class="p-4 text-center text-gray-400">暂无用户操作日志</td></tr>
                             </tbody>
                         </table>
                     </div>
@@ -342,19 +372,7 @@
                     <div class="flex justify-between items-center mb-6">
                         <h2 class="text-2xl font-bold">用户管理</h2>
                         <div class="flex items-center gap-4">
-                            <button @click="fetchWatchlistStats" class="text-purple-500 hover:text-purple-700">刷新自选统计</button>
                             <button @click="fetchUsers" class="text-blue-500 hover:text-blue-700">刷新</button>
-                        </div>
-                    </div>
-
-                    <div class="bg-white rounded shadow p-4 mb-4">
-                        <h3 class="text-sm font-bold text-gray-700 mb-3">自选股热度统计（按加入人数）</h3>
-                        <div v-if="watchlistStats.length === 0" class="text-xs text-gray-400">暂无统计数据</div>
-                        <div v-else class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
-                            <div v-for="item in watchlistStats" :key="item.code" class="border rounded px-2 py-1 text-xs bg-gray-50 flex justify-between">
-                                <span class="font-mono text-gray-700">{{ item.code }}</span>
-                                <span class="text-red-600 font-bold">{{ item.count }}人</span>
-                            </div>
                         </div>
                     </div>
 
@@ -364,6 +382,7 @@
                                 <tr>
                                     <th class="p-3 font-semibold text-gray-600">ID</th>
                                     <th class="p-3 font-semibold text-gray-600">设备指纹</th>
+                                    <th class="p-3 font-semibold text-gray-600">用户名</th>
                                     <th class="p-3 font-semibold text-gray-600">版本</th>
                                     <th class="p-3 font-semibold text-gray-600">状态</th>
                                     <th class="p-3 font-semibold text-gray-600">过期时间</th>
@@ -375,6 +394,10 @@
                                 <tr v-for="u in users" :key="u.id" class="hover:bg-gray-50">
                                     <td class="p-3">{{ u.id }}</td>
                                     <td class="p-3 font-mono text-xs select-all">{{ u.device_id }}</td>
+                                    <td class="p-3 text-sm">
+                                        <span v-if="u.username" class="font-mono">{{ u.username }}</span>
+                                        <span v-else class="text-gray-400">未注册</span>
+                                    </td>
                                     <td class="p-3">
                                         <span :class="{
                                             'text-gray-500': u.version==='trial',
@@ -392,11 +415,32 @@
                                         {{ u.daily_ai_count }} / {{ u.daily_raid_count }} / {{ u.daily_review_count }}
                                     </td>
                                     <td class="p-3">
-                                        <button @click="openAddTime(u)" class="text-blue-500 hover:text-blue-700 text-xs border border-blue-500 rounded px-2 py-1">增加时长</button>
+                                        <div class="flex gap-2">
+                                            <button @click="openAddTime(u)" class="text-blue-500 hover:text-blue-700 text-xs border border-blue-500 rounded px-2 py-1">增加时长</button>
+                                            <button @click="resetUserPassword(u)" :disabled="!u.is_registered" class="text-amber-600 hover:text-amber-700 text-xs border border-amber-500 rounded px-2 py-1 disabled:opacity-40">重置密码</button>
+                                        </div>
                                     </td>
                                 </tr>
                             </tbody>
                         </table>
+                    </div>
+                </div>
+
+                <!-- Watchlist Stats -->
+                <div v-if="currentView === 'watchlist'" class="max-w-6xl mx-auto">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold">自选股统计</h2>
+                        <button @click="fetchWatchlistStats" class="text-blue-500 hover:text-blue-700">刷新</button>
+                    </div>
+                    <div class="bg-white rounded shadow p-4">
+                        <h3 class="text-sm font-bold text-gray-700 mb-3">自选股热度统计（按加入人数）</h3>
+                        <div v-if="watchlistStats.length === 0" class="text-xs text-gray-400">暂无统计数据</div>
+                        <div v-else class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                            <div v-for="item in watchlistStats" :key="item.code" class="border rounded px-2 py-1 text-xs bg-gray-50 flex justify-between">
+                                <span class="font-mono text-gray-700">{{ item.code }}</span>
+                                <span class="text-red-600 font-bold">{{ item.count }}人</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
@@ -662,7 +706,7 @@
                     // Logs
                     activeLogTab: 'system',
                     sysLogs: [],
-                    loginLogs: [],
+                    userOpsLogs: [],
                     aiCacheStats: {},
                     aiCacheDetail: null,
                     watchlistStats: [],
@@ -681,6 +725,7 @@
                         min_amount: 10000000
                     },
                     // Admin Account
+                    adminPanelPath: '/admin',
                     newAdminPassword: '',
                     passwordMsg: ''
                 }
@@ -692,6 +737,7 @@
                 this.lhbRange.end_date = today.toISOString().slice(0, 10);
                 if (this.token) {
                     this.fetchConfig();
+                    this.fetchAdminPanelPath();
                     // Pre-fetch
                     this.fetchUsers();
                     this.fetchOrders();
@@ -703,8 +749,8 @@
                 currentView(val) {
                     if (val === 'users') {
                         this.fetchUsers();
-                        this.fetchWatchlistStats();
                     }
+                    if (val === 'watchlist') this.fetchWatchlistStats();
                     if (val === 'orders') {
                         this.fetchOrders();
                         this.fetchOrderStats();
@@ -770,6 +816,7 @@
                         this.loginForm.password = '';
                         this.showMsg('登录成功', 'success');
                         this.fetchConfig();
+                        this.fetchAdminPanelPath();
                         this.fetchUsers();
                         this.fetchOrders();
                         this.fetchOrderStats();
@@ -783,7 +830,7 @@
                             const headers = { 'X-Admin-Token': this.token };
                             let url = '';
                             if (type === 'system') url = '/api/admin/logs/system';
-                            else if (type === 'login') url = '/api/admin/logs/login';
+                            else if (type === 'user_ops') url = '/api/admin/logs/user_ops';
                             else if (type === 'ai_cache') url = '/api/admin/monitor/ai_cache';
                             
                             const res = await fetch(API_BASE_URL + url, { headers: headers });
@@ -791,7 +838,7 @@
                             const data = await res.json();
                             
                             if (type === 'system') this.sysLogs = data.logs || [];
-                            else if (type === 'login') this.loginLogs = data;
+                            else if (type === 'user_ops') this.userOpsLogs = (data && Array.isArray(data.logs)) ? data.logs : [];
                             else if (type === 'ai_cache') {
                                 this.aiCacheStats = data || {};
                                 this.aiCacheDetail = null;
@@ -811,6 +858,39 @@
                     } catch(e) { 
                         console.error("Fetch Config Error:", e);
                         this.showMsg(e.message, 'error'); 
+                    }
+                },
+                async fetchAdminPanelPath() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/panel_path', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (res.ok) {
+                            this.adminPanelPath = data.path || '/admin';
+                        }
+                    } catch (e) {
+                        console.error('Fetch admin panel path failed', e);
+                    }
+                },
+                async saveAdminPanelPath() {
+                    const path = (this.adminPanelPath || '').trim();
+                    if (!path) {
+                        this.showMsg('请输入后台路径', 'error');
+                        return;
+                    }
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/panel_path', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({ path })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '保存后台路径失败');
+                        this.adminPanelPath = data.path || path;
+                        this.showMsg(`后台地址已更新为 ${this.adminPanelPath}`, 'success');
+                    } catch (e) {
+                        this.showMsg(e.message || '保存后台路径失败', 'error');
                     }
                 },
                 async updateAdminPassword() {
@@ -1016,6 +1096,32 @@
                             : (Array.isArray(data.data) ? data.data : []);
                         this.watchlistStats = stats;
                     } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
+                },
+                async resetUserPassword(user) {
+                    if (!user || !user.id) return;
+                    if (!user.is_registered) {
+                        this.showMsg('该用户尚未注册账号，无法重置密码', 'info');
+                        return;
+                    }
+                    const confirmed = await this.showConfirm(`确认重置用户 ${user.username || user.device_id} 的密码并生成随机密码？`);
+                    if (!confirmed) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/users/reset_password', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                user_id: user.id,
+                                username: user.username || '',
+                                device_id: user.device_id || ''
+                            })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '重置密码失败');
+                        this.showMsg(`已重置 ${data.username} 密码: ${data.new_password}`, 'success');
+                    } catch (e) {
+                        this.showMsg(e.message || '重置密码失败', 'error');
+                    }
                 },
 
                 openAddTime(user) {
