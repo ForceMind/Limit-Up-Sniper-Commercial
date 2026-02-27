@@ -916,7 +916,7 @@
         </main>
 
         <!-- Custom Message Modal -->
-        <div v-if="msgModal.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 pointer-events-none">
+        <div v-if="msgModal.show" class="fixed inset-0 z-[220] flex items-center justify-center p-4 pointer-events-none">
             <div class="bg-white rounded-lg shadow-2xl p-4 min-w-[200px] max-w-sm pointer-events-auto border border-gray-100 transform transition-all animate-[fade_0.2s_ease-out]">
                 <div class="flex items-center gap-3">
                     <div :class="{
@@ -934,7 +934,7 @@
         </div>
 
         <!-- Confirm Modal -->
-        <div v-if="confirmModal.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div v-if="confirmModal.show" class="fixed inset-0 z-[210] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
             <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 transform transition-all scale-100">
                 <h3 class="text-lg font-bold text-gray-900 mb-2">确认操作</h3>
                 <p class="text-sm text-gray-600 mb-6">{{ confirmModal.msg }}</p>
@@ -946,7 +946,7 @@
         </div>
 
         <!-- Add Time Modal -->
-        <div v-if="addTimeModal.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div v-if="addTimeModal.show" class="fixed inset-0 z-[180] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
             <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 transform transition-all scale-100">
                 <h3 class="text-lg font-bold text-gray-900 mb-2">增加时长</h3>
                 <p class="text-sm text-gray-600 mb-4">用户: <span class="font-mono">{{ addTimeModal.user?.device_id }}</span></p>
@@ -969,7 +969,7 @@
         </div>
 
         <!-- Set Membership Modal -->
-        <div v-if="setMembershipModal.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+        <div v-if="setMembershipModal.show" class="fixed inset-0 z-[180] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
             <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 transform transition-all scale-100">
                 <h3 class="text-lg font-bold text-gray-900 mb-2">设置会员状态</h3>
                 <p class="text-sm text-gray-600 mb-4">用户: <span class="font-mono">{{ setMembershipModal.user?.username || setMembershipModal.user?.device_id }}</span></p>

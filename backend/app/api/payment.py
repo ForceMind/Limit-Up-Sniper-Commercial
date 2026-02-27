@@ -201,6 +201,20 @@ async def create_order(
     # Get User
     user = user_service.get_or_create_user(db, request.x_device_id)
 
+    # 防止重复创建未完成订单，避免后台订单审核冲突
+    existing_open_order = (
+        db.query(models.PurchaseOrder)
+        .filter(models.PurchaseOrder.user_id == user.id)
+        .filter(models.PurchaseOrder.status.in_(["pending", "waiting_verification"]))
+        .order_by(models.PurchaseOrder.created_at.desc())
+        .first()
+    )
+    if existing_open_order:
+        raise HTTPException(
+            status_code=400,
+            detail=f"你有未完成订单（{existing_open_order.order_code}），请先完成或取消后再发起新订单",
+        )
+
     # Calculate Price
     duration_key = _duration_key_from_months(request.duration_months)
     pricing = purchase_manager.calculate_price(request.target_version, duration_key)

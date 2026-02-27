@@ -105,6 +105,7 @@
                             {{ features[userInfo.version]?.desc || userInfo.version }}
                             <span v-if="userInfo.is_expired && userInfo.version !== 'trial'" class="text-red-500 text-[10px]">(已过期)</span>
                         </div>
+                        <div class="text-[10px] text-gray-500">{{ membershipExpiryText }}</div>
                     </div>
                 </div>
                     <div class="hidden md:block text-[10px] text-gray-400">
@@ -911,6 +912,7 @@
                             {{ features[userInfo.version]?.desc || userInfo.version }}
                             <span v-if="userInfo.is_expired && userInfo.version !== 'trial'" class="text-red-500 text-sm">(已过期)</span>
                         </div>
+                        <div class="text-xs text-gray-500 dark:text-gray-400">{{ membershipExpiryText }}</div>
                         <div class="text-xs text-gray-500 dark:text-gray-400 font-mono space-x-2 flex justify-center items-center flex-wrap">
                              <span>AI: {{userInfo.remaining_ai}}</span>
                              <span class="text-gray-300">|</span>
@@ -1003,10 +1005,6 @@
                                 <span class="text-gray-700 dark:text-gray-300">{{ lhbConfig.latest_trade_date || '-' }}</span>
                             </div>
                             <div class="flex justify-between items-center">
-                                <span class="text-gray-500">QQ群号</span>
-                                <span class="text-gray-700 dark:text-gray-300 font-mono">{{ qqInviteInfo.qq_group_number || '-' }}</span>
-                            </div>
-                            <div class="flex justify-between items-center">
                                 <span class="text-gray-500">前端版本</span>
                                 <span class="text-gray-700 dark:text-gray-300">{{ frontendVersion }}</span>
                             </div>
@@ -1019,8 +1017,20 @@
                                 <span class="text-orange-600 dark:text-orange-400">{{ trialCountdownText }}</span>
                             </div>
                         </div>
-                        <div class="mt-2 text-[11px] text-gray-500">
-                            注册成功后会自动弹出一次加群邀请，这里可随时查看群号。
+                    </div>
+
+                    <div class="pt-4 border-t border-gray-100 dark:border-gray-700">
+                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
+                            <span>🛟</span> 联系技术
+                        </h4>
+                        <div class="bg-gray-50 dark:bg-gray-900 rounded p-3 text-xs space-y-2">
+                            <div class="flex justify-between items-center font-mono">
+                                <span class="text-gray-500">QQ群号</span>
+                                <span class="text-gray-700 dark:text-gray-300">{{ qqInviteInfo.qq_group_number || '-' }}</span>
+                            </div>
+                            <div class="text-[11px] text-gray-500">
+                                {{ qqInviteInfo.qq_group_welcome_text || '注册成功后会自动弹出一次加群邀请，这里可随时查看群号。' }}
+                            </div>
                         </div>
                         <div class="mt-2 grid grid-cols-2 gap-2">
                             <button @click="copyQQGroupInfo" class="py-1.5 rounded border border-gray-300 text-xs">复制群号</button>
@@ -1259,6 +1269,7 @@
                         <div class="font-bold mb-1">
                             当前会员版本：{{ selectedVersion === 'basic' ? '初级版' : (selectedVersion === 'advanced' ? '高级版' : '旗舰版') }}
                         </div>
+                        <div class="mb-1">会员到期时间：{{ membershipExpiryText.replace('到期时间：', '') }}</div>
                         <div>当前页面仅支持同版本续费。如需降级，请等待当前会员到期后再选择其他版本。</div>
                     </div>
 
@@ -1608,6 +1619,20 @@
                     }
 
                     return '获取中';
+                },
+                membershipExpiryText() {
+                    const expiresAt = this.userInfo?.expires_at;
+                    const isTrial = this.userInfo?.version === 'trial';
+                    if (!expiresAt) {
+                        return isTrial ? '体验到期：--' : '到期时间：永久';
+                    }
+                    const timeText = this.formatShanghaiDateTime(expiresAt);
+                    if (!timeText || timeText === '--') {
+                        return isTrial ? '体验到期：--' : '到期时间：--';
+                    }
+                    if (isTrial) return `体验到期：${timeText}`;
+                    if (this.userInfo?.is_expired) return `到期时间：${timeText}（已过期）`;
+                    return `到期时间：${timeText}`;
                 },
                 isPaidMember() {
                     return ['basic', 'advanced', 'flagship'].includes(this.userInfo.version);
@@ -2665,6 +2690,30 @@
                         minute: '2-digit',
                         second: '2-digit'
                     });
+                },
+                formatShanghaiDateTime(value) {
+                    if (!value) return '--';
+                    const date = new Date(value);
+                    if (!Number.isFinite(date.getTime())) return '--';
+                    try {
+                        const str = date.toLocaleString('zh-CN', {
+                            timeZone: 'Asia/Shanghai',
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            hour12: false
+                        });
+                        return str.replace(/\//g, '-');
+                    } catch (e) {
+                        const y = date.getFullYear();
+                        const m = String(date.getMonth() + 1).padStart(2, '0');
+                        const d = String(date.getDate()).padStart(2, '0');
+                        const h = String(date.getHours()).padStart(2, '0');
+                        const mm = String(date.getMinutes()).padStart(2, '0');
+                        return `${y}-${m}-${d} ${h}:${mm}`;
+                    }
                 },
                 toggleConcept(stock) {
                     stock.showFullConcept = !stock.showFullConcept;
