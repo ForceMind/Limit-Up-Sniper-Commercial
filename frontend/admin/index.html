@@ -27,6 +27,7 @@
                 <button @click="currentView='users'" :class="currentView=='users'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">用户管理</button>
                 <button @click="currentView='watchlist'" :class="currentView=='watchlist'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">自选统计</button>
                 <button @click="currentView='orders'" :class="currentView=='orders'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">订单管理</button>
+                <button @click="currentView='referrals'" :class="currentView=='referrals'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">邀请记录</button>
                 <button @click="currentView='lhb'" :class="currentView=='lhb'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">龙虎榜管理</button>
                 <button @click="currentView='logs'" :class="currentView=='logs'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">系统日志</button>
             </nav>
@@ -319,6 +320,13 @@
                                 <h3 class="text-xl font-semibold text-gray-700">数据文件浏览</h3>
                                 <button @click="fetchDataFiles" class="text-sm px-3 py-1.5 border rounded hover:bg-gray-100">刷新文件列表</button>
                             </div>
+                            <div v-if="dataFolders.length > 0" class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                                <div v-for="folder in dataFolders" :key="folder.path" class="bg-amber-50 border border-amber-200 rounded p-3 text-xs">
+                                    <div class="font-mono font-bold text-amber-700">{{ folder.path }}/</div>
+                                    <div class="text-gray-600 mt-1">文件数: {{ folder.file_count }} · 总大小: {{ formatFileSize(folder.total_size) }}</div>
+                                    <div class="text-gray-500 mt-1" v-if="folder.modified_at">最近更新: {{ formatShanghaiTime(folder.modified_at) }}</div>
+                                </div>
+                            </div>
                             <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
                                 <div class="bg-white border rounded max-h-[420px] overflow-auto">
                                     <div class="p-3 border-b bg-gray-50 text-xs text-gray-500">backend/data 文件 ({{ dataFiles.length }})</div>
@@ -393,7 +401,7 @@
                             <table class="w-full min-w-[1350px] text-left">
                                 <thead class="bg-gray-50 text-gray-500 sticky top-0">
                                     <tr>
-                                        <th class="p-3">时间 (上海)</th>
+                                        <th class="p-3">时间</th>
                                         <th class="p-3">角色</th>
                                         <th class="p-3">动作</th>
                                         <th class="p-3">接口</th>
@@ -505,7 +513,7 @@
                                     <th class="p-3 font-semibold text-gray-600 w-28">账号类型</th>
                                     <th class="p-3 font-semibold text-gray-600 w-24">会员版本</th>
                                     <th class="p-3 font-semibold text-gray-600 w-36">状态</th>
-                                    <th class="p-3 font-semibold text-gray-600 w-56">过期时间 (上海)</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-56">过期时间</th>
                                     <th class="p-3 font-semibold text-gray-600 w-64">用量 (已用/剩余/总额)</th>
                                     <th class="p-3 font-semibold text-gray-600 w-[380px]">操作</th>
                                 </tr>
@@ -607,22 +615,27 @@
                         </div>
                     </div>
 
-                    <div class="bg-white rounded shadow overflow-hidden">
-                        <table class="w-full text-left">
+                    <div class="bg-white rounded shadow overflow-x-auto">
+                        <table class="w-full min-w-[1100px] text-left">
                             <thead class="bg-gray-50 border-b">
                                 <tr>
                                     <th class="p-3 font-semibold text-gray-600">订单号 (口令)</th>
+                                    <th class="p-3 font-semibold text-gray-600">用户</th>
                                     <th class="p-3 font-semibold text-gray-600">金额</th>
                                     <th class="p-3 font-semibold text-gray-600">会员版本</th>
                                     <th class="p-3 font-semibold text-gray-600">时长</th>
                                     <th class="p-3 font-semibold text-gray-600">状态</th>
-                                    <th class="p-3 font-semibold text-gray-600">时间 (上海)</th>
+                                    <th class="p-3 font-semibold text-gray-600">时间</th>
                                     <th class="p-3 font-semibold text-gray-600">操作</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y text-sm">
                                 <tr v-for="o in orders" :key="o.id" class="hover:bg-gray-50">
                                     <td class="p-3 font-mono font-bold select-all">{{ o.order_code }}</td>
+                                    <td class="p-3 text-xs">
+                                        <div class="font-mono">{{ o.username || '游客' }}</div>
+                                        <div class="text-gray-400 font-mono">{{ o.user_device_id || '-' }}</div>
+                                    </td>
                                     <td class="p-3 text-red-600 font-bold">{{ o.amount }}</td>
                                     <td class="p-3">{{ versionLabel(o.target_version) }}</td>
                                     <td class="p-3">{{ o.duration_days }} 天</td>
@@ -648,7 +661,7 @@
                         </table>
                     </div>
 
-                    <div class="mt-6 bg-white rounded shadow overflow-hidden">
+                    <div v-if="false" class="mt-6 bg-white rounded shadow overflow-hidden">
                         <div class="p-4 border-b bg-gray-50 flex flex-wrap items-center justify-between gap-3">
                             <h3 class="font-bold">邀请分享记录</h3>
                             <div class="flex items-center gap-2">
@@ -673,8 +686,80 @@
                                         <th class="p-3">被邀请人</th>
                                         <th class="p-3">奖励</th>
                                         <th class="p-3">状态</th>
-                                        <th class="p-3">创建时间 (上海)</th>
-                                        <th class="p-3">到账时间 (上海)</th>
+                                        <th class="p-3">创建时间</th>
+                                        <th class="p-3">到账时间</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    <tr v-for="r in referralRecords" :key="r.order_code">
+                                        <td class="p-3 font-mono text-xs">{{ r.order_code }}</td>
+                                        <td class="p-3 font-mono text-xs">{{ r.invite_code || '-' }}</td>
+                                        <td class="p-3 text-xs">
+                                            <div class="font-mono">{{ r.inviter_username || '-' }}</div>
+                                            <div class="text-gray-400 font-mono">{{ r.inviter_device_id || '-' }}</div>
+                                        </td>
+                                        <td class="p-3 text-xs">
+                                            <div class="font-mono">{{ r.invitee_username || '-' }}</div>
+                                            <div class="text-gray-400 font-mono">{{ r.invitee_device_id || '-' }}</div>
+                                        </td>
+                                        <td class="p-3 text-xs">
+                                            <div>{{ r.reward_days || 0 }} 天</div>
+                                            <div class="text-emerald-600 font-mono">{{ r.bonus_token || '-' }}</div>
+                                        </td>
+                                        <td class="p-3 text-xs">{{ referralStatusLabel(r.status) }}</td>
+                                        <td class="p-3 text-xs">{{ formatShanghaiTime(r.created_at) }}</td>
+                                        <td class="p-3 text-xs">{{ r.rewarded_at ? formatShanghaiTime(r.rewarded_at) : '-' }}</td>
+                                    </tr>
+                                    <tr v-if="referralRecords.length === 0">
+                                        <td colspan="8" class="p-4 text-center text-gray-400">暂无邀请记录</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="p-3 border-t bg-gray-50 flex items-center justify-between text-sm">
+                            <div>共 {{ referralPagination.total }} 条</div>
+                            <div class="flex items-center gap-2">
+                                <button @click="fetchReferrals(referralPagination.page - 1)" :disabled="referralPagination.page <= 1" class="px-3 py-1 border rounded disabled:opacity-40">上一页</button>
+                                <span>第 {{ referralPagination.page }} / {{ Math.max(1, referralPagination.total_pages) }} 页</span>
+                                <button @click="fetchReferrals(referralPagination.page + 1)" :disabled="referralPagination.page >= Math.max(1, referralPagination.total_pages)" class="px-3 py-1 border rounded disabled:opacity-40">下一页</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Referral Management -->
+                <div v-if="currentView === 'referrals'" class="max-w-7xl mx-auto">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold">邀请记录</h2>
+                        <button @click="fetchReferrals(1)" class="text-blue-500 hover:text-blue-700">刷新</button>
+                    </div>
+                    <div class="bg-white rounded shadow overflow-hidden">
+                        <div class="p-4 border-b bg-gray-50 flex flex-wrap items-center justify-between gap-3">
+                            <h3 class="font-bold">邀请分享记录</h3>
+                            <div class="flex items-center gap-2">
+                                <select v-model="referralFilter.status" class="border rounded px-2 py-1 text-sm">
+                                    <option value="rewarded">成功到账</option>
+                                    <option value="pending">待生效</option>
+                                    <option value="rejected">已拒绝</option>
+                                    <option value="cancelled">已取消</option>
+                                    <option value="all">全部</option>
+                                </select>
+                                <input v-model="referralFilter.keyword" @keyup.enter="fetchReferrals(1)" type="text" class="border rounded px-2 py-1 text-sm" placeholder="用户名/设备/邀请码">
+                                <button @click="fetchReferrals(1)" class="text-sm px-3 py-1.5 border rounded hover:bg-gray-100">筛选</button>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full min-w-[1200px] text-left text-sm">
+                                <thead class="bg-gray-50 border-b text-gray-600">
+                                    <tr>
+                                        <th class="p-3">订单号</th>
+                                        <th class="p-3">邀请码</th>
+                                        <th class="p-3">邀请人</th>
+                                        <th class="p-3">被邀请人</th>
+                                        <th class="p-3">奖励</th>
+                                        <th class="p-3">状态</th>
+                                        <th class="p-3">创建时间</th>
+                                        <th class="p-3">到账时间</th>
                                     </tr>
                                 </thead>
                                 <tbody class="divide-y">
@@ -982,6 +1067,7 @@
                         min_amount: 10000000
                     },
                     dataFiles: [],
+                    dataFolders: [],
                     selectedDataFile: '',
                     dataFilePreview: '',
                     dataFileMeta: {},
@@ -1018,6 +1104,8 @@
                     if (val === 'orders') {
                         this.fetchOrders();
                         this.fetchOrderStats();
+                    }
+                    if (val === 'referrals') {
                         this.fetchReferrals(1);
                     }
                     if (val === 'logs') this.fetchLogs('system');
@@ -1076,7 +1164,28 @@
                 },
                 formatShanghaiTime(value) {
                     if (!value) return '-';
-                    const dt = new Date(value);
+                    const raw = String(value).trim();
+                    let normalized = raw.replace(' ', 'T');
+                    if (/^\d+$/.test(normalized)) {
+                        const n = Number(normalized);
+                        const dt = new Date(n > 1e12 ? n : n * 1000);
+                        if (Number.isNaN(dt.getTime())) return raw;
+                        return new Intl.DateTimeFormat('zh-CN', {
+                            timeZone: 'Asia/Shanghai',
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                            hour12: false
+                        }).format(dt);
+                    }
+                    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(normalized)) {
+                        // Backend stores many timestamps as naive UTC; force UTC parse.
+                        normalized += 'Z';
+                    }
+                    const dt = new Date(normalized);
                     if (Number.isNaN(dt.getTime())) return String(value);
                     return new Intl.DateTimeFormat('zh-CN', {
                         timeZone: 'Asia/Shanghai',
@@ -1103,6 +1212,7 @@
                         if (res.status === 403) { this.clearAuth(true); return; }
                         const data = await res.json();
                         this.dataFiles = Array.isArray(data.files) ? data.files : [];
+                        this.dataFolders = Array.isArray(data.folders) ? data.folders : [];
                     } catch (e) {
                         console.error('fetchDataFiles failed', e);
                     }

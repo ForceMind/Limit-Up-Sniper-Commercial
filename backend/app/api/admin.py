@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks, UploadFile, File
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
 from app.db import models, schemas, database
 from typing import List, Optional, Dict, Any, Tuple
@@ -644,11 +644,31 @@ async def set_user_membership(
 
 @router.get("/orders", response_model=List[schemas.OrderInfo])
 async def list_orders(status: str = None, skip: int = 0, limit: int = 100, db: Session = Depends(get_db), authorized: bool = Depends(verify_admin)):
-    q = db.query(models.PurchaseOrder)
+    q = db.query(models.PurchaseOrder).options(joinedload(models.PurchaseOrder.user))
     if status:
         q = q.filter(models.PurchaseOrder.status == status)
     orders = q.order_by(models.PurchaseOrder.created_at.desc()).offset(skip).limit(limit).all()
-    return orders
+    accounts = _load_user_accounts()
+    device_to_username = _device_username_map(accounts)
+
+    result: List[Dict[str, Any]] = []
+    for order in orders:
+        user_device_id = str(order.user.device_id or "").strip() if order.user else ""
+        username = device_to_username.get(user_device_id, "")
+        result.append({
+            "id": int(order.id),
+            "order_code": str(order.order_code),
+            "target_version": str(order.target_version),
+            "amount": float(order.amount or 0.0),
+            "duration_days": int(order.duration_days or 0),
+            "status": str(order.status or ""),
+            "created_at": order.created_at,
+            "user_id": int(order.user_id) if order.user_id is not None else None,
+            "user_device_id": user_device_id,
+            "username": username,
+            "account_type": "registered" if username else "guest",
+        })
+    return result
 
 
 @router.get("/orders/stats")
@@ -1200,21 +1220,54 @@ def _safe_data_path(rel_path: str) -> Path:
 @router.get("/data/files")
 async def list_data_files(authorized: bool = Depends(verify_admin)):
     files = []
+    hidden_cache_dirs = {"kline_cache", "kline_day_cache"}
+    folder_stats: Dict[str, Dict[str, Any]] = {}
+
     if not DATA_DIR.exists():
-        return {"files": files}
+        return {"files": files, "folders": []}
+
     for file_path in DATA_DIR.rglob("*"):
         if not file_path.is_file():
             continue
+
+        rel = file_path.relative_to(DATA_DIR)
+        rel_str = str(rel).replace("\\", "/")
+        top_dir = rel.parts[0] if rel.parts else ""
         stat = file_path.stat()
+
+        if top_dir in hidden_cache_dirs:
+            info = folder_stats.setdefault(
+                top_dir,
+                {"path": top_dir, "file_count": 0, "total_size": 0, "latest_mtime": 0.0},
+            )
+            info["file_count"] += 1
+            info["total_size"] += int(stat.st_size)
+            info["latest_mtime"] = max(float(info["latest_mtime"]), float(stat.st_mtime))
+            continue
+
         files.append(
             {
-                "path": str(file_path.relative_to(DATA_DIR)).replace("\\", "/"),
+                "path": rel_str,
                 "size": int(stat.st_size),
                 "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
             }
         )
+
     files.sort(key=lambda x: x["path"])
-    return {"files": files}
+    folders = []
+    for item in folder_stats.values():
+        folders.append(
+            {
+                "path": item["path"],
+                "file_count": int(item["file_count"]),
+                "total_size": int(item["total_size"]),
+                "modified_at": datetime.fromtimestamp(float(item["latest_mtime"] or 0)).isoformat()
+                if float(item["latest_mtime"] or 0) > 0
+                else "",
+            }
+        )
+    folders.sort(key=lambda x: x["path"])
+    return {"files": files, "folders": folders}
 
 
 @router.get("/data/file")

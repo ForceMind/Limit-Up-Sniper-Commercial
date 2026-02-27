@@ -999,8 +999,12 @@
                                 </span>
                             </div>
                             <div class="flex justify-between items-center">
-                                <span class="text-gray-500">龙虎榜更新</span>
-                                <span class="text-gray-700 dark:text-gray-300">{{ lhbConfig.last_update_time || '未更新' }}</span>
+                                <span class="text-gray-500">龙虎榜交易日</span>
+                                <span class="text-gray-700 dark:text-gray-300">{{ lhbConfig.latest_trade_date || '-' }}</span>
+                            </div>
+                            <div class="flex justify-between items-center">
+                                <span class="text-gray-500">QQ群号</span>
+                                <span class="text-gray-700 dark:text-gray-300 font-mono">{{ qqInviteInfo.qq_group_number || '-' }}</span>
                             </div>
                             <div class="flex justify-between items-center">
                                 <span class="text-gray-500">前端版本</span>
@@ -1014,6 +1018,13 @@
                                 <span class="text-gray-500">体验倒计时</span>
                                 <span class="text-orange-600 dark:text-orange-400">{{ trialCountdownText }}</span>
                             </div>
+                        </div>
+                        <div class="mt-2 text-[11px] text-gray-500">
+                            注册成功后会自动弹出一次加群邀请，这里可随时查看群号。
+                        </div>
+                        <div class="mt-2 grid grid-cols-2 gap-2">
+                            <button @click="copyQQGroupInfo" class="py-1.5 rounded border border-gray-300 text-xs">复制群号</button>
+                            <button @click="openQQGroupLink" :disabled="!qqInviteInfo.qq_group_link" class="py-1.5 rounded bg-emerald-600 text-white text-xs disabled:opacity-40">一键加群</button>
                         </div>
                     </div>
 
@@ -1488,7 +1499,9 @@
                     lhbConfig: {
                         enabled: false,
                         days: 90,
-                        min_amount_wan: 5000
+                        min_amount_wan: 5000,
+                        last_update_time: '',
+                        latest_trade_date: ''
                     },
                     isSyncingLHB: false,
                     // Chart Modal
@@ -1784,7 +1797,7 @@
                     try {
                         const q = new URLSearchParams(window.location.search || '');
                         const invite = (q.get('invite') || '').trim().toUpperCase();
-                        if (invite) {
+                        if (invite && /^[A-Z0-9]{6,20}$/.test(invite)) {
                             localStorage.setItem('sniper_pending_invite_code', invite);
                         }
                     } catch (e) {}
@@ -2548,7 +2561,9 @@
                         this.lhbConfig = {
                             enabled: data.enabled,
                             days: data.days,
-                            min_amount_wan: data.min_amount / 10000
+                            min_amount_wan: data.min_amount / 10000,
+                            last_update_time: data.last_update_time || '',
+                            latest_trade_date: data.latest_trade_date || ''
                         };
                     } catch (e) {
                         console.error('Failed to fetch LHB config:', e);
@@ -2604,6 +2619,14 @@
                         const response = await fetch(API_BASE_URL + '/api/config');
                         const data = await response.json();
                         this.systemConfig = data;
+                        const community = (data && typeof data === 'object' && data.community_config && typeof data.community_config === 'object')
+                            ? data.community_config
+                            : {};
+                        this.qqInviteInfo = {
+                            qq_group_number: String(community.qq_group_number || this.qqInviteInfo.qq_group_number || '').trim(),
+                            qq_group_link: String(community.qq_group_link || this.qqInviteInfo.qq_group_link || '').trim(),
+                            qq_group_welcome_text: String(community.welcome_text || this.qqInviteInfo.qq_group_welcome_text || '').trim()
+                        };
                     } catch (e) {
                         console.error('Failed to fetch config:', e);
                     }

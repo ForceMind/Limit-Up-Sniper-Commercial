@@ -60,6 +60,10 @@ class OrderInfo(BaseModel):
     duration_days: int
     status: str
     created_at: datetime
+    user_id: Optional[int] = None
+    user_device_id: Optional[str] = None
+    username: Optional[str] = None
+    account_type: Optional[str] = None
     
     class Config:
         orm_mode = True

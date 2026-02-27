@@ -20,7 +20,7 @@ from app.core.news_analyzer import generate_watchlist, analyze_single_stock, ana
 from app.core.market_scanner import scan_limit_up_pool, scan_broken_limit_pool, get_market_overview
 from app.core.stock_utils import calculate_metrics, is_trading_time, is_market_open_day
 from app.core.data_provider import data_provider
-from app.core.lhb_manager import lhb_manager
+from app.core.lhb_manager import lhb_manager, KLINE_DIR
 from app.core.ai_cache import ai_cache
 from app.core.config_manager import SYSTEM_CONFIG, save_config, DEFAULT_SCHEDULE
 from app.core.ws_hub import ws_hub
@@ -47,6 +47,8 @@ REALTIME_CACHE_INTERVAL_SEC = 20
 KLINE_BG_SCAN_INTERVAL_SEC = 60
 KLINE_MIN_REFRESH_SEC = 600
 DAY_KLINE_REFRESH_SEC = 3600
+KLINE_MIN_CACHE_EXPIRE_DAYS = 7
+KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 
 # Initialize DB Tables
 database.Base.metadata.create_all(bind=database.engine)
@@ -1129,6 +1131,43 @@ async def startup_event():
     add_runtime_log("Startup: Running initial intraday scan...")
     asyncio.create_task(run_initial_scan())
 
+def cleanup_kline_cache_files(min_cache_days: int = KLINE_MIN_CACHE_EXPIRE_DAYS, day_cache_days: int = KLINE_DAY_CACHE_EXPIRE_DAYS):
+    now_ts = time.time()
+    min_cutoff = now_ts - max(1, int(min_cache_days)) * 86400
+    day_cutoff = now_ts - max(1, int(day_cache_days)) * 86400
+    removed_min = 0
+    removed_day = 0
+
+    try:
+        if KLINE_DIR.exists():
+            for fp in KLINE_DIR.glob("*.csv"):
+                try:
+                    if fp.stat().st_mtime < min_cutoff:
+                        fp.unlink(missing_ok=True)
+                        removed_min += 1
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    try:
+        if DAY_KLINE_CACHE_DIR.exists():
+            for fp in DAY_KLINE_CACHE_DIR.glob("*.json"):
+                try:
+                    if fp.stat().st_mtime < day_cutoff:
+                        fp.unlink(missing_ok=True)
+                        removed_day += 1
+                except Exception:
+                    continue
+    except Exception:
+        pass
+
+    if removed_min or removed_day:
+        msg = f"[Cleanup] K线缓存清理完成: 分时={removed_min}, 日K={removed_day}"
+        print(msg)
+        add_runtime_log(msg)
+
+
 async def periodic_cleanup_task():
     """瀹氭湡娓呯悊缂撳瓨鏂囦欢"""
     while True:
@@ -1138,6 +1177,8 @@ async def periodic_cleanup_task():
             cleanup_analysis_cache(max_age_days=7)
             # 2. 娓呯悊 AI 鍘熷鏁版嵁缂撳瓨 (7澶?
             ai_cache.cleanup(max_age_seconds=7 * 86400)
+            # 3. 清理过期 K 线缓存
+            cleanup_kline_cache_files()
             
             # 每24小时运行一次
             await asyncio.sleep(86400)
@@ -1739,12 +1780,20 @@ class LHBConfigRequest(BaseModel):
 @app.get("/api/lhb/config")
 async def get_lhb_config(user: models.User = Depends(check_data_permission)):
     lhb_manager.load_config()
-    return lhb_manager.config
+    payload = dict(lhb_manager.config or {})
+    try:
+        dates = lhb_manager.get_available_dates() or []
+        payload["latest_trade_date"] = dates[0] if dates else ""
+    except Exception:
+        payload["latest_trade_date"] = ""
+    payload["last_update_time"] = str(payload.get("last_update", "") or "")
+    return payload
 
 @app.post("/api/lhb/config")
 async def update_lhb_config(config: LHBConfigRequest, user: models.User = Depends(check_data_permission)):
     lhb_manager.update_settings(config.enabled, config.days, config.min_amount)
-    return {"status": "ok", "config": lhb_manager.config}
+    payload = await get_lhb_config(user)
+    return {"status": "ok", "config": payload}
 
 @app.post("/api/lhb/sync")
 async def sync_lhb_data(background_tasks: BackgroundTasks, days: Optional[int] = Query(None), user: models.User = Depends(check_data_permission)):
