@@ -162,7 +162,7 @@ def save_news_history(news_items):
         with open(history_file, 'w', encoding='utf-8') as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"Error saving news history: {e}")
+        print(f"保存新闻历史失败: {e}")
 
 def get_cls_news(hours=12, logger=None):
     """
@@ -667,7 +667,7 @@ def analyze_single_stock(stock_data, logger=None, prompt_type='normal', api_key=
             pass
 
     # Debug Log for User Verification
-    print(f"[AI Analysis] Code: {code}, Turnover: {turnover}, LHB: {lhb_text[:50]}...")
+    print(f"[AI分析] 代码: {code}, 换手率: {turnover}, 龙虎榜: {lhb_text[:50]}...")
 
     if prompt_type in ['trading_signal', 'day_trading_signal', 'min_trading_signal']:
         # Prepare K-line data string
@@ -1063,7 +1063,7 @@ def generate_watchlist(logger=None, mode="after_hours", hours=None, update_callb
                 print(msg)
                 if logger: logger(msg)
             except Exception as e:
-                print(f"Error saving intermediate watchlist: {e}")
+                print(f"保存中间监控列表失败: {e}")
             
     # 如果没有新闻，也至少跑一次市场数据分析
     if not news_items:

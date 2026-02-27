@@ -96,7 +96,7 @@ def load_config():
                     if key in saved_config:
                         SYSTEM_CONFIG[key] = saved_config[key]
         except Exception as e:
-            print(f"Failed to load config: {e}")
+            print(f"加载配置失败: {e}")
 
 def save_config():
     """Save configuration to disk"""
@@ -129,7 +129,7 @@ def save_config():
             existing.update(export_data)
             json.dump(existing, f, indent=2, ensure_ascii=False)
     except Exception as e:
-        print(f"Failed to save config: {e}")
+        print(f"保存配置失败: {e}")
 
 # Load on import
 load_config()

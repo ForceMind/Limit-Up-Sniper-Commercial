@@ -52,9 +52,9 @@ class LHBManager:
                 with open(map_path, 'r', encoding='utf-8') as f:
                     self.hot_money_map = json.load(f)
                     self._map_mtime = mtime
-                    # print(f"[LHB] Hot money map loaded ({len(self.hot_money_map)} entries)")
+                    # print(f"[龙虎榜] Hot money map loaded ({len(self.hot_money_map)} entries)")
             except Exception as e:
-                print(f"Error loading hot money map: {e}")
+                print(f"[龙虎榜] 加载游资映射失败: {e}")
 
     def find_hot_money_name(self, seat_name):
         """逻辑统一：查找席位对应的游资名称"""
@@ -79,9 +79,9 @@ class LHBManager:
                 with open(config_path, 'r', encoding='utf-8') as f:
                     saved = json.load(f)
                     self.config.update(saved)
-                    print(f"[LHB] Config loaded: {self.config}")
+                    print(f"[龙虎榜] 配置已加载: {self.config}")
             except Exception as e:
-                print(f"[LHB] Error loading config: {e}")
+                print(f"[龙虎榜] 加载配置失败: {e}")
 
     def save_config(self):
         config_path = DATA_DIR / "lhb_config.json"
@@ -89,7 +89,7 @@ class LHBManager:
             json.dump(self.config, f, indent=2)
 
     def update_settings(self, enabled, days, min_amount):
-        print(f"[LHB] Updating settings: enabled={enabled}, days={days}, min_amount={min_amount}")
+        print(f"[龙虎榜] 正在更新设置: enabled={enabled}, days={days}, min_amount={min_amount}")
         self.config['enabled'] = enabled
         self.config['days'] = days
         self.config['min_amount'] = min_amount
@@ -181,14 +181,14 @@ class LHBManager:
             print(msg)
 
         if self.is_syncing:
-            log("[LHB] 同步任务正在进行中，请勿重复操作。")
+            log("[龙虎榜] 同步任务正在进行中，请勿重复操作。")
             return
 
         # Always reload config before sync to ensure we have latest settings (e.g. from other workers)
         self.load_config()
 
         if not self.config['enabled'] and not force_dates:
-            log("[LHB] 龙虎榜功能未开启，跳过更新。")
+            log("[龙虎榜] 龙虎榜功能未开启，跳过更新。")
             return
 
         self.is_syncing = True
@@ -206,13 +206,13 @@ class LHBManager:
             
             if force_dates:
                 trade_dates = forced_trade_dates
-                log(f"[LHB] 使用范围内缺失日期补齐，同步 {len(trade_dates)} 个交易日。")
+                log(f"[龙虎榜] 使用范围内缺失日期补齐，同步 {len(trade_dates)} 个交易日。")
                 if not trade_dates:
-                    log("[LHB] 范围内无有效交易日，跳过同步。")
+                    log("[龙虎榜] 范围内无有效交易日，跳过同步。")
                     return
             else:
                 desc = "最近1个" if days == 1 else f"最近 {days} 个"
-                log(f"[LHB] 开始同步{desc}交易日的龙虎榜数据...")
+                log(f"[龙虎榜] 开始同步{desc}交易日的龙虎榜数据...")
 
                 # 1. Get Trading Dates
                 end_date = datetime.now()
@@ -225,7 +225,7 @@ class LHBManager:
                     trade_dates = [d for d in trade_dates if d >= start_date.date() and d <= end_date.date()]
                     trade_dates = trade_dates[-days:] # Take last N trading days
                 except Exception as e:
-                    log(f"[LHB] 获取交易日历失败: {e}")
+                    log(f"[龙虎榜] 获取交易日历失败: {e}")
                     return
 
             # 2. Load existing data
@@ -252,7 +252,7 @@ class LHBManager:
                 check_date = date_obj.date() if hasattr(date_obj, 'date') else date_obj
                 
                 if check_date == now.date() and now.hour < 16:
-                     log(f"[LHB] 今日({date_iso})数据尚未公布(16:00后)，跳过。")
+                     log(f"[龙虎榜] 今日({date_iso})数据尚未公布(16:00后)，跳过。")
                      continue
                 
                 # Check if we already have data for this date (Optimization)
@@ -273,7 +273,7 @@ class LHBManager:
                         if date_iso != now.strftime('%Y-%m-%d'):
                             continue
 
-                log(f"[LHB] 正在抓取 {date_iso} 龙虎榜数据...")
+                log(f"[龙虎榜] 正在抓取 {date_iso} 龙虎榜数据...")
                 
                 try:
                     # akshare: stock_lhb_detail_em (东方财富)
@@ -392,7 +392,7 @@ class LHBManager:
                             
                             # Save to disk
                             combined_df.to_csv(LHB_FILE, index=False)
-                            if logger: logger(f"[LHB] 已保存 {date_iso} 数据 (累计 {len(combined_df)} 条)")
+                            if logger: logger(f"[龙虎榜] 已保存 {date_iso} 数据 (累计 {len(combined_df)} 条)")
                             
                             # Update in-memory existing_df for next iteration
                             existing_df = combined_df
@@ -403,10 +403,10 @@ class LHBManager:
                             self.generate_daily_report(date_iso, logger)
                             
                         except Exception as save_err:
-                            if logger: logger(f"[LHB] 保存数据失败 {date_iso}: {save_err}")
+                            if logger: logger(f"[龙虎榜] 保存数据失败 {date_iso}: {save_err}")
 
                 except Exception as e:
-                    if logger: logger(f"[LHB]获取 {date_str} 数据失败: {e}")
+                    if logger: logger(f"[龙虎榜]获取 {date_str} 数据失败: {e}")
 
             # 4. Final Cleanup and K-line Download
             if not existing_df.empty:
@@ -423,12 +423,12 @@ class LHBManager:
                 try:
                     build_profiles(logger)
                 except Exception as e:
-                    if logger: logger(f"[LHB] 更新画像失败: {e}")
+                    if logger: logger(f"[龙虎榜] 更新画像失败: {e}")
                 
                 self.download_kline_data(existing_df, logger)
                 
             else:
-                if logger: logger("[LHB] 无数据。")
+                if logger: logger("[龙虎榜] 无数据。")
         finally:
             self.is_syncing = False
 
@@ -450,7 +450,7 @@ class LHBManager:
         # Unique stock-date combinations
         tasks = df[['stock_code', 'trade_date']].drop_duplicates()
         
-        if logger: logger(f"[LHB] 正在同步 {len(tasks)} 个 K线数据文件...")
+        if logger: logger(f"[龙虎榜] 正在同步 {len(tasks)} 个 K线数据文件...")
         
         for _, row in tasks.iterrows():
             code = str(row['stock_code']).zfill(6)
@@ -489,14 +489,14 @@ class LHBManager:
         now_ts = time.time()
         if now_ts - self._kline_error_window_start >= self._kline_error_window_seconds:
             if self._kline_error_suppressed > 0:
-                print(f"[LHB] 已抑制 {self._kline_error_suppressed} 条分时K线抓取错误日志")
+                print(f"[龙虎榜] 已抑制 {self._kline_error_suppressed} 条分时K线抓取错误日志")
             self._kline_error_window_start = now_ts
             self._kline_error_window_count = 0
             self._kline_error_suppressed = 0
 
         if self._kline_error_window_count < self._kline_error_max_logs:
             self._kline_error_window_count += 1
-            print(f"[LHB] 分时K线抓取失败 {code}: {err}")
+            print(f"[龙虎榜] 分时K线抓取失败 {code}: {err}")
         else:
             self._kline_error_suppressed += 1
 
@@ -599,7 +599,7 @@ class LHBManager:
                 "seats": seats
             }
         except Exception as e:
-            print(f"Error getting LHB info: {e}")
+            print(f"[龙虎榜] 获取龙虎榜信息失败: {e}")
             return None
 
     def get_daily_data(self, date_str):
@@ -675,7 +675,7 @@ class LHBManager:
             return result
             
         except Exception as e:
-            print(f"Error getting daily data: {e}")
+            print(f"[龙虎榜] 获取每日数据失败: {e}")
             return []
 
     def get_available_dates(self):
@@ -727,6 +727,6 @@ class LHBManager:
                 print(report_str)
                 
         except Exception as e:
-            print(f"Error generating report: {e}")
+            print(f"[龙虎榜] 生成报告失败: {e}")
 
 lhb_manager = LHBManager()

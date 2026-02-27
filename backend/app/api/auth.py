@@ -214,7 +214,7 @@ async def register(data: dict = Body(...), db: Session = Depends(get_db)):
     user.daily_review_count = 0
     db.commit()
     db.refresh(user)
-    add_runtime_log(f"[AUTH] Register success: username={username}, device={device_id}")
+    add_runtime_log(f"[认证] 注册成功: username={username}, device={device_id}")
     log_user_operation(
         "user_register",
         status="success",
@@ -276,7 +276,7 @@ async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
 
     device_id = account["device_id"]
     user = user_service.get_or_create_user(db, device_id)
-    add_runtime_log(f"[AUTH] Login success: username={username}, device={device_id}")
+    add_runtime_log(f"[认证] 登录成功: username={username}, device={device_id}")
     log_user_operation(
         "user_login",
         status="success",
@@ -415,7 +415,7 @@ async def apply_trial(
     user.daily_review_count = 0
     db.commit()
     db.refresh(user)
-    add_runtime_log(f"[AUTH] Trial applied: username={account_key}, device={x_device_id}")
+    add_runtime_log(f"[认证] 试用已开通: username={account_key}, device={x_device_id}")
     log_user_operation(
         "apply_trial",
         status="success",

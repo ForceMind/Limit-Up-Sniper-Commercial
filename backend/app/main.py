@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -64,10 +64,10 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(payment.router, prefix="/api/payment", tags=["payment"])
 
-# CORS閰嶇疆
+# CORS配置
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 鍏佽鎵€鏈夋潵婧愶紝鐢熶骇鐜搴旈檺鍒朵负鍓嶇鍩熷悕
+    allow_origins=["*"],  # 允许所有来源，生产环境应限制为前端域名
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -198,7 +198,7 @@ async def user_operation_logger(request: Request, call_next):
 
 @app.get("/api/status")
 async def get_system_status():
-    """鑾峰彇绯荤粺鐘舵€?(浜ゆ槗鏃?鏃堕棿)"""
+    """获取系统状态（交易日/时间）"""
     return {
         "status": "success",
         "is_trading_time": is_trading_time(),
@@ -209,7 +209,7 @@ async def get_system_status():
 
 @app.get("/api/news_history/clear")
 async def clear_news_history(range: str = "all", user: models.User = Depends(check_data_permission)):
-    """娓呯悊鏂伴椈鍘嗗彶
+    """清理新闻历史
     range: all, before_today, before_3d, before_7d
     """
     history_file = DATA_DIR / "news_history.json"
@@ -244,7 +244,7 @@ async def clear_news_history(range: str = "all", user: models.User = Depends(che
         return {"status": "error", "message": str(e)}
 
 def load_watchlist():
-    """鍔犺浇澶嶇洏鐢熸垚鐨勫叧娉ㄥ垪琛?"""
+    """加载复盘生成的关注列表"""
     file_path = DATA_DIR / "watchlist.json"
     if file_path.exists():
         try:
@@ -256,16 +256,16 @@ def load_watchlist():
     return []
 
 def save_watchlist(data):
-    """淇濆瓨鍏虫敞鍒楄〃"""
+    """保存关注列表"""
     file_path = DATA_DIR / "watchlist.json"
     try:
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"Error saving watchlist: {e}")
+        print(f"保存监控列表失败: {e}")
 
 def load_favorites():
-    """鍔犺浇鑷€夎偂鍒楄〃 (闀挎湡鍏虫敞)"""
+    """加载自选股列表（长期关注）"""
     file_path = DATA_DIR / "favorites.json"
     if file_path.exists():
         try:
@@ -276,13 +276,13 @@ def load_favorites():
     return []
 
 def save_favorites(data):
-    """淇濆瓨鑷€夎偂鍒楄〃"""
+    """保存自选股列表"""
     file_path = DATA_DIR / "favorites.json"
     try:
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"Error saving favorites: {e}")
+        print(f"保存自选列表失败: {e}")
 
 def clean_watchlist():
     """
@@ -318,7 +318,7 @@ def clean_watchlist():
     reload_watchlist_globals()
 
 def reload_watchlist_globals():
-    """閲嶆柊鍔犺浇鍏ㄥ眬鍙橀噺"""
+    """重新加载全局变量"""
     global watchlist_data, watchlist_map, WATCH_LIST, favorites_data, favorites_map
     watchlist_data = load_watchlist()
     watchlist_map = {item['code']: item for item in watchlist_data}
@@ -331,7 +331,7 @@ def reload_watchlist_globals():
 
 @app.get("/api/news_history")
 async def get_news_history(user: models.User = Depends(check_data_permission)):
-    """鑾峰彇鏂伴椈鍘嗗彶璁板綍"""
+    """获取新闻历史记录"""
     history_file = DATA_DIR / "news_history.json"
     if history_file.exists():
         try:
@@ -342,7 +342,7 @@ async def get_news_history(user: models.User = Depends(check_data_permission)):
             return {"status": "error", "message": str(e)}
     return {"status": "success", "data": []}
 
-# 鍏ㄥ眬鍙橀噺
+# 全局变量
 watchlist_data = load_watchlist()
 watchlist_map = {item['code']: item for item in watchlist_data}
 favorites_data = load_favorites()
@@ -389,7 +389,7 @@ def save_analysis_cache():
         pass
 
 def cleanup_analysis_cache(max_age_days=7):
-    """娓呯悊瓒呰繃鎸囧畾澶╂暟鐨勫垎鏋愮紦瀛?"""
+    """清理超过指定天数的分析缓存"""
     global ANALYSIS_CACHE
     now = time.time()
     max_age_seconds = max_age_days * 86400
@@ -402,7 +402,7 @@ def cleanup_analysis_cache(max_age_days=7):
     
     if len(ANALYSIS_CACHE) < initial_count:
         save_analysis_cache()
-        print(f"Cleanup: Removed {initial_count - len(ANALYSIS_CACHE)} expired analysis cache entries.")
+        print(f"清理完成：移除了 {initial_count - len(ANALYSIS_CACHE)} 条过期分析缓存。")
 
 
 def _analysis_cache_is_expired(cache_entry, prompt_type: str, now: Optional[datetime] = None) -> bool:
@@ -474,7 +474,7 @@ def refresh_indices_cache():
             indices_cache = rows
             indices_cache_ts = time.time()
     except Exception as e:
-        print(f"refresh_indices_cache error: {e}")
+        print(f"刷新指数缓存失败: {e}")
 
 
 def get_indices_cache():
@@ -490,7 +490,7 @@ def refresh_market_sentiment_cache():
             market_sentiment_cache = data
             market_sentiment_cache_ts = time.time()
     except Exception as e:
-        print(f"refresh_market_sentiment_cache error: {e}")
+        print(f"刷新市场情绪缓存失败: {e}")
 
 
 def get_market_sentiment_cache():
@@ -585,13 +585,13 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
         global kline_error_window_start_ts, kline_error_window_count, kline_error_suppressed
         if now_ts - kline_error_window_start_ts >= KLINE_ERROR_LOG_WINDOW_SEC:
             if kline_error_suppressed > 0:
-                print(f"[KLINE] 已抑制 {kline_error_suppressed} 条日K刷新错误日志")
+                print(f"[K线] 已抑制 {kline_error_suppressed} 条日K刷新错误日志")
             kline_error_window_start_ts = now_ts
             kline_error_window_count = 0
             kline_error_suppressed = 0
         if kline_error_window_count < KLINE_ERROR_LOG_MAX_PER_WINDOW:
             kline_error_window_count += 1
-            print(f"[KLINE] 日K刷新失败 {clean_code}: {e}")
+            print(f"[K线] 日K刷新失败 {clean_code}: {e}")
         else:
             kline_error_suppressed += 1
 
@@ -635,7 +635,7 @@ async def realtime_cache_updater_task():
             await asyncio.to_thread(refresh_indices_cache)
             await asyncio.to_thread(refresh_market_sentiment_cache)
         except Exception as e:
-            print(f"realtime_cache_updater_task error: {e}")
+            print(f"实时缓存更新任务错误: {e}")
         await asyncio.sleep(REALTIME_CACHE_INTERVAL_SEC)
 
 
@@ -664,7 +664,7 @@ async def kline_cache_updater_task():
                     )
                     await asyncio.to_thread(refresh_day_kline_cache_for_code, clean_code, False)
         except Exception as e:
-            print(f"kline_cache_updater_task error: {e}")
+            print(f"K线缓存更新任务错误: {e}")
         await asyncio.sleep(KLINE_BG_SCAN_INTERVAL_SEC)
 
 async def update_intraday_pool():
@@ -684,13 +684,13 @@ async def get_status():
     }
 
 @app.get("/api/add_watchlist")
-async def add_to_watchlist_api(code: str, name: str, reason: str = "鎵嬪姩娣诲姞", user: models.User = Depends(check_data_permission)):
+async def add_to_watchlist_api(code: str, name: str, reason: str = "手动添加", user: models.User = Depends(check_data_permission)):
     global favorites_data, watchlist_map
     
     # Check if exists in favorites
     for item in favorites_data:
         if item['code'] == code:
-            return {"status": "exists", "msg": "宸插湪鑷€夊垪琛ㄤ腑"}
+            return {"status": "exists", "msg": "已在自选列表中"}
             
     # Try to preserve existing info if it was in AI list
     existing_info = watchlist_map.get(code, {})
@@ -719,7 +719,7 @@ async def add_to_watchlist_api(code: str, name: str, reason: str = "鎵嬪姩娣
     save_favorites(favorites_data)
     reload_watchlist_globals()
     
-    return {"status": "ok", "msg": "娣诲姞鎴愬姛"}
+    return {"status": "ok", "msg": "添加成功"}
 
 @app.get("/api/remove_watchlist")
 async def remove_from_watchlist_api(code: str, user: models.User = Depends(check_data_permission)):
@@ -743,9 +743,9 @@ async def remove_from_watchlist_api(code: str, user: models.User = Depends(check
     
     if removed:
         reload_watchlist_globals()
-        return {"status": "ok", "msg": "鍒犻櫎鎴愬姛"}
+        return {"status": "ok", "msg": "删除成功"}
         
-    return {"status": "error", "msg": "鏈壘鍒拌鑲＄エ"}
+    return {"status": "error", "msg": "未找到该股票"}
 
 
 def load_market_pools():
@@ -812,7 +812,7 @@ async def update_market_pools_task():
                         
                         enriched_pool.append(stock)
                     except Exception as e:
-                        print(f"Error enriching stock {stock.get('code')}: {e}")
+                        print(f"补充股票信息失败 {stock.get('code')}: {e}")
                         enriched_pool.append(stock) # Add anyway
                 
                 limit_up_pool_data = enriched_pool
@@ -824,7 +824,7 @@ async def update_market_pools_task():
                 
             await loop.run_in_executor(None, save_market_pools)
         except Exception as e:
-            print(f"Pool update error: {e}")
+            print(f"股票池更新错误: {e}")
         
         await asyncio.sleep(20) # Increase interval slightly to allow for metrics calc
 
@@ -851,7 +851,7 @@ async def update_intraday_pool_task():
                                 "code": s['code'],
                                 "name": s['name'],
                                 "concept": s['concept'],
-                                "news_summary": s['reason'], # 缁熶竴浣跨敤 news_summary
+                                "news_summary": s['reason'], # 统一使用 news_summary
                                 "strategy_type": "LimitUp",
                                 "added_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 "initial_score": s.get('score', 0)
@@ -864,7 +864,7 @@ async def update_intraday_pool_task():
                         WATCH_LIST = list(set(list(watchlist_map.keys()) + list(favorites_map.keys())))
                         await loop.run_in_executor(None, save_watchlist, watchlist_data)
                     
-                    # [New] 绔炰环鍒楄〃娓呯悊閫昏緫 (10:00 鍚庢竻鐞嗙珵浠风瓥鐣ヨ偂绁?
+                    # [New] 竞价列表清理逻辑（10:00 后清理竞价策略股票）
                     if now.hour >= 10:
                         cleanup_changed = False
                         sealed_codes = {s['code'] for s in limit_up_pool_data}
@@ -872,7 +872,7 @@ async def update_intraday_pool_task():
                             if item.get('strategy_type') == 'Aggressive' and '已剔除' not in item.get('news_summary', ''):
                                 if item['code'] not in sealed_codes:
                                     item['strategy_type'] = 'Discarded'
-                                    item['news_summary'] = f"[绔炰环杩囨湡] {item.get('news_summary', '')}"
+                                    item['news_summary'] = f"[竞价过期] {item.get('news_summary', '')}"
                                     cleanup_changed = True
                         
                         if cleanup_changed:
@@ -890,7 +890,7 @@ async def update_intraday_pool_task():
             await asyncio.sleep(10)
             
         except Exception as e:
-            print(f"Intraday scan error: {e}")
+            print(f"盘中扫描错误: {e}")
             # Sleep longer on error to avoid hammering
             await asyncio.sleep(60)
 
@@ -898,7 +898,7 @@ if not WATCH_LIST:
     WATCH_LIST = ['sh600519', 'sz002405', 'sz300059']
 
 def refresh_watchlist():
-    """鍒锋柊鍏ㄥ眬鐩戞帶鍒楄〃"""
+    """刷新全局监控列表"""
     global watchlist_data, watchlist_map, WATCH_LIST
     watchlist_data = load_watchlist()
     watchlist_map = {item['code']: item for item in watchlist_data}
@@ -925,7 +925,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/api/search")
 async def search_stock(q: str, user: models.User = Depends(check_data_permission)):
     """
-    鎼滅储鑲＄エ (鏀寔浠ｇ爜銆佹嫾闊炽€佸悕绉?
+    搜索股票（支持代码、拼音、名称）
     """
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, lambda: data_provider.search_stock(q))
@@ -1009,12 +1009,12 @@ async def remove_watchlist_stat(payload: FavoriteStatRequest, user: models.User 
 
 @app.post("/api/add_stock")
 async def add_stock(code: str, user: models.User = Depends(check_data_permission)):
-    """鎵嬪姩娣诲姞鑲＄エ鍒扮洃鎺у垪琛?"""
+    """手动添加股票到监控列表"""
     global watchlist_data, watchlist_map, WATCH_LIST
     
     code = code.lower().strip()
     
-    # 鑷姩琛ュ叏鍓嶇紑
+    # 自动补全前缀
     if len(code) == 6 and code.isdigit():
         if code.startswith('6'):
             code = f"sh{code}"
@@ -1023,30 +1023,30 @@ async def add_stock(code: str, user: models.User = Depends(check_data_permission
         elif code.startswith('8') or code.startswith('4') or code.startswith('9'):
             code = f"bj{code}"
         else:
-            # 榛樿涓?sh (鎴栬€呮姤閿?
+            # 默认按 sh 处理（或直接报错）
             pass
     
-    # 绠€鍗曠殑鏍煎紡鏍￠獙
+    # 简单的格式校验
     if not (code.startswith('sh') or code.startswith('sz') or code.startswith('bj')):
         return {"status": "error", "message": "Invalid code format"}
         
-    # 濡傛灉宸插瓨鍦紝寮哄埗鏇存柊涓?Manual 绛栫暐
+    # 如果已存在，强制更新为 Manual 策略
     if code in watchlist_map:
         watchlist_map[code]['strategy_type'] = 'Manual'
-        watchlist_map[code]['news_summary'] = '鎵嬪姩娣诲姞 (瑕嗙洊)'
+        watchlist_map[code]['news_summary'] = '手动添加（覆盖）'
         # Save
         try:
             file_path = DATA_DIR / "watchlist.json"
             with open(file_path, "w", encoding="utf-8") as f:
                 json.dump(watchlist_data, f, ensure_ascii=False, indent=2)
         except Exception as e:
-            print(f"Error saving watchlist: {e}")
+            print(f"保存监控列表失败: {e}")
         return {"status": "success", "message": "Updated to Manual"}
         
-    # 璁＄畻楂樼骇鎸囨爣
+    # 计算高级指标
     metrics = calculate_metrics(code)
     
-    # 鑾峰彇鑲＄エ璇︾粏淇℃伅 (鍚嶇О + 琛屼笟/姒傚康)
+    # 获取股票详细信息（名称 + 行业/概念）
     name, concept = data_provider.get_stock_info(code)
     
     # 添加新股票
@@ -1055,7 +1055,7 @@ async def add_stock(code: str, user: models.User = Depends(check_data_permission
         "name": name, 
         "news_summary": "Manual Add",
         "concept": concept,
-        "initial_score": 5, # 榛樿涓瓑鍒嗘暟
+        "initial_score": 5, # 默认中等分数
         "strategy_type": "Manual",
         "seal_rate": metrics['seal_rate'],
         "broken_rate": metrics['broken_rate'],
@@ -1086,7 +1086,7 @@ async def add_stock(code: str, user: models.User = Depends(check_data_permission
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(watchlist_data, f, ensure_ascii=False, indent=2)
     except Exception as e:
-        print(f"Error saving watchlist: {e}")
+        print(f"保存监控列表失败: {e}")
         
     return {"status": "success"}
 
@@ -1095,7 +1095,7 @@ import queue
 log_queue = queue.Queue()
 
 async def log_broadcaster():
-    """浠庨槦鍒楄鍙栨棩蹇楀苟骞挎挱"""
+    """从队列读取日志并广播"""
     while True:
         try:
             # Non-blocking read
@@ -1105,7 +1105,7 @@ async def log_broadcaster():
             await asyncio.sleep(0.1)
 
 def update_limit_up_pool_task():
-    """鏇存柊宸叉定鍋滆偂绁ㄦ睜"""
+    """更新涨停股票池"""
     global limit_up_pool_data
     try:
         # Scan
@@ -1119,9 +1119,9 @@ def update_limit_up_pool_task():
             metrics = calculate_metrics(code)
             
             # Check watchlist for reason
-            reason = "甯傚満寮哄娍娑ㄥ仠"
+            reason = "市场强势涨停"
             if code in watchlist_map:
-                reason = watchlist_map[code].get('news_summary', '鑷€夎偂娑ㄥ仠')
+                reason = watchlist_map[code].get('news_summary', '自选股涨停')
             
             stock['seal_rate'] = metrics['seal_rate']
             stock['broken_rate'] = metrics['broken_rate']
@@ -1138,7 +1138,7 @@ def update_limit_up_pool_task():
             
         limit_up_pool_data = enriched_pool
     except Exception as e:
-        print(f"Error updating limit up pool: {e}")
+        print(f"更新涨停池失败: {e}")
 
 @app.on_event("startup")
 async def startup_event():
@@ -1146,8 +1146,8 @@ async def startup_event():
     load_analysis_cache()
     
     # Update base info (CircMV etc) on startup
-    print("Startup: Updating base stock info...")
-    add_runtime_log("Startup: Updating base stock info...")
+    print("启动：正在更新股票基础信息...")
+    add_runtime_log("启动：正在更新股票基础信息...")
     await asyncio.to_thread(data_provider.update_base_info)
     # Warm core caches once at startup.
     await asyncio.to_thread(refresh_stock_quotes_cache)
@@ -1167,8 +1167,9 @@ async def startup_event():
     # Start periodic cleanup task
     asyncio.create_task(periodic_cleanup_task())
     
-    # 鍚姩鏃剁珛鍗虫墽琛屼竴娆＄洏涓壂鎻忥紝纭繚鍒楄〃涓嶄负绌?    print("Startup: Running initial intraday scan...")
-    add_runtime_log("Startup: Running initial intraday scan...")
+    # 启动时立即执行一次盘中扫描，确保列表不为空。
+    print("启动：正在执行首次盘中扫描...")
+    add_runtime_log("启动：正在执行首次盘中扫描...")
     asyncio.create_task(run_initial_scan())
 
 def cleanup_kline_cache_files(min_cache_days: int = KLINE_MIN_CACHE_EXPIRE_DAYS, day_cache_days: int = KLINE_DAY_CACHE_EXPIRE_DAYS):
@@ -1209,13 +1210,13 @@ def cleanup_kline_cache_files(min_cache_days: int = KLINE_MIN_CACHE_EXPIRE_DAYS,
 
 
 async def periodic_cleanup_task():
-    """瀹氭湡娓呯悊缂撳瓨鏂囦欢"""
+    """定期清理缓存文件"""
     while True:
         try:
-            print("Running periodic cleanup...")
-            # 1. 娓呯悊 AI 鍒嗘瀽缂撳瓨 (7澶?
+            print("正在执行周期清理...")
+            # 1. 清理 AI 分析缓存（7天）
             cleanup_analysis_cache(max_age_days=7)
-            # 2. 娓呯悊 AI 鍘熷鏁版嵁缂撳瓨 (7澶?
+            # 2. 清理 AI 原始数据缓存（7天）
             ai_cache.cleanup(max_age_seconds=7 * 86400)
             # 3. 清理过期 K 线缓存
             cleanup_kline_cache_files()
@@ -1223,18 +1224,18 @@ async def periodic_cleanup_task():
             # 每24小时运行一次
             await asyncio.sleep(86400)
         except Exception as e:
-            print(f"Cleanup task error: {e}")
+            print(f"清理任务错误: {e}")
             await asyncio.sleep(3600)
 
 async def run_initial_scan():
-    """鍚姩鏃剁珛鍗宠繍琛屼竴娆℃壂鎻?"""
+    """启动时立即运行一次扫描"""
     try:
-        # 绛夊緟鍑犵纭繚鍏朵粬缁勪欢灏辩华
+        # 等待几秒确保其他组件就绪
         await asyncio.sleep(2)
-        # 浠呭湪浜ゆ槗鏃ヤ笖閰嶇疆寮€鍚椂鎵ц鍒濆鎵弿
+        # 仅在交易日且配置开启时执行初始扫描
         if is_market_open_day() and SYSTEM_CONFIG["auto_analysis_enabled"]:
             await asyncio.to_thread(execute_analysis, "intraday")
-            print("Startup: Initial scan completed.")
+            print("启动：首次扫描完成。")
             # Update last run time to prevent immediate re-run by scheduler
             SYSTEM_CONFIG["last_run_time"] = time.time()
         else:
@@ -1292,7 +1293,7 @@ async def update_config(config: ConfigUpdate, user: models.User = Depends(check_
 
 async def scheduler_loop():
     """Background scheduler for periodic tasks"""
-    print("Starting background scheduler...")
+    print("正在启动后台调度器...")
     last_pool_update_time = 0
     
     # Startup Check: If watchlist was updated recently (< 1 hour), skip immediate analysis
@@ -1302,11 +1303,11 @@ async def scheduler_loop():
         if watchlist_path.exists():
             mtime = watchlist_path.stat().st_mtime
             if time.time() - mtime < 3600:
-                print("Watchlist updated recently (<1h), skipping immediate analysis on startup.")
+                print("监控列表在1小时内刚更新，启动时跳过立即分析。")
                 # Set last_run_time to mtime so scheduler thinks it just ran
                 SYSTEM_CONFIG["last_run_time"] = mtime
     except Exception as e:
-        print(f"Startup check failed: {e}")
+        print(f"启动检查失败: {e}")
 
     while True:
         try:
@@ -1382,7 +1383,7 @@ async def scheduler_loop():
             # Safety check: If last_run_time is in the future, reset it
             # [Moved here to ensure interval_seconds is defined]
             if SYSTEM_CONFIG["last_run_time"] > current_timestamp:
-                print(f"Resetting future last_run_time: {SYSTEM_CONFIG['last_run_time']} -> {current_timestamp}")
+                print(f"检测到 last_run_time 在未来，已重置: {SYSTEM_CONFIG['last_run_time']} -> {current_timestamp}")
                 SYSTEM_CONFIG["last_run_time"] = current_timestamp - interval_seconds # Force run if needed
 
             # Update Next Run Time for UI
@@ -1420,7 +1421,7 @@ async def scheduler_loop():
                             thread_logger(f">>> 触发定时分析: {mode}, 周期{interval_seconds/60:.0f}分钟, 回溯{lookback_hours}小时")
                             await asyncio.to_thread(execute_analysis, mode, lookback_hours)
                         except Exception as e:
-                            print(f"Scheduler error: {e}")
+                            print(f"调度器错误: {e}")
                         finally:
                             SYSTEM_CONFIG["current_status"] = "空闲中"
             else:
@@ -1447,18 +1448,18 @@ async def scheduler_loop():
                 if lhb_manager.config['enabled'] and not lhb_manager.is_syncing:
                     # [Modified] Only run if today's data is missing
                     if not lhb_manager.has_data_for_today():
-                        thread_logger("[LHB] 启动定时同步任务 (18:00)...")
+                        thread_logger("[龙虎榜] 启动定时同步任务 (18:00)...")
                         loop = asyncio.get_event_loop()
                         loop.run_in_executor(None, lhb_manager.fetch_and_update_data, thread_logger)
                     else:
-                        thread_logger("[LHB] 今日数据已存在，跳过定时任务。")
+                        thread_logger("[龙虎榜] 今日数据已存在，跳过定时任务。")
                     # Sleep to avoid multiple triggers
                     await asyncio.sleep(60)
 
             await asyncio.sleep(5) # Check every 5 seconds
             
         except Exception as e:
-            print(f"Scheduler loop crashed: {e}")
+            print(f"调度循环崩溃: {e}")
             await asyncio.sleep(60) # Sleep and retry
 
 def thread_logger(msg):
@@ -1483,9 +1484,9 @@ async def run_analysis(
     user: models.User = Depends(get_current_user), 
     db: Session = Depends(lambda: next(database.get_db()))
 ):
-    """瑙﹀彂澶嶇洏鍒嗘瀽"""
+    """触发复盘分析"""
     
-    # 1. 鏉冮檺妫€鏌?& 鎵ｈ垂
+    # 1. 权限检查与扣费
     limit_type = 'raid' if mode in ["intraday", "intraday_monitor"] else 'review'
     
     if limit_type == 'raid':
@@ -1493,14 +1494,14 @@ async def run_analysis(
     else:
         await check_review_permission(user, skip_quota=True)
     
-    # 2. 缂撳瓨妫€鏌?(5鍒嗛挓) + 骞跺彂浜掓枼锛岄伩鍏嶉噸澶嶆墸璐瑰拰閲嶅瑙﹀彂
+    # 2. 缓存检查（5分钟）+ 并发互斥，避免重复扣费和重复触发
     cache_key = "mid_day" if limit_type == 'raid' else "after_hours"
     lock = ANALYSIS_TRIGGER_LOCKS[cache_key]
     async with lock:
         last_time = LAST_ANALYSIS_TIME.get(cache_key, datetime.min)
         seconds_since_last = int((datetime.now() - last_time).total_seconds())
         if seconds_since_last < 300:
-            thread_logger(f"[Cache] {mode} 5分钟缓存命中，复用最近结果（{seconds_since_last}s 前）")
+            thread_logger(f"[缓存] {mode} 5分钟缓存命中，复用最近结果（{seconds_since_last}s 前）")
             return {
                 "status": "success",
                 "cached": True,
@@ -1508,7 +1509,7 @@ async def run_analysis(
                 "message": f"Returning cached {mode} data (updated {seconds_since_last}s ago)"
             }
 
-        # 3. 鎵ц鏂扮殑鍒嗘瀽
+        # 3. 执行新的分析
         if limit_type == 'raid':
             await check_raid_permission(user)
         else:
@@ -1536,12 +1537,12 @@ def execute_analysis(mode="after_hours", hours=None):
         thread_logger(f">>> {mode_name}任务完成，列表已更新 ({len(WATCH_LIST)} 个标的)。")
     except Exception as e:
         thread_logger(f"!!! 分析任务出错: {e}")
-        print(f"Analysis Error: {e}")
+        print(f"分析错误: {e}")
 
 
 def refresh_stock_quotes_cache():
     """
-    鑾峰彇鑲＄エ琛屾儏锛屼娇鐢ㄧ粺涓€鐨?DataProvider
+    获取股票行情，使用统一的 DataProvider
     """
     if not WATCH_LIST:
         _set_stock_quotes_cache([])
@@ -1632,10 +1633,10 @@ def refresh_stock_quotes_cache():
                 # Use AI info as base
                 stock['initial_score'] = ai_info.get("initial_score", 0)
                 stock['concept'] = ai_info.get("concept", stock.get('concept', '-'))
-                # 鍏煎 reason 鍜?news_summary
+                # 兼容 reason 和 news_summary
                 ai_curr_reason = ai_info.get("reason", ai_info.get("news_summary", ""))
                 stock['reason'] = ai_curr_reason if ai_curr_reason else stock.get('reason', '')
-                stock['news_summary'] = stock['reason'] # 纭繚鍓嶇鑳借鍙栧埌璇︾粏閫昏緫
+                stock['news_summary'] = stock['reason'] # 确保前端能读取到详细逻辑
                 
                 stock['seal_rate'] = ai_info.get("seal_rate", 0)
                 stock['broken_rate'] = ai_info.get("broken_rate", 0)
@@ -1655,8 +1656,8 @@ def refresh_stock_quotes_cache():
                     if current_change >= limit_threshold:
                         ai_strategy = "LimitUp" # Promote to LimitUp view
                         # Prepend reason if not already there
-                        if "[寮辫浆寮篯" not in stock['reason']:
-                            stock['reason'] = f"[寮辫浆寮篯 {stock['reason']}"
+                        if "[弱转强]" not in stock['reason']:
+                            stock['reason'] = f"[弱转强] {stock['reason']}"
 
             # 2. Check Favorites
             if code in favorites_map:
@@ -1666,7 +1667,7 @@ def refresh_stock_quotes_cache():
                 # If NOT in AI list, use Favorite info
                 if code not in watchlist_map:
                     stock['concept'] = fav_info.get("concept", stock.get('concept', '-'))
-                    stock['reason'] = fav_info.get("reason", "鎵嬪姩娣诲姞")
+                    stock['reason'] = fav_info.get("reason", "手动添加")
                     stock['initial_score'] = fav_info.get("initial_score", 0)
                     stock['added_time'] = fav_info.get("added_time", 0)
                     # Keep other metrics 0 or default
@@ -1706,7 +1707,7 @@ def refresh_stock_quotes_cache():
         _set_stock_quotes_cache(enriched_stocks)
         return enriched_stocks
     except Exception as e:
-        print(f"Error fetching quotes: {e}")
+        print(f"获取行情失败: {e}")
         return []
 
 def get_stock_quotes():
@@ -1715,7 +1716,7 @@ def get_stock_quotes():
 
 @app.post("/api/watchlist/remove")
 async def remove_from_watchlist(request: Request, user: models.User = Depends(check_data_permission)):
-    """浠庤嚜閫夊垪琛ㄤ腑绉婚櫎鑲＄エ"""
+    """从自选列表中移除股票"""
     global watchlist_data, watchlist_map, WATCH_LIST, favorites_data, favorites_map
     try:
         data = await request.json()
@@ -1750,7 +1751,7 @@ async def api_stocks(user: models.User = Depends(check_data_permission)):
 
 @app.get("/api/indices")
 async def api_indices(user: models.User = Depends(check_data_permission)):
-    """蹇€熻幏鍙栧ぇ鐩樻寚鏁?"""
+    """快速获取大盘指数"""
     return get_indices_cache()
 
 @app.get("/api/limit_up_pool")
@@ -1762,12 +1763,12 @@ async def api_limit_up_pool(user: models.User = Depends(check_data_permission)):
 
 @app.get("/api/intraday_pool")
 async def api_intraday_pool(user: models.User = Depends(check_data_permission)):
-    """鐩存帴鑾峰彇鐩樹腑鎵撴澘鎵弿缁撴灉 (浼樺厛杩斿洖缂撳瓨)"""
+    """直接获取盘中打板扫描结果（优先返回缓存）"""
     return intraday_pool_data or []
 
 @app.get("/api/market_sentiment")
 async def api_market_sentiment(user: models.User = Depends(check_data_permission)):
-    """鑾峰彇澶х洏鎯呯华鏁版嵁"""
+    """获取大盘情绪数据"""
     return get_market_sentiment_cache()
 
 class StockAnalysisRequest(BaseModel):
@@ -1786,7 +1787,7 @@ class StockAnalysisRequest(BaseModel):
 @app.post("/api/analyze_stock")
 async def api_analyze_stock(request: StockAnalysisRequest, user: models.User = Depends(get_current_user), db = Depends(lambda: next(database.get_db()))):
     """
-    璋冪敤AI鍒嗘瀽鍗曚釜鑲＄エ (鏀寔缂撳瓨)
+    调用 AI 分析单个股票（支持缓存）
     """
     await check_ai_permission(user)
     user_service.consume_quota(db, user, 'ai')
@@ -1817,7 +1818,7 @@ async def api_analyze_stock(request: StockAnalysisRequest, user: models.User = D
             lambda: analyze_single_stock(stock_data, prompt_type=prompt_type, api_key=api_key),
         )
 
-        if result and not result.startswith("鍒嗘瀽澶辫触"):
+        if result and not result.startswith("分析失败"):
             ANALYSIS_CACHE[cache_key] = {
                 "content": result,
                 "timestamp": time.time()
@@ -1857,7 +1858,7 @@ async def sync_lhb_data(background_tasks: BackgroundTasks, days: Optional[int] =
         return {"status": "error", "message": "同步任务正在进行中"}
         
     background_tasks.add_task(lhb_manager.fetch_and_update_data, logger=thread_logger, force_days=days)
-    return {"status": "ok", "message": "榫欒檸姒滃悓姝ュ凡鍚姩"}
+    return {"status": "ok", "message": "龙虎榜同步已启动"}
 
 @app.get("/api/lhb/status")
 async def get_lhb_status(user: models.User = Depends(check_data_permission)):
@@ -1890,7 +1891,7 @@ async def analyze_lhb_daily_api(req: LHBAnalyzeRequest, user: models.User = Depe
 
 @app.get("/api/lhb/analysis")
 async def get_lhb_analysis_api(date: str, user: models.User = Depends(get_current_user)):
-    """鑾峰彇宸叉湁鐨凙I澶嶇洏缁撴灉 (濡傛湁)"""
+    """获取已有的 AI 复盘结果（如有）"""
     await check_review_permission(user)
     cache_key = f"lhb_daily_analysis_{date}"
     cached = ai_cache.get(cache_key)
@@ -1945,7 +1946,7 @@ class AnalyzeRequest(BaseModel):
 
 @app.post("/api/lhb/fetch")
 async def fetch_lhb_data(background_tasks: BackgroundTasks, user: models.User = Depends(check_data_permission)):
-    """鎵嬪姩瑙﹀彂榫欒檸姒滄暟鎹姄鍙?"""
+    """手动触发龙虎榜数据抓取"""
     if lhb_manager.is_syncing:
         return {"status": "error", "message": "同步任务正在进行中，请稍后再试"}
     
@@ -1957,8 +1958,8 @@ async def fetch_lhb_data(background_tasks: BackgroundTasks, user: models.User = 
 @app.post("/api/analyze/stock")
 @app.post("/api/stock/analyze")
 async def analyze_stock_manual(request: AnalyzeRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """鎵嬪姩瑙﹀彂涓偂AI鍒嗘瀽"""
-    # 鎵ｉ櫎娆℃暟
+    """手动触发个股 AI 分析"""
+    # 扣除次数
     await check_ai_permission(user)
     user_service.consume_quota(db, user, 'ai')
     
@@ -1996,7 +1997,7 @@ async def analyze_stock_manual(request: AnalyzeRequest, user: models.User = Depe
 
 @app.get("/api/stock/kline")
 async def get_stock_kline(code: str, type: str = "1min", user: models.User = Depends(check_data_permission)):
-    """鑾峰彇涓偂K绾挎暟鎹?"""
+    """获取个股 K 线数据"""
     try:
         clean_code = "".join(filter(str.isdigit, code))
         if type == "1min":
@@ -2022,7 +2023,7 @@ async def get_stock_kline(code: str, type: str = "1min", user: models.User = Dep
 
 @app.get("/api/stock/ai_markers")
 async def get_ai_markers(code: str, type: str = None, user: models.User = Depends(check_data_permission)):
-    """鑾峰彇涓偂鐨凙I鍒嗘瀽鍘嗗彶鏍囪"""
+    """获取个股的 AI 分析历史标记"""
     # Determine priority based on type
     keys = []
     if type == 'day':

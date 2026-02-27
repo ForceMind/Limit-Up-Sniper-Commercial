@@ -219,7 +219,7 @@ async def admin_login(data: AdminLoginSchema, request_ip: str = Header(None, ali
     if username != cred.get("username") or not _verify_admin_password(password, cred):
         attempts.append(now_ts)
         failed_attempts[client_ip] = attempts
-        add_runtime_log(f"[ADMIN] Login failed from ip={client_ip}, username={username}")
+        add_runtime_log(f"[后台] 登录失败: ip={client_ip}, username={username}")
         log_user_operation(
             "admin_login",
             status="failed",
@@ -246,7 +246,7 @@ async def admin_login(data: AdminLoginSchema, request_ip: str = Header(None, ali
         "ip": client_ip,
     }
     _save_sessions(sessions)
-    add_runtime_log(f"[ADMIN] Login success: ip={client_ip}, username={cred.get('username')}")
+    add_runtime_log(f"[后台] 登录成功: ip={client_ip}, username={cred.get('username')}")
     log_user_operation(
         "admin_login",
         status="success",
@@ -338,7 +338,7 @@ async def update_admin_panel_path_api(
         raise HTTPException(status_code=400, detail=str(e))
 
     final_path = get_admin_panel_path()
-    add_runtime_log(f"[ADMIN] Updated admin panel path: {final_path}")
+    add_runtime_log(f"[后台] 已更新后台路径: {final_path}")
     log_user_operation(
         "update_admin_panel_path",
         status="success",
@@ -497,7 +497,7 @@ async def reset_user_password(
     _save_user_accounts(accounts)
 
     device_id = str(account.get("device_id", "")).strip()
-    add_runtime_log(f"[ADMIN] Reset user password: username={target_username}, device={device_id}")
+    add_runtime_log(f"[后台] 重置用户密码: username={target_username}, device={device_id}")
     log_user_operation(
         "reset_user_password",
         status="success",
@@ -828,7 +828,7 @@ async def approve_order(
         order.status = "rejected"
         db.commit()
         account_store.update_order_invite_status(order.order_code, "rejected", reason="order_rejected")
-        add_runtime_log(f"[ORDER] Rejected order={order.order_code}")
+        add_runtime_log(f"[订单] 已驳回订单={order.order_code}")
         log_user_operation(
             "order_reject",
             status="success",
@@ -1090,7 +1090,7 @@ async def export_data_package(authorized: bool = Depends(verify_admin)):
                 pass
         raise HTTPException(status_code=500, detail=f"Export failed: {e}")
 
-    add_runtime_log(f"[ADMIN] Data export prepared: {temp_zip.name}")
+    add_runtime_log(f"[后台] 数据导出包已生成: {temp_zip.name}")
     filename = f"sniper_data_export_{ts}.zip"
     return FileResponse(
         path=str(temp_zip),
@@ -1613,7 +1613,7 @@ async def update_lhb_settings(
 ):
     lhb_manager.update_settings(payload.enabled, payload.days, payload.min_amount)
     add_runtime_log(
-        f"[LHB] Updated settings: enabled={payload.enabled}, days={payload.days}, min_amount={payload.min_amount}"
+        f"[龙虎榜] Updated settings: enabled={payload.enabled}, days={payload.days}, min_amount={payload.min_amount}"
     )
     return {"status": "success", "config": lhb_manager.config}
 
@@ -1663,7 +1663,7 @@ async def sync_lhb_missing(
         }
 
     add_runtime_log(
-        f"[LHB] Start missing-date sync: {start_date} ~ {end_date}, count={len(missing_dates)}"
+        f"[龙虎榜] Start missing-date sync: {start_date} ~ {end_date}, count={len(missing_dates)}"
     )
     background_tasks.add_task(
         lhb_manager.fetch_and_update_data,

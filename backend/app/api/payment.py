@@ -22,10 +22,10 @@ def send_email_notification(order, client_ip):
     logger.info("======== NEW PAYMENT NOTIFICATION ========")
     logger.info(f"Order: {order.order_code}")
     logger.info(f"Amount: {order.amount}")
-    add_runtime_log(f"[PAY] New order notify: {order.order_code}, amount={order.amount}, ip={client_ip}")
+    add_runtime_log(f"[支付] 新订单通知: {order.order_code}, 金额={order.amount}, IP={client_ip}")
 
     # 1. Log to console/file
-    print(f"[Email Logic] Admin notified for order {order.order_code} from {client_ip}")
+    print(f"[邮件通知] 已通知管理员：订单 {order.order_code}，来源IP {client_ip}")
 
     # 2. Check if email is enabled
     email_config = SYSTEM_CONFIG.get("email_config", {})
@@ -296,7 +296,7 @@ async def confirm_payment(
 
     order.status = "waiting_verification"
     db.commit()
-    add_runtime_log(f"[PAY] Order confirmed by user: {order.order_code} -> waiting_verification")
+    add_runtime_log(f"[支付] 用户已确认订单: {order.order_code} -> 等待审核")
 
     # Send Email Notification to Admin
     client_ip = request.client.host
@@ -324,5 +324,5 @@ async def cancel_order(
     order.status = "cancelled"
     db.commit()
     account_store.update_order_invite_status(order.order_code, "cancelled", reason="order_cancelled")
-    add_runtime_log(f"[PAY] Order cancelled: {order.order_code}")
+    add_runtime_log(f"[支付] 订单已取消: {order.order_code}")
     return {"status": "success"}

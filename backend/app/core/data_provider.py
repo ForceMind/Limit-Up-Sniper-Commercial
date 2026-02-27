@@ -71,7 +71,7 @@ class DataProvider:
             
             return info
         except Exception as e:
-            self.log(f"Error fetching stock info for {code}: {e}")
+            self.log(f"获取个股信息失败 {code}: {e}")
             return {}
 
     def fetch_quotes(self, codes):
@@ -86,7 +86,7 @@ class DataProvider:
         try:
             return self._fetch_quotes_sina(codes)
         except Exception as e:
-            self.log(f"[!] Sina quotes failed: {e}")
+            self.log(f"[!] 新浪行情获取失败: {e}")
             
         return []
 
@@ -125,7 +125,7 @@ class DataProvider:
             return df[['day', 'close', 'volume']].rename(columns={'day': 'time'})
             
         except Exception as e:
-            self.log(f"Error fetching intraday data for {code}: {e}")
+            self.log(f"获取分时数据失败 {code}: {e}")
             return None
 
     def _fetch_quotes_sina(self, codes):
@@ -141,7 +141,7 @@ class DataProvider:
             try:
                 self.update_base_info()
             except Exception as e:
-                self.log(f"[!] update_base_info failed in fetch_quotes: {e}")
+                self.log(f"[!] fetch_quotes 内更新基础信息失败: {e}")
 
         # Prepare base info map for CircMV calculation
         base_map = {}
@@ -238,7 +238,7 @@ class DataProvider:
                         "circulation_value": circ_mv # Use standard key
                     })
             except Exception as e:
-                self.log(f"[!] Batch fetch failed: {e}")
+                self.log(f"[!] 批量抓取失败: {e}")
                 continue
                 
         return stocks
@@ -277,18 +277,18 @@ class DataProvider:
             try:
                 # 1. Try Sina Paged (Slow & Steady) - Primary as requested
                 try:
-                    self.log("[*] Fetching all market data (Sina Paged)...")
+                    self.log("[*] 正在抓取全市场数据（新浪分页）...")
                     df = self._fetch_sina_market_paged()
                     if df is not None and not df.empty:
                         self._last_market_df = df.copy()
                         self._last_market_ts = now_ts
                         return df
                 except Exception as e:
-                    self.log(f"[!] Sina Paged failed: {e}")
+                    self.log(f"[!] 新浪分页抓取失败: {e}")
 
                 # 2. Try AKShare (EastMoney) - Fallback
                 try:
-                    self.log("[*] Fetching all market data (AKShare/EM)...")
+                    self.log("[*] 正在抓取全市场数据（AKShare/东财）...")
                     df = ak.stock_zh_a_spot_em()
                     rename_map = {
                         '代码': 'code', '名称': 'name', '最新价': 'current', '涨跌幅': 'change_percent',
@@ -305,29 +305,29 @@ class DataProvider:
                     self._last_market_ts = now_ts
                     return df
                 except Exception as e:
-                    self.log(f"[!] AKShare/EM failed: {e}")
+                    self.log(f"[!] AKShare/东财抓取失败: {e}")
 
                 # 3. Try Manual EM Paged (Backup)
                 try:
-                    self.log("[*] Fetching all market data (Manual EM Paged)...")
+                    self.log("[*] 正在抓取全市场数据（东财手工分页）...")
                     df = self._fetch_em_market_paged()
                     if df is not None and not df.empty:
                         self._last_market_df = df.copy()
                         self._last_market_ts = now_ts
                         return df
                 except Exception as e:
-                    self.log(f"[!] Manual EM Paged failed: {e}")
+                    self.log(f"[!] 东财手工分页抓取失败: {e}")
 
                 # 4. Try Tushare (Requires TUSHARE_TOKEN and package installed)
                 try:
-                    self.log("[*] Fetching all market data (Tushare)...")
+                    self.log("[*] 正在抓取全市场数据（Tushare）...")
                     df = self._fetch_tushare_spot()
                     if df is not None and not df.empty:
                         self._last_market_df = df.copy()
                         self._last_market_ts = now_ts
                         return df
                 except Exception as e:
-                    self.log(f"[!] Tushare failed: {e}")
+                    self.log(f"[!] Tushare抓取失败: {e}")
                     
                 # Fallback: return last cache even if stale
                 self._last_failure_ts = now_ts # Mark failure
@@ -346,7 +346,7 @@ class DataProvider:
             df = ak.stock_zt_pool_em(date=date_str)
             return df
         except Exception as e:
-            self.log(f"[!] Limit Up Pool failed: {e}")
+            self.log(f"[!] 涨停池抓取失败: {e}")
             return None
 
     def fetch_broken_limit_pool(self):
@@ -356,7 +356,7 @@ class DataProvider:
             df = ak.stock_zt_pool_zbgc_em(date=date_str)
             return df
         except Exception as e:
-            self.log(f"[!] Broken Limit Pool failed: {e}")
+            self.log(f"[!] 炸板池抓取失败: {e}")
             return None
 
     def fetch_indices(self):
@@ -400,7 +400,7 @@ class DataProvider:
                 })
             return indices
         except Exception as e:
-            self.log(f"[!] Indices failed: {e}")
+            self.log(f"[!] 指数抓取失败: {e}")
             return []
 
     def fetch_history_data(self, code, days=300):
@@ -421,7 +421,7 @@ class DataProvider:
             if isinstance(data, list) and len(data) > 0:
                 return data
         except Exception as e:
-            self.log(f"[!] History data failed for {code}: {e}")
+            self.log(f"[!] 历史数据抓取失败 {code}: {e}")
         
         return []
 
@@ -465,7 +465,7 @@ class DataProvider:
                     })
                 return results
         except Exception as e:
-            self.log(f"[!] Search error: {e}")
+            self.log(f"[!] 搜索失败: {e}")
             
         return []
 
@@ -497,7 +497,7 @@ class DataProvider:
                 elif not concept and not industry:
                     concept = "自选"
         except Exception as e:
-            self.log(f"[!] Get stock info error: {e}")
+            self.log(f"[!] 获取股票信息失败: {e}")
             
         return name, concept
 
@@ -543,7 +543,7 @@ class DataProvider:
             if now_ts < self._base_info_next_retry_ts:
                 return
             try:
-                self.log("[*] Updating base stock info from AKShare...")
+                self.log("[*] 正在从 AKShare 更新股票基础信息...")
                 df = ak.stock_zh_a_spot_em()
 
                 def _pick_col(candidates):
@@ -624,13 +624,13 @@ class DataProvider:
                 self._base_info_ts = time.time()
                 self._base_info_next_retry_ts = 0
                 self._base_info_last_error_log_ts = 0
-                self.log(f"[*] Base info updated. {len(self._base_info_df)} stocks loaded.")
+                self.log(f"[*] 股票基础信息更新完成，已加载 {len(self._base_info_df)} 只股票。")
             except Exception as e:
                 now_ts = time.time()
                 self._base_info_next_retry_ts = now_ts + self._base_info_fail_cooldown_sec
                 if now_ts - self._base_info_last_error_log_ts >= 60:
                     wait_s = int(self._base_info_fail_cooldown_sec)
-                    self.log(f"[!] Failed to update base info from AKShare: {e} (retry after {wait_s}s)")
+                    self.log(f"[!] 从 AKShare 更新基础信息失败: {e}（{wait_s}s 后重试）")
                     self._base_info_last_error_log_ts = now_ts
 
     def _fetch_sina_market_paged(self):
@@ -653,7 +653,7 @@ class DataProvider:
         valid_stocks = []
         batch_size = 200 # Reduced as requested
         
-        self.log(f"[*] Scanning {len(candidates)} stocks via Sina (Batch 200)...")
+        self.log(f"[*] 正在通过新浪扫描 {len(candidates)} 只股票（每批200）...")
         
         with requests.Session() as session:
             session.trust_env = False
@@ -728,7 +728,7 @@ class DataProvider:
                     time.sleep(0.5) # Slow fetch as requested
                     
                 except Exception as e:
-                    self.log(f"[!] Batch {i} failed: {e}")
+                    self.log(f"[!] 批次 {i} 抓取失败: {e}")
                     time.sleep(1)
         
         if not valid_stocks:
@@ -793,7 +793,7 @@ class DataProvider:
                     time.sleep(0.3) # Sleep to be nice
                     
                 except Exception as e:
-                    self.log(f"[!] EM Page {page} failed: {e}")
+                    self.log(f"[!] 东财第 {page} 页抓取失败: {e}")
                     # Retry once
                     time.sleep(1)
                     try:
@@ -918,7 +918,7 @@ class DataProvider:
                 df[col] = 0.0
             return df
         except Exception as e:
-            self.log(f"[!] Tushare error: {e}")
+            self.log(f"[!] Tushare错误: {e}")
             return None
 
 # Global instance

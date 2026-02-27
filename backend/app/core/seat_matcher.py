@@ -23,11 +23,11 @@ class SeatMatcher:
             try:
                 with open(PROFILE_FILE, 'r', encoding='utf-8') as f:
                     self.profiles = json.load(f)
-                print(f"[SeatMatcher] Loaded {len(self.profiles)} profiles.")
+                print(f"[席位匹配] 已加载 {len(self.profiles)} 个画像。")
             except Exception as e:
-                print(f"[SeatMatcher] Error loading profiles: {e}")
+                print(f"[席位匹配] 加载画像失败: {e}")
         else:
-            print(f"[SeatMatcher] Profile file not found: {PROFILE_FILE}")
+            print(f"[席位匹配] 画像文件不存在: {PROFILE_FILE}")
 
     def calculate_realtime_features(self, stock_data):
         """
@@ -70,7 +70,7 @@ class SeatMatcher:
 
             return np.array([time_feature, slope_feature, vol_ratio, cap_feature, board_feature])
         except Exception as e:
-            print(f"[SeatMatcher] Error calculating features: {e}")
+            print(f"[席位匹配] 计算特征失败: {e}")
             return None
 
     def match(self, stock_data):
