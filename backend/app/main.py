@@ -47,6 +47,10 @@ REALTIME_CACHE_INTERVAL_SEC = 20
 KLINE_BG_SCAN_INTERVAL_SEC = 60
 KLINE_MIN_REFRESH_SEC = 600
 DAY_KLINE_REFRESH_SEC = 3600
+DAY_KLINE_RETRY_SEC = 600
+KLINE_BG_SCAN_BATCH_PER_CYCLE = 40
+KLINE_ERROR_LOG_WINDOW_SEC = 60
+KLINE_ERROR_LOG_MAX_PER_WINDOW = 8
 KLINE_MIN_CACHE_EXPIRE_DAYS = 7
 KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 
@@ -357,6 +361,11 @@ indices_cache_ts = 0.0
 market_sentiment_cache = {}
 market_sentiment_cache_ts = 0.0
 day_kline_refresh_ts = {}
+day_kline_attempt_ts = {}
+kline_update_cursor = 0
+kline_error_window_start_ts = 0.0
+kline_error_window_count = 0
+kline_error_suppressed = 0
 analysis_key_locks = {}
 
 def load_analysis_cache():
@@ -512,7 +521,10 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
     last_ts = day_kline_refresh_ts.get(clean_code, 0)
     if (not force) and now_ts - last_ts < DAY_KLINE_REFRESH_SEC:
         return
-    day_kline_refresh_ts[clean_code] = now_ts
+    last_attempt_ts = day_kline_attempt_ts.get(clean_code, 0)
+    if (not force) and now_ts - last_attempt_ts < DAY_KLINE_RETRY_SEC:
+        return
+    day_kline_attempt_ts[clean_code] = now_ts
 
     try:
         import akshare as ak
@@ -568,8 +580,20 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
         path = _day_kline_cache_path(clean_code)
         with open(path, "w", encoding="utf-8") as f:
             json.dump(out_df.to_dict("records"), f, ensure_ascii=False)
+        day_kline_refresh_ts[clean_code] = now_ts
     except Exception as e:
-        print(f"refresh_day_kline_cache_for_code error {clean_code}: {e}")
+        global kline_error_window_start_ts, kline_error_window_count, kline_error_suppressed
+        if now_ts - kline_error_window_start_ts >= KLINE_ERROR_LOG_WINDOW_SEC:
+            if kline_error_suppressed > 0:
+                print(f"[KLINE] 已抑制 {kline_error_suppressed} 条日K刷新错误日志")
+            kline_error_window_start_ts = now_ts
+            kline_error_window_count = 0
+            kline_error_suppressed = 0
+        if kline_error_window_count < KLINE_ERROR_LOG_MAX_PER_WINDOW:
+            kline_error_window_count += 1
+            print(f"[KLINE] 日K刷新失败 {clean_code}: {e}")
+        else:
+            kline_error_suppressed += 1
 
 
 def _collect_kline_target_codes(max_count=180):
@@ -594,6 +618,16 @@ def _collect_kline_target_codes(max_count=180):
     return normalized[:max_count]
 
 
+def _slice_codes_for_cycle(codes, cursor, batch_size):
+    if not codes:
+        return [], 0
+    total = len(codes)
+    size = max(1, min(int(batch_size or 1), total))
+    start = int(cursor or 0) % total
+    selected = [codes[(start + i) % total] for i in range(size)]
+    return selected, (start + size) % total
+
+
 async def realtime_cache_updater_task():
     while True:
         try:
@@ -606,12 +640,18 @@ async def realtime_cache_updater_task():
 
 
 async def kline_cache_updater_task():
+    global kline_update_cursor
     while True:
         try:
             target_codes = _collect_kline_target_codes()
             if target_codes:
                 date_str = datetime.now().strftime('%Y-%m-%d')
-                for code in target_codes:
+                cycle_codes, kline_update_cursor = _slice_codes_for_cycle(
+                    target_codes,
+                    kline_update_cursor,
+                    KLINE_BG_SCAN_BATCH_PER_CYCLE,
+                )
+                for code in cycle_codes:
                     clean_code = "".join(filter(str.isdigit, code))
                     if not clean_code:
                         continue
@@ -1198,9 +1238,9 @@ async def run_initial_scan():
             # Update last run time to prevent immediate re-run by scheduler
             SYSTEM_CONFIG["last_run_time"] = time.time()
         else:
-            print("鍚姩: 璺宠繃鍒濆鎵弿 (闈炰氦鏄撴棩鎴栧凡绂佺敤).")
+            print("启动: 跳过初始扫描 (非交易日或已禁用).")
     except Exception as e:
-        print(f"鍒濆鎵弿閿欒: {e}")
+        print(f"初始扫描错误: {e}")
 
 @app.get("/api/config")
 async def get_config(user: models.User = Depends(check_data_permission)):
@@ -1354,15 +1394,15 @@ async def scheduler_loop():
                     
                     if should_run:
                         try:
-                            mode_cn = "鐩樺悗澶嶇洏" if mode == "after_hours" else "鐩樹腑绐佸嚮"
-                            SYSTEM_CONFIG["current_status"] = f"姝ｅ湪杩愯 {mode_cn}..."
+                            mode_cn = "盘后复盘" if mode == "after_hours" else "盘中突击"
+                            SYSTEM_CONFIG["current_status"] = f"正在执行 {mode_cn}..."
                             # Update last_run_time BEFORE execution to prevent loop on error
                             SYSTEM_CONFIG["last_run_time"] = current_timestamp
                             
                             # Recalculate next run time immediately after update
                             SYSTEM_CONFIG["next_run_time"] = current_timestamp + interval_seconds
                             
-                            thread_logger(f">>> 瑙﹀彂瀹氭椂鍒嗘瀽: {mode}, 鍛ㄦ湡{interval_seconds/60:.0f}鍒? 鍥炴函{lookback_hours}灏忔椂")
+                            thread_logger(f">>> 触发定时分析: {mode}, 周期{interval_seconds/60:.0f}分钟, 回溯{lookback_hours}小时")
                             await asyncio.to_thread(execute_analysis, mode, lookback_hours)
                         except Exception as e:
                             print(f"Scheduler error: {e}")
@@ -1392,7 +1432,7 @@ async def scheduler_loop():
                 if lhb_manager.config['enabled'] and not lhb_manager.is_syncing:
                     # [Modified] Only run if today's data is missing
                     if not lhb_manager.has_data_for_today():
-                        thread_logger(f"[LHB] 鍚姩瀹氭椂鍚屾浠诲姟 (18:00)...")
+                        thread_logger("[LHB] 启动定时同步任务 (18:00)...")
                         loop = asyncio.get_event_loop()
                         loop.run_in_executor(None, lhb_manager.fetch_and_update_data, thread_logger)
                     else:
@@ -1407,7 +1447,7 @@ async def scheduler_loop():
             await asyncio.sleep(60) # Sleep and retry
 
 def thread_logger(msg):
-    """绾跨▼瀹夊叏鐨?logger"""
+    """线程安全 logger。"""
     add_runtime_log(msg)
     log_queue.put(msg)
 
@@ -1445,7 +1485,7 @@ async def run_analysis(
         last_time = LAST_ANALYSIS_TIME.get(cache_key, datetime.min)
         seconds_since_last = int((datetime.now() - last_time).total_seconds())
         if seconds_since_last < 300:
-            thread_logger(f"[Cache] {mode} 5鍒嗛挓缂撳瓨鍛戒腑锛屽鐢ㄦ渶杩戠粨鏋滐紙{seconds_since_last}s 鍓嶏級")
+            thread_logger(f"[Cache] {mode} 5分钟缓存命中，复用最近结果（{seconds_since_last}s 前）")
             return {
                 "status": "success",
                 "cached": True,
@@ -1468,7 +1508,7 @@ async def run_analysis(
 
 def execute_analysis(mode="after_hours", hours=None):
     try:
-        mode_name = "鐩樺悗澶嶇洏" if mode == "after_hours" else "鐩樹腑绐佸嚮"
+        mode_name = "盘后复盘" if mode == "after_hours" else "盘中突击"
         thread_logger(f">>> 开始执行{mode_name}任务 (回溯{hours if hours else '默认'}小时)...")
         
         # Clean watchlist before analysis (remove old/irrelevant)
@@ -1480,7 +1520,7 @@ def execute_analysis(mode="after_hours", hours=None):
         reload_watchlist_globals()
         thread_logger(f">>> {mode_name}任务完成，列表已更新 ({len(WATCH_LIST)} 个标的)。")
     except Exception as e:
-        thread_logger(f"!!! 鍒嗘瀽浠诲姟鍑洪敊: {e}")
+        thread_logger(f"!!! 分析任务出错: {e}")
         print(f"Analysis Error: {e}")
 
 

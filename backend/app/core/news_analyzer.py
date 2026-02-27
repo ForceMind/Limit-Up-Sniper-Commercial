@@ -1283,16 +1283,16 @@ def generate_watchlist(logger=None, mode="after_hours", hours=None, update_callb
             else:
                 added_limitup.append(info)
             
-    msg = f"[+] 复盘完成。共 {len(final_list)} 个标的。\n"
+    msg = f"[+] 复盘已完成。共 {len(final_list)} 个标的。\n"
     if added_aggressive:
         msg += f"    - [竞价抢筹] 新增 {len(added_aggressive)} 只: {', '.join(added_aggressive)}\n"
     if added_limitup:
         msg += f"    - [盘中打板] 新增 {len(added_limitup)} 只: {', '.join(added_limitup)}\n"
     if not added_aggressive and not added_limitup:
-        msg += f"    - 无新增标的\n"
+        msg += "    - 无新增标的\n"
         
     msg += f"    - 移除 {len(removed_codes)} 只\n"
-    msg += f"    - 列表已保存至 {output_file}"
+    msg += "    - 列表已更新"
     
     print(msg)
     if logger: logger(msg)

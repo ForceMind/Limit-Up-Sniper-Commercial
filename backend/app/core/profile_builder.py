@@ -143,7 +143,7 @@ def build_profiles(logger=None):
     with open(PROFILE_FILE, 'w', encoding='utf-8') as f:
         json.dump(profiles, f, ensure_ascii=False, indent=2)
         
-    msg = f"画像构建完成，共生成 {count} 个席位画像，已保存至 {PROFILE_FILE}"
+    msg = f"画像构建完成，共生成 {count} 个席位画像，画像已更新"
     if logger: logger(f"[Profile] {msg}")
     else: print(msg)
 

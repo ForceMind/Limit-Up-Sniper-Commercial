@@ -32,6 +32,11 @@ class LHBManager:
         self.hot_money_map = {}
         self._kline_last_fetch_ts = {}
         self._kline_last_attempt_ts = {}
+        self._kline_error_window_start = 0.0
+        self._kline_error_window_count = 0
+        self._kline_error_suppressed = 0
+        self._kline_error_window_seconds = 60
+        self._kline_error_max_logs = 8
         self.load_config()
         self.load_hot_money_map()
 
@@ -480,6 +485,21 @@ class LHBManager:
                 # if logger: logger(f"Failed K-line {code} {date_str}: {e}")
                 pass
 
+    def _log_kline_fetch_error(self, code, err):
+        now_ts = time.time()
+        if now_ts - self._kline_error_window_start >= self._kline_error_window_seconds:
+            if self._kline_error_suppressed > 0:
+                print(f"[LHB] 已抑制 {self._kline_error_suppressed} 条分时K线抓取错误日志")
+            self._kline_error_window_start = now_ts
+            self._kline_error_window_count = 0
+            self._kline_error_suppressed = 0
+
+        if self._kline_error_window_count < self._kline_error_max_logs:
+            self._kline_error_window_count += 1
+            print(f"[LHB] 分时K线抓取失败 {code}: {err}")
+        else:
+            self._kline_error_suppressed += 1
+
     def get_kline_1min(self, code, date_str, min_refresh_seconds=600, allow_network=True):
         file_path = KLINE_DIR / f"{code}_{date_str}.csv"
         
@@ -537,7 +557,7 @@ class LHBManager:
                 self._kline_last_fetch_ts[cache_key] = now_ts
                 return kline
         except Exception as e:
-            print(f"Error fetching kline for {code}: {e}")
+            self._log_kline_fetch_error(code, e)
 
         # Today's fetch may temporarily fail; keep using the last cached file.
         if cached_df is not None and not cached_df.empty:
