@@ -1567,7 +1567,7 @@
                     features: {
                         'trial': { ai: '每日1次', raid: '暂不支持', review: '暂不支持', desc: '体验10分钟' },
                         'basic': { ai: '每日5次', raid: '暂不支持', review: '暂不支持', desc: '入门首选' },
-                        'advanced': { ai: '每日10次', raid: '每日3次', review: '每日1次', desc: '进利器' },
+                        'advanced': { ai: '每日10次', raid: '每日3次', review: '每日1次', desc: '进阶利器' },
                         'flagship': { ai: '每日1000次', raid: '每日50次', review: '每日5次', desc: '专业游资' }
                     }
                 }
@@ -1801,6 +1801,25 @@
                         this.showMsg(successMsg, 'success');
                         return true;
                     } catch (e) {
+                        try {
+                            const textarea = document.createElement('textarea');
+                            textarea.value = text;
+                            textarea.style.position = 'fixed';
+                            textarea.style.opacity = '0';
+                            document.body.appendChild(textarea);
+                            textarea.focus();
+                            textarea.select();
+                            const copied = document.execCommand('copy');
+                            document.body.removeChild(textarea);
+                            if (copied) {
+                                this.showMsg(successMsg, 'success');
+                                return true;
+                            }
+                        } catch (fallbackErr) {}
+
+                        try {
+                            window.prompt('复制失败，请手动复制以下内容：', text);
+                        } catch (promptErr) {}
                         this.showMsg('复制失败，请手动复制', 'error');
                         return false;
                     }
@@ -2402,9 +2421,7 @@
 
                 copyCode() {
                     if (this.currentOrder) {
-                        navigator.clipboard.writeText(this.currentOrder.order_code).then(() => {
-                            this.showMsg('口令已复制，请去支付宝发红包', 'success');
-                        });
+                        this.copyText(this.currentOrder.order_code, '口令已复制，请去支付宝发红包');
                     }
                 },
 

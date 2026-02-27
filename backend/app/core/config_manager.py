@@ -102,6 +102,16 @@ def save_config():
     """Save configuration to disk"""
     config_path = DATA_DIR / "config.json"
     try:
+        existing = {}
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as rf:
+                    loaded = json.load(rf)
+                    if isinstance(loaded, dict):
+                        existing = loaded
+            except Exception:
+                existing = {}
+
         with open(config_path, "w", encoding="utf-8") as f:
             export_data = {
                 "auto_analysis_enabled": SYSTEM_CONFIG["auto_analysis_enabled"],
@@ -116,7 +126,8 @@ def save_config():
                 "referral_config": SYSTEM_CONFIG.get("referral_config", {}),
                 "pricing_config": SYSTEM_CONFIG.get("pricing_config", {})
             }
-            json.dump(export_data, f, indent=2, ensure_ascii=False)
+            existing.update(export_data)
+            json.dump(existing, f, indent=2, ensure_ascii=False)
     except Exception as e:
         print(f"Failed to save config: {e}")
 

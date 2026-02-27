@@ -1016,20 +1016,20 @@ async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depe
         SYSTEM_CONFIG["schedule_plan"] = config.schedule_plan
 
     if config.email_config is not None:
-        SYSTEM_CONFIG["email_config"] = config.email_config
+        SYSTEM_CONFIG["email_config"] = _merge_dict(SYSTEM_CONFIG.get("email_config"), config.email_config)
 
     if config.api_keys is not None:
-        SYSTEM_CONFIG["api_keys"] = config.api_keys
+        SYSTEM_CONFIG["api_keys"] = _merge_dict(SYSTEM_CONFIG.get("api_keys"), config.api_keys)
 
     if config.community_config is not None:
-        SYSTEM_CONFIG["community_config"] = config.community_config
+        SYSTEM_CONFIG["community_config"] = _merge_dict(SYSTEM_CONFIG.get("community_config"), config.community_config)
 
     if config.referral_config is not None:
-        SYSTEM_CONFIG["referral_config"] = config.referral_config
+        SYSTEM_CONFIG["referral_config"] = _merge_dict(SYSTEM_CONFIG.get("referral_config"), config.referral_config)
 
     if config.pricing_config is not None:
-        SYSTEM_CONFIG["pricing_config"] = config.pricing_config
-        purchase_manager.update_pricing(config.pricing_config)
+        SYSTEM_CONFIG["pricing_config"] = _merge_dict(SYSTEM_CONFIG.get("pricing_config"), config.pricing_config)
+        purchase_manager.update_pricing(SYSTEM_CONFIG["pricing_config"])
 
     save_config()
     log_user_operation(
@@ -1153,15 +1153,6 @@ async def restore_data_package(
 
         restored_files = 0
         DATA_DIR.mkdir(parents=True, exist_ok=True)
-        for item in DATA_DIR.iterdir():
-            try:
-                if item.is_dir():
-                    shutil.rmtree(item)
-                else:
-                    item.unlink()
-            except Exception as e:
-                raise HTTPException(status_code=500, detail=f"Failed to clear current data: {e}")
-
         for src in source_dir.iterdir():
             dst = DATA_DIR / src.name
             if src.is_dir():
@@ -1242,6 +1233,13 @@ def _preview_data(data: Any, max_chars: int = 180) -> str:
     if len(raw) <= max_chars:
         return raw
     return raw[:max_chars] + "..."
+
+
+def _merge_dict(base: Any, incoming: Any) -> Dict[str, Any]:
+    merged = dict(base) if isinstance(base, dict) else {}
+    if isinstance(incoming, dict):
+        merged.update(incoming)
+    return merged
 
 
 def _device_username_map(accounts: Dict[str, dict]) -> Dict[str, str]:
