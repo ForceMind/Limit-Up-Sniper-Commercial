@@ -1189,28 +1189,75 @@ def get_stock_quotes():
         # Fetch raw quotes
         raw_stocks = data_provider.fetch_quotes(WATCH_LIST)
         
+        def _norm_code(value: str) -> str:
+            raw = str(value or "").strip().lower()
+            if not raw:
+                return ""
+            if raw.startswith(("sh", "sz", "bj")):
+                return raw
+            digits = "".join(filter(str.isdigit, raw))
+            if len(digits) == 6:
+                if digits.startswith("6"):
+                    return f"sh{digits}"
+                if digits.startswith(("0", "3")):
+                    return f"sz{digits}"
+                if digits.startswith(("8", "4", "9")):
+                    return f"bj{digits}"
+            return raw
+
+        def _safe_float(value) -> float:
+            try:
+                return float(value or 0)
+            except Exception:
+                return 0.0
+
         # Build quick maps for enrichment: /api/stocks should inherit seats/flow value from pool scanners.
-        limit_up_map = {s.get("code"): s for s in (limit_up_pool_data or []) if s.get("code")}
-        intraday_map = {s.get("code"): s for s in (intraday_pool_data or []) if s.get("code")}
+        limit_up_map = {}
+        for s in (limit_up_pool_data or []):
+            raw_code = s.get("code")
+            if not raw_code:
+                continue
+            limit_up_map[str(raw_code)] = s
+            norm_code = _norm_code(raw_code)
+            if norm_code:
+                limit_up_map[norm_code] = s
+
+        intraday_map = {}
+        for s in (intraday_pool_data or []):
+            raw_code = s.get("code")
+            if not raw_code:
+                continue
+            intraday_map[str(raw_code)] = s
+            norm_code = _norm_code(raw_code)
+            if norm_code:
+                intraday_map[norm_code] = s
         market_map = {}
         try:
             market_df = data_provider.fetch_all_market_data()
             if market_df is not None and not market_df.empty:
                 for _, row in market_df.iterrows():
-                    mcode = str(row.get("code", "")).strip()
-                    if not mcode:
+                    raw_code = str(row.get("code", "")).strip().lower()
+                    if not raw_code:
                         continue
-                    try:
-                        market_map[mcode] = float(row.get("circ_mv", 0) or 0)
-                    except Exception:
-                        market_map[mcode] = 0.0
+                    circ_mv = _safe_float(row.get("circ_mv", 0))
+                    norm_code = _norm_code(raw_code)
+                    digits = "".join(filter(str.isdigit, norm_code or raw_code))
+                    market_map[raw_code] = circ_mv
+                    if norm_code:
+                        market_map[norm_code] = circ_mv
+                    if len(digits) == 6:
+                        market_map[digits] = circ_mv
         except Exception:
             market_map = {}
         
         # Enrich with strategy info
         enriched_stocks = []
         for stock in raw_stocks:
-            code = stock['code']
+            raw_code = stock.get("code", "")
+            norm_code = _norm_code(raw_code)
+            code = norm_code or raw_code
+            if norm_code:
+                stock["code"] = norm_code
             
             stock['is_favorite'] = False
             ai_strategy = "Neutral"
@@ -1237,7 +1284,7 @@ def get_stock_quotes():
                 # Check for "Resurrection" (Weak to Strong)
                 if ai_strategy == "Discarded":
                     # Determine limit threshold (10% or 20%)
-                    clean_code = code.replace('sz', '').replace('sh', '')
+                    clean_code = code.replace('sz', '').replace('sh', '').replace('bj', '')
                     is_20cm = clean_code.startswith('30') or clean_code.startswith('68')
                     limit_threshold = 19.5 if is_20cm else 9.5
                     
@@ -1267,7 +1314,12 @@ def get_stock_quotes():
             stock['strategy'] = ai_strategy
 
             # Enrich likely seats and circulation value from intraday / limit-up pools.
-            seat_src = intraday_map.get(code) or limit_up_map.get(code)
+            seat_src = (
+                intraday_map.get(code)
+                or intraday_map.get(raw_code)
+                or limit_up_map.get(code)
+                or limit_up_map.get(raw_code)
+            )
             if seat_src:
                 if seat_src.get("likely_seats"):
                     stock["likely_seats"] = seat_src.get("likely_seats")
@@ -1278,7 +1330,12 @@ def get_stock_quotes():
 
             # Final fallback for circulation value from all-market snapshot.
             if not stock.get("circulation_value"):
-                circ_mv = market_map.get(code, 0)
+                digits = "".join(filter(str.isdigit, code))
+                circ_mv = (
+                    market_map.get(code, 0)
+                    or market_map.get(raw_code, 0)
+                    or market_map.get(digits, 0)
+                )
                 if circ_mv:
                     stock["circulation_value"] = circ_mv
             
@@ -1609,20 +1666,57 @@ async def get_stock_kline(code: str, type: str = "1min", user: models.User = Dep
     try:
         clean_code = "".join(filter(str.isdigit, code))
         if type == "1min":
-            date_str = datetime.now().strftime('%Y-%m-%d')
-            df = lhb_manager.get_kline_1min(clean_code, date_str)
-            if df is None or df.empty:
-                 date_str = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-                 df = lhb_manager.get_kline_1min(clean_code, date_str)
-            
-            if df is not None and not df.empty:
-                return {"status": "success", "data": df.to_dict('records')}
+            for offset in range(0, 5):
+                date_str = (datetime.now() - timedelta(days=offset)).strftime('%Y-%m-%d')
+                df = lhb_manager.get_kline_1min(clean_code, date_str)
+                if df is not None and not df.empty:
+                    return {"status": "success", "data": df.to_dict('records')}
         elif type == "day":
             import akshare as ak
+            import pandas as pd
             end_date = datetime.now().strftime('%Y%m%d')
             start_date = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
             df = ak.stock_zh_a_hist(symbol=clean_code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
             if df is not None and not df.empty:
+                columns = list(df.columns)
+                value_start = 1
+                if len(columns) > 1:
+                    second_col = df.iloc[:, 1].astype(str).str.extract(r"(\d{6})", expand=False)
+                    if second_col.notna().mean() > 0.5:
+                        value_start = 2
+
+                def pick_col(candidates, fallback_index=None):
+                    for c in candidates:
+                        if c in df.columns:
+                            return c
+                    if fallback_index is not None and len(columns) > fallback_index:
+                        return columns[fallback_index]
+                    return None
+
+                date_col = pick_col(["date", "day"], 0)
+                open_col = pick_col(["open"], value_start)
+                close_col = pick_col(["close"], value_start + 1)
+                high_col = pick_col(["high"], value_start + 2)
+                low_col = pick_col(["low"], value_start + 3)
+                volume_col = pick_col(["volume"], value_start + 4)
+
+                if all([date_col, open_col, close_col, high_col, low_col]):
+                    out_df = pd.DataFrame({
+                        "date": df[date_col],
+                        "open": df[open_col],
+                        "close": df[close_col],
+                        "high": df[high_col],
+                        "low": df[low_col],
+                    })
+                    if volume_col:
+                        out_df["volume"] = df[volume_col]
+                    out_df["date"] = out_df["date"].astype(str).str.slice(0, 10)
+                    for col in ["open", "close", "high", "low", "volume"]:
+                        if col in out_df.columns:
+                            out_df[col] = pd.to_numeric(out_df[col], errors="coerce")
+                    out_df = out_df.dropna(subset=["date", "open", "close", "high", "low"])
+                    if not out_df.empty:
+                        return {"status": "success", "data": out_df.to_dict('records')}
                 # Rename columns to match standard
                 df = df.rename(columns={"日期": "date", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low", "成交量": "volume"})
                 return {"status": "success", "data": df.to_dict('records')}

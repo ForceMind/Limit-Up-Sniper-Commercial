@@ -483,15 +483,29 @@ class LHBManager:
         
         # If it's today, we always fetch fresh data to ensure we have the latest minutes
         is_today = date_str == datetime.now().strftime('%Y-%m-%d')
+        cached_df = None
         
         if file_path.exists() and not is_today:
             return pd.read_csv(file_path)
+        if file_path.exists() and is_today:
+            try:
+                cached_df = pd.read_csv(file_path)
+            except Exception:
+                cached_df = None
             
         # Try to fetch if missing or if it's today
         try:
             # Format date for akshare
-            start_dt = date_str + " 09:00:00"
-            end_dt = date_str + " 15:00:00"
+            start_point = datetime.strptime(date_str + " 09:00:00", "%Y-%m-%d %H:%M:%S")
+            end_point = datetime.strptime(date_str + " 15:00:00", "%Y-%m-%d %H:%M:%S")
+            if is_today:
+                now = datetime.now()
+                market_close = now.replace(hour=15, minute=0, second=0, microsecond=0)
+                end_point = min(now, market_close)
+                if end_point < start_point:
+                    end_point = start_point
+            start_dt = start_point.strftime("%Y-%m-%d %H:%M:%S")
+            end_dt = end_point.strftime("%Y-%m-%d %H:%M:%S")
             
             # Remove non-digits from code just in case
             clean_code = "".join(filter(str.isdigit, str(code)))
@@ -503,7 +517,10 @@ class LHBManager:
                 return kline
         except Exception as e:
             print(f"Error fetching kline for {code}: {e}")
-            
+
+        # Today's fetch may temporarily fail; keep using the last cached file.
+        if cached_df is not None and not cached_df.empty:
+            return cached_df
         return None
 
     def get_latest_lhb_info(self, code):

@@ -533,6 +533,85 @@ class DataProvider:
         try:
             self.log("[*] Updating base stock info from AKShare...")
             df = ak.stock_zh_a_spot_em()
+
+            def _pick_col(candidates):
+                for col in candidates:
+                    if col in df.columns:
+                        return col
+                return None
+
+            code_col = _pick_col(["code", "symbol"])
+            name_col = _pick_col(["name"])
+            price_col = _pick_col(["price", "latest", "current", "close"])
+            circ_mv_col = _pick_col(["circ_mv", "circulation_market_value", "float_mv"])
+
+            if not code_col:
+                for col in df.columns:
+                    sample = df[col].astype(str).str.extract(r"(\d{6})", expand=False)
+                    if sample.notna().mean() > 0.6:
+                        code_col = col
+                        break
+
+            if not price_col:
+                for col in df.columns:
+                    values = pd.to_numeric(df[col], errors="coerce").dropna()
+                    if len(values) < 10:
+                        continue
+                    median_value = float(values.median())
+                    if 0 < median_value < 10000:
+                        price_col = col
+                        break
+
+            if not circ_mv_col:
+                best_col = None
+                best_median = 0.0
+                for col in df.columns:
+                    values = pd.to_numeric(df[col], errors="coerce").dropna()
+                    if len(values) < 10:
+                        continue
+                    median_value = float(values.median())
+                    if median_value > best_median and median_value > 1e7:
+                        best_median = median_value
+                        best_col = col
+                circ_mv_col = best_col
+
+            if not code_col:
+                raise ValueError(f"Cannot find code column from: {list(df.columns)}")
+
+            valid_rows = []
+            for _, row in df.iterrows():
+                raw_code = str(row.get(code_col, "")).strip()
+                clean_code = "".join(filter(str.isdigit, self._strip_code(raw_code)))
+                if len(clean_code) < 6:
+                    continue
+                clean_code = clean_code[-6:]
+                if not self._is_target_stock(clean_code):
+                    continue
+
+                full_code = self._format_code(clean_code)
+
+                try:
+                    price = float(pd.to_numeric(row.get(price_col, 0), errors="coerce") or 0) if price_col else 0.0
+                except Exception:
+                    price = 0.0
+                try:
+                    circ_mv = float(pd.to_numeric(row.get(circ_mv_col, 0), errors="coerce") or 0) if circ_mv_col else 0.0
+                except Exception:
+                    circ_mv = 0.0
+
+                circ_shares = (circ_mv / price) if price > 0 else 0.0
+
+                valid_rows.append({
+                    "code": full_code,
+                    "name": str(row.get(name_col, full_code)) if name_col else full_code,
+                    "circ_mv": circ_mv,
+                    "circ_shares": circ_shares,
+                })
+
+            self._base_info_df = pd.DataFrame(valid_rows)
+            self._base_info_ts = time.time()
+            self.log(f"[*] Base info updated. {len(self._base_info_df)} stocks loaded.")
+            return
             
             # Rename
             rename_map = {
