@@ -12,6 +12,10 @@ class DataProvider:
         self._last_market_df = None
         self._last_market_ts = 0
         self._last_failure_ts = 0
+        self._eastmoney_next_retry_ts = 0
+        self._eastmoney_fail_cooldown_sec = 600
+        self._eastmoney_last_error_log_ts = 0
+        self._eastmoney_skip_log_ts = 0
         self._base_info_df = None
         self._base_info_ts = 0
         self._base_info_retry_ts = 0
@@ -287,37 +291,62 @@ class DataProvider:
                 except Exception as e:
                     self.log(f"[!] 新浪分页抓取失败: {e}")
 
-                # 2. Try AKShare (EastMoney) - Fallback
-                try:
-                    self.log("[*] 正在抓取全市场数据（AKShare/东财）...")
-                    df = ak.stock_zh_a_spot_em()
-                    rename_map = {
-                        '代码': 'code', '名称': 'name', '最新价': 'current', '涨跌幅': 'change_percent',
-                        '涨速': 'speed', '换手率': 'turnover', '流通市值': 'circ_mv', '昨收': 'prev_close',
-                        '最高': 'high', '最低': 'low', '今开': 'open', '成交额': 'amount'
-                    }
-                    df = df.rename(columns=rename_map)
-                    # Ensure numeric
-                    for col in ['current', 'change_percent', 'speed', 'turnover', 'circ_mv', 'prev_close', 'high']:
-                        if col in df.columns:
-                            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-                    
-                    self._last_market_df = df.copy()
-                    self._last_market_ts = now_ts
-                    return df
-                except Exception as e:
-                    self.log(f"[!] AKShare/东财抓取失败: {e}")
+                # 2-3. EastMoney channel (AKShare + manual paged) with cooldown
+                eastmoney_ready = True
+                now_ts = time.time()
+                if now_ts < self._eastmoney_next_retry_ts:
+                    eastmoney_ready = False
+                    if now_ts - self._eastmoney_skip_log_ts >= 60:
+                        remain = int(max(0, self._eastmoney_next_retry_ts - now_ts))
+                        self.log(f"[*] 东财通道冷却中（剩余{remain}s），跳过 AKShare/东财 与 东财手工分页")
+                        self._eastmoney_skip_log_ts = now_ts
 
-                # 3. Try Manual EM Paged (Backup)
-                try:
-                    self.log("[*] 正在抓取全市场数据（东财手工分页）...")
-                    df = self._fetch_em_market_paged()
-                    if df is not None and not df.empty:
+                if eastmoney_ready:
+                    # 2. Try AKShare (EastMoney) - Fallback
+                    try:
+                        self.log("[*] 正在抓取全市场数据（AKShare/东财）...")
+                        df = ak.stock_zh_a_spot_em()
+                        rename_map = {
+                            '代码': 'code', '名称': 'name', '最新价': 'current', '涨跌幅': 'change_percent',
+                            '涨速': 'speed', '换手率': 'turnover', '流通市值': 'circ_mv', '昨收': 'prev_close',
+                            '最高': 'high', '最低': 'low', '今开': 'open', '成交额': 'amount'
+                        }
+                        df = df.rename(columns=rename_map)
+                        # Ensure numeric
+                        for col in ['current', 'change_percent', 'speed', 'turnover', 'circ_mv', 'prev_close', 'high']:
+                            if col in df.columns:
+                                df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+                        
                         self._last_market_df = df.copy()
                         self._last_market_ts = now_ts
+                        self._eastmoney_next_retry_ts = 0
+                        self._eastmoney_last_error_log_ts = 0
                         return df
-                except Exception as e:
-                    self.log(f"[!] 东财手工分页抓取失败: {e}")
+                    except Exception as e:
+                        now_ts = time.time()
+                        self._eastmoney_next_retry_ts = now_ts + self._eastmoney_fail_cooldown_sec
+                        if now_ts - self._eastmoney_last_error_log_ts >= 60:
+                            wait_s = int(self._eastmoney_fail_cooldown_sec)
+                            self.log(f"[!] AKShare/东财抓取失败: {e}（进入通道冷却，{wait_s}s 后重试）")
+                            self._eastmoney_last_error_log_ts = now_ts
+
+                    # 3. Try Manual EM Paged (Backup)
+                    try:
+                        self.log("[*] 正在抓取全市场数据（东财手工分页）...")
+                        df = self._fetch_em_market_paged()
+                        if df is not None and not df.empty:
+                            self._last_market_df = df.copy()
+                            self._last_market_ts = now_ts
+                            self._eastmoney_next_retry_ts = 0
+                            self._eastmoney_last_error_log_ts = 0
+                            return df
+                    except Exception as e:
+                        now_ts = time.time()
+                        self._eastmoney_next_retry_ts = now_ts + self._eastmoney_fail_cooldown_sec
+                        if now_ts - self._eastmoney_last_error_log_ts >= 60:
+                            wait_s = int(self._eastmoney_fail_cooldown_sec)
+                            self.log(f"[!] 东财手工分页抓取失败: {e}（进入通道冷却，{wait_s}s 后重试）")
+                            self._eastmoney_last_error_log_ts = now_ts
 
                 # 4. Try Tushare (Requires TUSHARE_TOKEN and package installed)
                 try:
@@ -772,6 +801,7 @@ class DataProvider:
         # Use a session for keep-alive
         with requests.Session() as session:
             session.trust_env = False # No proxy
+            consecutive_page_failures = 0
             
             while page <= max_pages:
                 try:
@@ -800,6 +830,7 @@ class DataProvider:
                         break
                         
                     all_data.extend(rows)
+                    consecutive_page_failures = 0
                     
                     # If we got fewer rows than page_size, we are done
                     if len(rows) < page_size:
@@ -810,6 +841,7 @@ class DataProvider:
                     
                 except Exception as e:
                     self.log(f"[!] 东财第 {page} 页抓取失败: {e}")
+                    consecutive_page_failures += 1
                     # Retry once
                     time.sleep(1)
                     try:
@@ -818,12 +850,16 @@ class DataProvider:
                         if data and 'data' in data and 'diff' in data['data']:
                             rows = data['data']['diff']
                             all_data.extend(rows)
+                            consecutive_page_failures = 0
                             if len(rows) < page_size: break
                             page += 1
                             continue
                     except:
                         pass # Give up on this page
                     
+                    if consecutive_page_failures >= 2:
+                        self.log("[!] 东财分页连续失败，提前终止本轮抓取")
+                        break
                     page += 1 # Move on
                     
         if not all_data:

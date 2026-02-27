@@ -1,5 +1,25 @@
 # 构建说明
 
+## 0. 一键构建最小服务器部署包
+
+在项目根目录执行：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\build_minimal_deploy.ps1
+```
+
+默认会重新生成 `Minimal-Server-Deploy/` 并在 `dist/` 输出 zip 包。
+
+常用参数：
+
+```powershell
+# 只生成目录，不打 zip
+powershell -ExecutionPolicy Bypass -File .\scripts\build_minimal_deploy.ps1 -NoZip
+
+# 打包时带上当前 backend/data（会自动排除 kline_cache / kline_day_cache）
+powershell -ExecutionPolicy Bypass -File .\scripts\build_minimal_deploy.ps1 -KeepRuntimeData
+```
+
 ## 1. Windows 独立版 (.exe)
 
 要构建用户无需安装 Python 即可运行的独立 Windows 可执行文件：
