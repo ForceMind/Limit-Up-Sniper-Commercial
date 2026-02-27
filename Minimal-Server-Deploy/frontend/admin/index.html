@@ -1,0 +1,1848 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>狙击手 - 商业版管理后台</title>
+    <link rel="icon" href="../static/favicon.svg">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
+    <script src="../config.js"></script>
+    <script>
+        tailwind.config = {
+            darkMode: 'class',
+        }
+    </script>
+</head>
+<body class="bg-gray-100 text-gray-800 h-screen flex flex-col">
+    <div id="app" class="flex flex-1 overflow-hidden">
+        <!-- Sidebar -->
+        <div class="w-64 bg-gray-900 text-white flex flex-col shrink-0">
+            <div class="p-4 bg-gray-800 font-bold text-xl flex items-center gap-2">
+                <span class="text-red-500"></span> 管理后台
+            </div>
+            
+            <nav class="flex-1 p-4 space-y-2">
+                <button @click="currentView='dashboard'" :class="currentView=='dashboard'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">概览 & 配置</button>
+                <button @click="currentView='users'" :class="currentView=='users'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">用户管理</button>
+                <button @click="currentView='watchlist'" :class="currentView=='watchlist'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">自选统计</button>
+                <button @click="currentView='orders'" :class="currentView=='orders'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">订单管理</button>
+                <button @click="currentView='referrals'" :class="currentView=='referrals'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">邀请记录</button>
+                <button @click="currentView='lhb'" :class="currentView=='lhb'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">龙虎榜管理</button>
+                <button @click="currentView='logs'" :class="currentView=='logs'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">系统日志</button>
+            </nav>
+            
+            <div class="p-4 border-t border-gray-700 text-xs text-gray-500">
+                System Version 2.0 (Commercial)
+            </div>
+        </div>
+
+        <!-- Main Content -->
+        <main class="flex-1 overflow-auto p-8 relative">
+            <!-- Login Overlay -->
+            <div v-if="!token" class="absolute inset-0 bg-gray-100 z-50 flex items-center justify-center">
+                <div class="bg-white p-8 rounded shadow-lg w-96">
+                    <h2 class="text-xl font-bold mb-4">管理员登录</h2>
+                    <p class="text-xs text-gray-500 mb-4">请输入管理员用户名和密码</p>
+                    <input type="text" v-model="loginForm.username" @keyup.enter="login" class="w-full border p-2 rounded mb-3" placeholder="用户名">
+                    <input type="password" v-model="loginForm.password" @keyup.enter="login" class="w-full border p-2 rounded mb-4" placeholder="密码">
+                    <button @click="login" class="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">进入</button>
+                    <p class="text-xs text-red-400 mt-2 text-center">注意：连续5次错误将被锁定IP</p>
+                </div>
+            </div>
+
+            <div v-else>
+                <!-- Dashboard & Config -->
+                <div v-if="currentView === 'dashboard'" class="max-w-4xl mx-auto space-y-6">
+                    <h2 class="text-2xl font-bold mb-4">系统设置</h2>
+                    
+                    <div class="bg-white p-6 rounded shadow space-y-6">
+                        <section>
+                            <h3 class="text-lg font-semibold border-b pb-2 mb-4"> AI 分析调度</h3>
+                            <div class="space-y-4">
+                                <label class="flex items-center gap-3">
+                                    <input type="checkbox" v-model="config.auto_analysis_enabled" class="w-5 h-5 text-blue-600">
+                                    <span>启用自动分析</span>
+                                </label>
+                                
+                                <div class="pl-8 space-y-3" :class="{'opacity-50 pointer-events-none': !config.auto_analysis_enabled}">
+                                    <label class="flex items-center gap-3">
+                                        <input type="checkbox" v-model="config.use_smart_schedule" class="w-5 h-5 text-blue-600">
+                                        <span>启用智能调度模式 <span class="text-gray-500 text-sm">(根据盘前/盘中自动调整)</span></span>
+                                    </label>
+                                    
+                                    <div v-if="!config.use_smart_schedule" class="flex items-center gap-2">
+                                        <span class="text-sm">固定间隔(分钟):</span>
+                                        <input type="number" v-model="config.fixed_interval_minutes" class="border rounded px-2 py-1 w-20">
+                                    </div>
+                                    
+                                    <!-- Smart Schedule Editor -->
+                                    <div v-if="config.use_smart_schedule" class="mt-4 border rounded p-4 bg-gray-50">
+                                        <h4 class="font-bold text-sm mb-2"> 智能调度计划</h4>
+                                        <table class="w-full text-sm text-left">
+                                            <thead>
+                                                <tr class="text-gray-500 border-b">
+                                                    <th class="pb-2">开始</th>
+                                                    <th class="pb-2">结束</th>
+                                                    <th class="pb-2">模式</th>
+                                                    <th class="pb-2">间隔 (Min)</th>
+                                                    <th class="pb-2">描述</th>
+                                                    <th class="pb-2">操作</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody class="divide-y">
+                                                <tr v-for="(rule, idx) in config.schedule_plan" :key="idx">
+                                                    <td class="py-2"><input v-model="rule.start" class="w-16 border rounded px-1"></td>
+                                                    <td class="py-2"><input v-model="rule.end" class="w-16 border rounded px-1"></td>
+                                                    <td class="py-2">
+                                                        <select v-model="rule.mode" class="border rounded px-1">
+                                                            <option value="intraday">盘中</option>
+                                                            <option value="after_hours">盘后</option>
+                                                            <option value="none">暂停</option>
+                                                        </select>
+                                                    </td>
+                                                    <td class="py-2"><input type="number" v-model.number="rule.interval" class="w-16 border rounded px-1"></td>
+                                                    <td class="py-2"><input v-model="rule.desc" class="w-24 border rounded px-1"></td>
+                                                    <td class="py-2">
+                                                        <button @click="config.schedule_plan.splice(idx, 1)" class="text-red-500 hover:text-red-700"></button>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                        <button @click="config.schedule_plan.push({start: '00:00', end: '00:00', mode: 'none', interval: 60, desc: 'New Rule'})" class="mt-2 text-xs bg-gray-200 hover:bg-gray-300 px-2 py-1 rounded">+ 添加规则</button>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <section class="mb-8 border-b border-gray-200 pb-8 bg-white p-6 rounded-lg shadow-sm">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
+                                <span class="text-blue-500">📧</span> 邮件通知设置
+                            </h3>
+                            <div class="space-y-4">
+                                <label class="flex items-center gap-3 cursor-pointer">
+                                    <input type="checkbox" v-if="config.email_config" v-model="config.email_config.enabled" class="w-5 h-5 text-blue-600 rounded focus:ring-blue-500">
+                                    <span class="font-medium">启用邮件通知 (有新订单时通知管理员)</span>
+                                </label>
+                                
+                                <transition name="fade">
+                                    <div v-if="config.email_config && config.email_config.enabled" class="grid grid-cols-1 md:grid-cols-2 gap-6 pl-0 md:pl-4 bg-gray-50 p-6 rounded-lg border border-gray-100 mt-4">
+                                        <div class="col-span-1 md:col-span-2 text-xs text-gray-600 mb-2 p-3 bg-blue-50 rounded-lg border border-blue-100 shadow-sm">
+                                            <p class="font-bold text-blue-700 mb-1">📧 配置说明 (以QQ邮箱为例):</p>
+                                            <ul class="list-disc pl-4 space-y-1">
+                                                <li>在QQ邮箱设置 -> 账户中开启 <b>IMAP/SMTP服务</b>。</li>
+                                                <li>获取生成的<b>授权码</b> (一串不含空格的字母)。</li>
+                                                <li>SMTP服务器填 <code>smtp.qq.com</code>，端口填 <code>465</code>。</li>
+                                            </ul>
+                                        </div>
+
+                                        <div class="col-span-1 md:col-span-2">
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">接收通知邮箱</label>
+                                            <input type="email" v-model="config.email_config.recipient_email" class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 px-3 py-2" placeholder="admin@example.com">
+                                        </div>
+                                        
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">SMTP服务器</label>
+                                            <input type="text" v-model="config.email_config.smtp_server" class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 px-3 py-2" placeholder="smtp.qq.com">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">SMTP端口</label>
+                                            <input type="number" v-model.number="config.email_config.smtp_port" class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 px-3 py-2" placeholder="465">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">发送邮箱账号</label>
+                                            <input type="email" v-model="config.email_config.smtp_user" class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 px-3 py-2">
+                                        </div>
+                                        <div>
+                                            <label class="block text-sm font-medium text-gray-700 mb-1">发送邮箱密码/授权码</label>
+                                            <input type="password" v-model="config.email_config.smtp_password" class="w-full border-gray-300 rounded-md shadow-sm focus:border-blue-500 focus:ring-blue-500 px-3 py-2" placeholder="输入邮箱授权码">
+                                        </div>
+                                    </div>
+                                </transition>
+                            </div>
+                        </section>
+
+                        <!-- API Configuration (Cleaned & Separated) -->
+                        <section class="mb-8 border-b border-gray-200 pb-8 bg-white p-6 rounded-lg shadow-sm">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
+                                <span class="text-purple-500">🔑</span> API Key 配置
+                            </h3>
+                            <div class="bg-purple-50 border border-purple-100 rounded-lg p-6">
+                                <p class="text-sm text-gray-600 mb-6">配置第三方服务所需的 API 密钥，用于驱动 AI 分析和其他高级功能。</p>
+                                <div v-if="config.api_keys" class="grid grid-cols-1 gap-6">
+                                    <div>
+                                        <label class="block text-sm font-bold text-gray-800 mb-1">DeepSeek API Key <span class="text-red-500">*</span></label>
+                                        <div class="text-xs text-gray-500 mb-2">用于股票深度分析、情绪解读。</div>
+                                        <input type="password" v-model="config.api_keys.deepseek" class="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 px-3 py-2 font-mono text-sm" placeholder="sk-...">
+                                    </div>
+                                    <div class="p-4 border-t border-purple-200 mt-2">
+                                        <label class="block text-sm font-bold text-gray-800 mb-1">其他服务 Key (可选)</label>
+                                        <div class="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
+                                            <div>
+                                                 <label class="block text-xs text-gray-600 mb-1">Aliyun / OCR</label>
+                                                 <input type="password" v-model="config.api_keys.aliyun" class="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 px-3 py-2 font-mono text-xs" placeholder="sk-...">
+                                            </div>
+                                            <div>
+                                                 <label class="block text-xs text-gray-600 mb-1">备用 Key</label>
+                                                 <input type="text" v-model="config.api_keys.other" class="w-full border-gray-300 rounded-md shadow-sm focus:border-purple-500 focus:ring-purple-500 px-3 py-2 font-mono text-xs">
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div v-else class="text-gray-500 text-sm flex items-center gap-2">
+                                    <svg class="animate-spin h-4 w-4 text-purple-600" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                                    加载 API 配置中...
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Pricing Configuration -->
+                        <section class="mb-8 border-b pb-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-700">价格配置</h3>
+                            <div class="bg-gray-50 border border-gray-200 rounded p-4">
+                                <p class="text-sm text-gray-500 mb-4">设置不同版本在不同时间的售价 (0表示不启用或免费)</p>
+                                <div v-if="config.pricing_config">
+                                    <div v-for="(plans, version) in config.pricing_config" :key="version" class="mb-6">
+                                        <h4 class="font-bold text-gray-800 capitalize mb-2 border-b">{{ versionLabel(version) }}</h4>
+                                        <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+                                            <div v-for="(plan, duration) in plans" :key="duration" class="bg-white p-2 rounded border">
+                                                <div class="text-xs text-gray-500 mb-1">{{ plan.label }} ({{ duration }})</div>
+                                                <div class="flex items-center gap-1">
+                                                    <span class="text-gray-400">¥</span>
+                                                    <input type="number" step="0.1" v-model.number="plan.price" class="w-full text-sm font-bold text-red-600 focus:outline-none border-b border-dashed">
+                                                </div>
+                                                <div class="flex items-center gap-1 mt-1">
+                                                    <span class="text-xs text-gray-400">天数:</span>
+                                                    <input type="number" v-model.number="plan.days" class="w-full text-xs focus:outline-none border-b border-dashed">
+                                                </div>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                <div v-else class="text-gray-500 text-sm">加载价格配置中...</div>
+                            </div>
+                        </section>
+
+                        <!-- Invite & Community -->
+                        <section class="mb-8 border-b pb-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-700">邀请与社群</h3>
+                            <div class="bg-gray-50 border border-gray-200 rounded p-4 space-y-4">
+                                <div>
+                                    <div class="text-sm font-bold text-gray-700 mb-2">QQ群配置（注册成功弹窗）</div>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">QQ群号</label>
+                                            <input type="text" v-model="config.community_config.qq_group_number" class="w-full border rounded p-2 text-sm font-mono" placeholder="123456789">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">加群链接（可选）</label>
+                                            <input type="text" v-model="config.community_config.qq_group_link" class="w-full border rounded p-2 text-sm" placeholder="https://qm.qq.com/...">
+                                        </div>
+                                    </div>
+                                    <div class="mt-2">
+                                        <label class="block text-xs text-gray-500 mb-1">弹窗文案</label>
+                                        <input type="text" v-model="config.community_config.welcome_text" class="w-full border rounded p-2 text-sm" placeholder="欢迎加入技术交流群...">
+                                    </div>
+                                </div>
+
+                                <div class="border-t pt-4">
+                                    <div class="text-sm font-bold text-gray-700 mb-2">邀请裂变配置</div>
+                                    <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+                                        <label class="flex items-center gap-2 text-sm">
+                                            <input type="checkbox" v-model="config.referral_config.enabled">
+                                            <span>启用邀请奖励</span>
+                                        </label>
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">奖励天数</label>
+                                            <input type="number" v-model.number="config.referral_config.reward_days" class="w-full border rounded p-2 text-sm">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-500 mb-1">分享地址（可选）</label>
+                                            <input type="text" v-model="config.referral_config.share_base_url" class="w-full border rounded p-2 text-sm" placeholder="https://your-domain.com">
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-500 mb-1">分享文案模板</label>
+                                        <textarea v-model="config.referral_config.share_template" rows="3" class="w-full border rounded p-2 text-sm" placeholder="支持变量 {invite_link} {invite_code}"></textarea>
+                                        <div class="text-xs text-gray-500 mt-1">可用变量：`{invite_link}`、`{invite_code}`</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <!-- Admin Panel Path -->
+                        <section class="mb-8 border-b pb-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-700">后台地址</h3>
+                            <div class="bg-gray-50 border border-gray-200 rounded p-4 max-w-2xl">
+                                <p class="text-sm text-gray-500 mb-3">自定义后台访问地址（默认：`/admin`）。示例：`/ops-2026`</p>
+                                <div class="flex gap-3 items-end">
+                                    <div class="flex-1">
+                                        <label class="block text-sm font-bold text-gray-700 mb-1">后台路径</label>
+                                        <input type="text" v-model="adminPanelPath" class="w-full border rounded p-2 text-sm font-mono" placeholder="/admin">
+                                    </div>
+                                    <button @click="saveAdminPanelPath" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700 whitespace-nowrap">保存路径</button>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-2">当前生效：<span class="font-mono">{{ adminPanelPath || '/admin' }}</span></div>
+                            </div>
+                        </section>
+
+                        <!-- Admin Account Configuration -->
+                        <section class="mb-8 border-b pb-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-700">管理员账户</h3>
+                            <div class="bg-gray-50 border border-gray-200 rounded p-4">
+                                <p class="text-sm text-gray-500 mb-4">修改管理员登录密码</p>
+                                <div class="flex items-end gap-4 max-w-md">
+                                    <div class="flex-1">
+                                        <label class="block text-sm font-bold text-gray-700 mb-1">新密码</label>
+                                        <input type="password" v-model="newAdminPassword" class="w-full border rounded p-2 text-sm" placeholder="至少6位">
+                                    </div>
+                                    <button @click="updateAdminPassword" class="bg-red-600 text-white px-4 py-2 rounded text-sm hover:bg-red-700 whitespace-nowrap">修改密码</button>
+                                </div>
+                                <p class="text-xs text-red-500 mt-2" v-if="passwordMsg">{{ passwordMsg }}</p>
+                            </div>
+                        </section>
+
+                        <section class="mb-8 border-b pb-8">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-700">数据迁移</h3>
+                            <div class="bg-gray-50 border border-gray-200 rounded p-4 space-y-3">
+                                <p class="text-sm text-gray-600">支持一键导出当前服务器数据包，并在新服务器一键恢复。</p>
+                                <div class="flex flex-wrap gap-2">
+                                    <button @click="downloadDataBackup" class="bg-emerald-600 text-white px-4 py-2 rounded text-sm hover:bg-emerald-700">下载数据备份</button>
+                                    <button @click="triggerRestoreFile" class="bg-amber-600 text-white px-4 py-2 rounded text-sm hover:bg-amber-700">恢复数据包</button>
+                                    <input ref="restoreInput" type="file" accept=".zip" class="hidden" @change="handleRestoreFile">
+                                </div>
+                                <div class="text-xs text-gray-500">恢复会覆盖当前 `backend/data` 内容，系统会自动保留一份恢复前快照。</div>
+                            </div>
+                        </section>
+
+                        <section class="mb-8 border-b pb-8">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="text-xl font-semibold text-gray-700">数据文件浏览</h3>
+                                <button @click="fetchDataFiles" class="text-sm px-3 py-1.5 border rounded hover:bg-gray-100">刷新文件列表</button>
+                            </div>
+                            <div v-if="dataFolders.length > 0" class="grid grid-cols-1 md:grid-cols-2 gap-3 mb-4">
+                                <div v-for="folder in dataFolders" :key="folder.path" class="bg-amber-50 border border-amber-200 rounded p-3 text-xs">
+                                    <div class="font-mono font-bold text-amber-700">{{ folder.path }}/</div>
+                                    <div class="text-gray-600 mt-1">文件数: {{ folder.file_count }} · 总大小: {{ formatFileSize(folder.total_size) }}</div>
+                                    <div class="text-gray-500 mt-1" v-if="folder.modified_at">最近更新: {{ formatShanghaiTime(folder.modified_at) }}</div>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                                <div class="bg-white border rounded max-h-[420px] overflow-auto">
+                                    <div class="p-3 border-b bg-gray-50 text-xs text-gray-500">backend/data 文件 ({{ dataFiles.length }})</div>
+                                    <div v-if="dataFiles.length === 0" class="p-4 text-sm text-gray-400">暂无文件</div>
+                                    <button
+                                        v-for="f in dataFiles"
+                                        :key="f.path"
+                                        @click="openDataFile(f.path)"
+                                        class="w-full text-left px-3 py-2 border-b text-xs hover:bg-blue-50"
+                                        :class="selectedDataFile === f.path ? 'bg-blue-50 text-blue-700' : ''"
+                                    >
+                                        <div class="font-mono break-all">{{ f.path }}</div>
+                                        <div class="text-[11px] text-gray-500 mt-1">大小: {{ formatFileSize(f.size) }} · {{ formatShanghaiTime(f.modified_at) }}</div>
+                                    </button>
+                                </div>
+                                <div class="lg:col-span-2 bg-white border rounded">
+                                    <div class="p-3 border-b bg-gray-50 flex items-center justify-between">
+                                        <div class="text-sm font-bold">{{ selectedDataFile || '请选择左侧文件' }}</div>
+                                        <div class="text-xs text-gray-500" v-if="dataFileMeta.size">大小: {{ formatFileSize(dataFileMeta.size) }}</div>
+                                    </div>
+                                    <div class="p-3">
+                                        <div v-if="!selectedDataFile" class="text-sm text-gray-400">点击左侧文件可查看内容</div>
+                                        <pre v-else-if="dataFilePreview" class="text-xs bg-gray-50 border rounded p-3 max-h-[360px] overflow-auto whitespace-pre-wrap">{{ dataFilePreview }}</pre>
+                                        <div v-else class="text-sm text-gray-400">无可展示内容</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
+                        <div class="flex justify-end pt-4">
+                            <button @click="saveConfig" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700">保存设置</button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Logs View -->
+                <div v-if="currentView === 'logs'" class="h-full flex flex-col p-4 max-w-7xl mx-auto space-y-6">
+                    <!-- Tabs -->
+                    <div class="flex gap-4 border-b border-gray-200 pb-2">
+                        <button @click="activeLogTab='system'; fetchLogs('system')" :class="activeLogTab=='system'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">系统日志 (Stdout)</button>
+                        <button @click="activeLogTab='user_ops'; fetchLogs('user_ops')" :class="activeLogTab=='user_ops'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">用户操作日志</button>
+                        <button @click="activeLogTab='ai_cache'; fetchLogs('ai_cache')" :class="activeLogTab=='ai_cache'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">AI 缓存监控</button>
+                    </div>
+
+                    <!-- System Logs -->
+                    <div v-if="activeLogTab === 'system'" class="flex-1 bg-gray-900 text-green-400 p-4 rounded font-mono text-xs overflow-auto max-h-[70vh]">
+                        <div v-if="sysLogs.length === 0" class="text-gray-500">暂无日志或无法读取日志文件</div>
+                        <div v-for="(line, i) in sysLogs" :key="i" class="whitespace-pre-wrap border-b border-gray-800 pb-1 mb-1">{{ line }}</div>
+                    </div>
+
+                    <!-- User Operation Logs -->
+                    <div v-if="activeLogTab === 'user_ops'" class="flex-1 bg-white rounded shadow text-sm overflow-hidden">
+                        <div class="p-3 border-b bg-gray-50 flex flex-wrap items-center gap-2">
+                            <select v-model="userOpsFilter.actor" class="border rounded px-2 py-1 text-xs">
+                                <option value="">全部角色</option>
+                                <option value="user">用户</option>
+                                <option value="guest">游客</option>
+                                <option value="admin">管理员</option>
+                                <option value="anonymous">匿名</option>
+                            </select>
+                            <select v-model="userOpsFilter.status" class="border rounded px-2 py-1 text-xs">
+                                <option value="">全部状态</option>
+                                <option value="success">成功</option>
+                                <option value="failed">失败</option>
+                            </select>
+                            <input v-model="userOpsFilter.action" @keyup.enter="fetchLogs('user_ops', 1)" type="text" class="border rounded px-2 py-1 text-xs w-32" placeholder="动作关键词">
+                            <input v-model="userOpsFilter.path_keyword" @keyup.enter="fetchLogs('user_ops', 1)" type="text" class="border rounded px-2 py-1 text-xs w-44" placeholder="接口关键词">
+                            <input v-model="userOpsFilter.user_keyword" @keyup.enter="fetchLogs('user_ops', 1)" type="text" class="border rounded px-2 py-1 text-xs w-44" placeholder="用户名/设备/IP">
+                            <button @click="fetchLogs('user_ops', 1)" class="px-3 py-1 text-xs border rounded hover:bg-gray-100">筛选</button>
+                        </div>
+                        <div class="overflow-auto max-h-[60vh]">
+                            <table class="w-full min-w-[1350px] text-left">
+                                <thead class="bg-gray-50 text-gray-500 sticky top-0">
+                                    <tr>
+                                        <th class="p-3">时间</th>
+                                        <th class="p-3">角色</th>
+                                        <th class="p-3">动作</th>
+                                        <th class="p-3">接口</th>
+                                        <th class="p-3">用户</th>
+                                        <th class="p-3">设备</th>
+                                        <th class="p-3">IP</th>
+                                        <th class="p-3">状态</th>
+                                        <th class="p-3">详情</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    <tr v-for="(log, i) in userOpsLogs" :key="i">
+                                        <td class="p-3 whitespace-nowrap">{{ formatShanghaiTime(log.time) }}</td>
+                                        <td class="p-3 whitespace-nowrap">{{ log.actor || '-' }}</td>
+                                        <td class="p-3 whitespace-nowrap">{{ log.action || '-' }}</td>
+                                        <td class="p-3 font-mono text-xs">{{ (log.method || '-') + ' ' + (log.path || '-') }}</td>
+                                        <td class="p-3 text-xs font-mono">{{ log.username || '-' }}</td>
+                                        <td class="p-3 text-xs font-mono">{{ log.device_id || '-' }}</td>
+                                        <td class="p-3 font-mono text-xs">{{ log.ip || '-' }}</td>
+                                        <td class="p-3 font-bold whitespace-nowrap" :class="(log.status || '').toLowerCase() === 'success' ? 'text-green-600' : 'text-red-500'">{{ log.status || '-' }}</td>
+                                        <td class="p-3 text-xs text-gray-600">{{ log.detail || '-' }}</td>
+                                    </tr>
+                                    <tr v-if="userOpsLogs.length === 0"><td colspan="9" class="p-4 text-center text-gray-400">暂无用户操作日志</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="p-3 border-t bg-gray-50 flex items-center justify-between text-sm">
+                            <div>共 {{ userOpsPagination.total }} 条</div>
+                            <div class="flex items-center gap-2">
+                                <button @click="fetchLogs('user_ops', userOpsPagination.page - 1)" :disabled="userOpsPagination.page <= 1" class="px-3 py-1 border rounded disabled:opacity-40">上一页</button>
+                                <span>第 {{ userOpsPagination.page }} / {{ Math.max(1, userOpsPagination.total_pages) }} 页</span>
+                                <button @click="fetchLogs('user_ops', userOpsPagination.page + 1)" :disabled="userOpsPagination.page >= Math.max(1, userOpsPagination.total_pages)" class="px-3 py-1 border rounded disabled:opacity-40">下一页</button>
+                            </div>
+                        </div>
+                    </div>
+
+                     <!-- AI Cache -->
+                    <div v-if="activeLogTab === 'ai_cache'" class="flex-1 bg-white rounded shadow p-4 text-sm overflow-auto space-y-4">
+                        <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">缓存条目</div>
+                                <div class="text-lg font-bold">{{ aiCacheStats.total_keys || 0 }}</div>
+                            </div>
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">输入 Token</div>
+                                <div class="text-lg font-bold text-blue-700">{{ (aiCacheStats.totals && aiCacheStats.totals.input_tokens) || 0 }}</div>
+                            </div>
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">输出 Token</div>
+                                <div class="text-lg font-bold text-emerald-700">{{ (aiCacheStats.totals && aiCacheStats.totals.output_tokens) || 0 }}</div>
+                            </div>
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">累计成本 (¥)</div>
+                                <div class="text-lg font-bold text-red-600">{{ ((aiCacheStats.totals && aiCacheStats.totals.total_cost_cny) || 0).toFixed(6) }}</div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                            <div class="space-y-2 max-h-[58vh] overflow-auto pr-1">
+                                <div
+                                    v-for="item in aiCacheStats.items || []"
+                                    :key="item.key"
+                                    @click="openCacheItem(item.key)"
+                                    class="border rounded p-2 cursor-pointer hover:bg-blue-50"
+                                >
+                                    <div class="text-xs font-mono text-gray-700 truncate" :title="item.key">{{ item.key }}</div>
+                                    <div class="text-xs text-gray-500 mt-1">in: {{ item.usage.prompt_tokens }} / out: {{ item.usage.completion_tokens }} / ¥{{ Number(item.cost_cny || 0).toFixed(6) }}</div>
+                                    <div class="text-xs text-gray-400 truncate mt-1" :title="item.preview">{{ item.preview }}</div>
+                                </div>
+                                <div v-if="!aiCacheStats.items || aiCacheStats.items.length === 0" class="text-gray-400">暂无缓存数据</div>
+                            </div>
+
+                            <div class="border rounded p-3 bg-gray-50 min-h-[220px]">
+                                <div class="font-bold mb-2">缓存内容详情</div>
+                                <div v-if="!aiCacheDetail" class="text-gray-400 text-sm">点击左侧任意缓存条目查看内容。</div>
+                                <div v-else class="space-y-2">
+                                    <div class="text-xs font-mono break-all text-gray-700">{{ aiCacheDetail.key }}</div>
+                                    <div class="text-xs text-gray-500">成本: ¥{{ Number(aiCacheDetail.cost_cny || 0).toFixed(6) }}</div>
+                                    <pre class="text-xs bg-white border rounded p-2 overflow-auto max-h-[46vh]">{{ formatJSON(aiCacheDetail.data) }}</pre>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex justify-end gap-2">
+                        <button @click="fetchLogs(activeLogTab)" class="bg-blue-50 hover:bg-blue-100 text-blue-600 px-4 py-2 rounded text-sm border border-blue-200 transition">🔄 刷新日志</button>
+                    </div>
+                </div>
+
+                <!-- User Management -->
+                <div v-if="currentView === 'users'" class="max-w-6xl mx-auto">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold">用户管理</h2>
+                        <div class="flex items-center gap-2">
+                            <button @click="setUserFilter('all')" :class="userFilter === 'all' ? 'bg-gray-900 text-white' : 'bg-white border'" class="px-3 py-1 rounded text-sm">全部</button>
+                            <button @click="setUserFilter('registered')" :class="userFilter === 'registered' ? 'bg-gray-900 text-white' : 'bg-white border'" class="px-3 py-1 rounded text-sm">正式注册</button>
+                            <button @click="setUserFilter('guest')" :class="userFilter === 'guest' ? 'bg-gray-900 text-white' : 'bg-white border'" class="px-3 py-1 rounded text-sm">游客</button>
+                            <button @click="fetchUsers" class="text-blue-500 hover:text-blue-700">刷新</button>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded shadow overflow-x-auto">
+                        <table class="w-full min-w-[1500px] text-left table-auto">
+                            <thead class="bg-gray-50 border-b">
+                                <tr>
+                                    <th class="p-3 font-semibold text-gray-600 w-16">ID</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-64">设备指纹</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-40">用户名</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-28">账号类型</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-24">会员版本</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-36">状态</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-56">过期时间</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-64">用量 (已用/剩余/总额)</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-[380px]">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y text-sm">
+                                <tr v-for="u in users" :key="u.id" class="hover:bg-gray-50">
+                                    <td class="p-3 whitespace-nowrap">{{ u.id }}</td>
+                                    <td class="p-3 font-mono text-xs select-all break-all">{{ u.device_id }}</td>
+                                    <td class="p-3 text-sm whitespace-nowrap">
+                                        <span v-if="u.username" class="font-mono">{{ u.username }}</span>
+                                        <span v-else class="text-gray-400">未注册</span>
+                                    </td>
+                                    <td class="p-3 whitespace-nowrap">
+                                        <span :class="u.is_registered ? 'bg-emerald-100 text-emerald-700' : 'bg-gray-100 text-gray-600'" class="px-2 py-1 rounded-full text-xs">
+                                            {{ u.is_registered ? '正式注册' : '游客' }}
+                                        </span>
+                                    </td>
+                                    <td class="p-3 whitespace-nowrap">
+                                        <span :class="{
+                                            'text-gray-500': u.version==='trial',
+                                            'text-blue-500 font-bold': u.version==='basic',
+                                            'text-purple-500 font-bold': u.version==='advanced',
+                                            'text-red-500 font-bold': u.version==='flagship'
+                                        }">{{ versionLabel(u.version) }}</span>
+                                    </td>
+                                    <td class="p-3">
+                                        <span v-if="u.is_banned" class="bg-red-100 text-red-700 px-2 py-1 rounded-full text-xs">已封禁</span>
+                                        <span v-else-if="u.is_expired" class="bg-amber-100 text-amber-700 px-2 py-1 rounded-full text-xs">过期</span>
+                                        <span v-else class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs">正常</span>
+                                        <div v-if="u.is_banned && u.banned_reason" class="text-[11px] text-red-500 mt-1">{{ u.banned_reason }}</div>
+                                    </td>
+                                    <td class="p-3 text-xs whitespace-nowrap">{{ u.expires_at ? formatShanghaiTime(u.expires_at) : '永久' }}</td>
+                                    <td class="p-3 text-xs font-mono">
+                                        <div>AI: {{ u.daily_ai_count }} / {{ u.remaining_ai }} / {{ u.quota_ai }}</div>
+                                        <div>突击: {{ u.daily_raid_count }} / {{ u.remaining_raid }} / {{ u.quota_raid }}</div>
+                                        <div>复盘: {{ u.daily_review_count }} / {{ u.remaining_review }} / {{ u.quota_review }}</div>
+                                    </td>
+                                    <td class="p-3">
+                                        <div class="flex gap-2 flex-wrap whitespace-nowrap">
+                                            <button @click="openAddTime(u)" :disabled="!u.is_registered" class="text-blue-500 hover:text-blue-700 text-xs border border-blue-500 rounded px-2 py-1 disabled:opacity-40">增加时长</button>
+                                            <button @click="setMembership(u)" :disabled="!u.is_registered" class="text-indigo-600 hover:text-indigo-700 text-xs border border-indigo-500 rounded px-2 py-1 disabled:opacity-40">设会员</button>
+                                            <button @click="resetUserPassword(u)" :disabled="!u.is_registered" class="text-amber-600 hover:text-amber-700 text-xs border border-amber-500 rounded px-2 py-1 disabled:opacity-40">重置密码</button>
+                                            <button @click="toggleUserBan(u)" :disabled="!u.is_registered" class="text-xs border rounded px-2 py-1 disabled:opacity-40" :class="u.is_banned ? 'text-emerald-600 border-emerald-500 hover:text-emerald-700' : 'text-red-600 border-red-500 hover:text-red-700'">
+                                                {{ u.is_banned ? '解封' : '封禁' }}
+                                            </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Watchlist Stats -->
+                <div v-if="currentView === 'watchlist'" class="max-w-6xl mx-auto">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold">自选股统计</h2>
+                        <button @click="fetchWatchlistStats" class="text-blue-500 hover:text-blue-700">刷新</button>
+                    </div>
+                    <div class="bg-white rounded shadow p-4">
+                        <h3 class="text-sm font-bold text-gray-700 mb-3">自选股热度统计（按加入人数）</h3>
+                        <div v-if="watchlistStats.length === 0" class="text-xs text-gray-400">暂无统计数据</div>
+                        <div v-else class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
+                            <div v-for="item in watchlistStats" :key="item.code" class="border rounded px-2 py-1 text-xs bg-gray-50 flex justify-between">
+                                <span class="font-mono text-gray-700">{{ item.code }}</span>
+                                <span class="text-red-600 font-bold">{{ item.count }}人</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Order Management -->
+                <div v-if="currentView === 'orders'" class="max-w-6xl mx-auto">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold">订单管理</h2>
+                        <button @click="fetchOrders(); fetchOrderStats()" class="text-blue-500 hover:text-blue-700">刷新</button>
+                    </div>
+
+                    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                        <div class="bg-white border rounded p-3">
+                            <div class="text-xs text-gray-500">总金额</div>
+                            <div class="text-lg font-bold text-red-600">¥{{ Number(orderStats.total_amount || 0).toFixed(2) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-3">
+                            <div class="text-xs text-gray-500">已完成金额</div>
+                            <div class="text-lg font-bold text-emerald-600">¥{{ Number(orderStats.completed_amount || 0).toFixed(2) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-3">
+                            <div class="text-xs text-gray-500">待审核金额</div>
+                            <div class="text-lg font-bold text-blue-600">¥{{ Number(orderStats.waiting_amount || 0).toFixed(2) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-3">
+                            <div class="text-xs text-gray-500">待支付金额</div>
+                            <div class="text-lg font-bold text-amber-600">¥{{ Number(orderStats.pending_amount || 0).toFixed(2) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-3">
+                            <div class="text-xs text-gray-500">订单总数</div>
+                            <div class="text-lg font-bold text-gray-700">{{ orderStats.total_orders || 0 }}</div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white rounded shadow overflow-x-auto">
+                        <table class="w-full min-w-[1100px] text-left">
+                            <thead class="bg-gray-50 border-b">
+                                <tr>
+                                    <th class="p-3 font-semibold text-gray-600">订单号 (口令)</th>
+                                    <th class="p-3 font-semibold text-gray-600">用户</th>
+                                    <th class="p-3 font-semibold text-gray-600">金额</th>
+                                    <th class="p-3 font-semibold text-gray-600">会员版本</th>
+                                    <th class="p-3 font-semibold text-gray-600">时长</th>
+                                    <th class="p-3 font-semibold text-gray-600">状态</th>
+                                    <th class="p-3 font-semibold text-gray-600">时间</th>
+                                    <th class="p-3 font-semibold text-gray-600">操作</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y text-sm">
+                                <tr v-for="o in orders" :key="o.id" class="hover:bg-gray-50">
+                                    <td class="p-3 font-mono font-bold select-all">{{ o.order_code }}</td>
+                                    <td class="p-3 text-xs">
+                                        <div class="font-mono">{{ o.username || '游客' }}</div>
+                                        <div class="text-gray-400 font-mono">{{ o.user_device_id || '-' }}</div>
+                                    </td>
+                                    <td class="p-3 text-red-600 font-bold">{{ o.amount }}</td>
+                                    <td class="p-3">{{ versionLabel(o.target_version) }}</td>
+                                    <td class="p-3">{{ o.duration_days }} 天</td>
+                                    <td class="p-3">
+                                        <span :class="{
+                                            'bg-gray-100': o.status==='pending',
+                                            'bg-blue-100 text-blue-800 animate-pulse': o.status==='waiting_verification',
+                                            'bg-green-100 text-green-800': o.status==='completed',
+                                            'bg-red-100 text-red-800': o.status==='rejected'
+                                        }" class="px-2 py-1 rounded-full text-xs uppercase">
+                                            {{ orderStatusLabel(o.status) }}
+                                        </span>
+                                    </td>
+                                    <td class="p-3 text-xs text-gray-500">{{ formatShanghaiTime(o.created_at) }}</td>
+                                    <td class="p-3">
+                                        <div v-if="o.status === 'waiting_verification'" class="flex gap-2">
+                                            <button @click="processOrder(o, 'approve')" class="text-green-600 hover:text-green-800 font-bold border border-green-200 px-2 rounded">通过</button>
+                                            <button @click="processOrder(o, 'reject')" class="text-red-500 hover:text-red-700 border border-red-200 px-2 rounded">拒绝</button>
+                                        </div>
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <div v-if="false" class="mt-6 bg-white rounded shadow overflow-hidden">
+                        <div class="p-4 border-b bg-gray-50 flex flex-wrap items-center justify-between gap-3">
+                            <h3 class="font-bold">邀请分享记录</h3>
+                            <div class="flex items-center gap-2">
+                                <select v-model="referralFilter.status" class="border rounded px-2 py-1 text-sm">
+                                    <option value="rewarded">成功到账</option>
+                                    <option value="pending">待生效</option>
+                                    <option value="rejected">已拒绝</option>
+                                    <option value="cancelled">已取消</option>
+                                    <option value="all">全部</option>
+                                </select>
+                                <input v-model="referralFilter.keyword" @keyup.enter="fetchReferrals(1)" type="text" class="border rounded px-2 py-1 text-sm" placeholder="用户名/设备/邀请码">
+                                <button @click="fetchReferrals(1)" class="text-sm px-3 py-1.5 border rounded hover:bg-gray-100">筛选</button>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full min-w-[1200px] text-left text-sm">
+                                <thead class="bg-gray-50 border-b text-gray-600">
+                                    <tr>
+                                        <th class="p-3">订单号</th>
+                                        <th class="p-3">邀请码</th>
+                                        <th class="p-3">邀请人</th>
+                                        <th class="p-3">被邀请人</th>
+                                        <th class="p-3">奖励</th>
+                                        <th class="p-3">状态</th>
+                                        <th class="p-3">创建时间</th>
+                                        <th class="p-3">到账时间</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    <tr v-for="r in referralRecords" :key="r.order_code">
+                                        <td class="p-3 font-mono text-xs">{{ r.order_code }}</td>
+                                        <td class="p-3 font-mono text-xs">{{ r.invite_code || '-' }}</td>
+                                        <td class="p-3 text-xs">
+                                            <div class="font-mono">{{ r.inviter_username || '-' }}</div>
+                                            <div class="text-gray-400 font-mono">{{ r.inviter_device_id || '-' }}</div>
+                                        </td>
+                                        <td class="p-3 text-xs">
+                                            <div class="font-mono">{{ r.invitee_username || '-' }}</div>
+                                            <div class="text-gray-400 font-mono">{{ r.invitee_device_id || '-' }}</div>
+                                        </td>
+                                        <td class="p-3 text-xs">
+                                            <div>{{ r.reward_days || 0 }} 天</div>
+                                            <div class="text-emerald-600 font-mono">{{ r.bonus_token || '-' }}</div>
+                                        </td>
+                                        <td class="p-3 text-xs">{{ referralStatusLabel(r.status) }}</td>
+                                        <td class="p-3 text-xs">{{ formatShanghaiTime(r.created_at) }}</td>
+                                        <td class="p-3 text-xs">{{ r.rewarded_at ? formatShanghaiTime(r.rewarded_at) : '-' }}</td>
+                                    </tr>
+                                    <tr v-if="referralRecords.length === 0">
+                                        <td colspan="8" class="p-4 text-center text-gray-400">暂无邀请记录</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="p-3 border-t bg-gray-50 flex items-center justify-between text-sm">
+                            <div>共 {{ referralPagination.total }} 条</div>
+                            <div class="flex items-center gap-2">
+                                <button @click="fetchReferrals(referralPagination.page - 1)" :disabled="referralPagination.page <= 1" class="px-3 py-1 border rounded disabled:opacity-40">上一页</button>
+                                <span>第 {{ referralPagination.page }} / {{ Math.max(1, referralPagination.total_pages) }} 页</span>
+                                <button @click="fetchReferrals(referralPagination.page + 1)" :disabled="referralPagination.page >= Math.max(1, referralPagination.total_pages)" class="px-3 py-1 border rounded disabled:opacity-40">下一页</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Referral Management -->
+                <div v-if="currentView === 'referrals'" class="max-w-7xl mx-auto">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold">邀请记录</h2>
+                        <button @click="fetchReferrals(1)" class="text-blue-500 hover:text-blue-700">刷新</button>
+                    </div>
+                    <div class="bg-white rounded shadow overflow-hidden">
+                        <div class="p-4 border-b bg-gray-50 flex flex-wrap items-center justify-between gap-3">
+                            <h3 class="font-bold">邀请分享记录</h3>
+                            <div class="flex items-center gap-2">
+                                <select v-model="referralFilter.status" class="border rounded px-2 py-1 text-sm">
+                                    <option value="rewarded">成功到账</option>
+                                    <option value="pending">待生效</option>
+                                    <option value="rejected">已拒绝</option>
+                                    <option value="cancelled">已取消</option>
+                                    <option value="all">全部</option>
+                                </select>
+                                <input v-model="referralFilter.keyword" @keyup.enter="fetchReferrals(1)" type="text" class="border rounded px-2 py-1 text-sm" placeholder="用户名/设备/邀请码">
+                                <button @click="fetchReferrals(1)" class="text-sm px-3 py-1.5 border rounded hover:bg-gray-100">筛选</button>
+                            </div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full min-w-[1200px] text-left text-sm">
+                                <thead class="bg-gray-50 border-b text-gray-600">
+                                    <tr>
+                                        <th class="p-3">订单号</th>
+                                        <th class="p-3">邀请码</th>
+                                        <th class="p-3">邀请人</th>
+                                        <th class="p-3">被邀请人</th>
+                                        <th class="p-3">奖励</th>
+                                        <th class="p-3">状态</th>
+                                        <th class="p-3">创建时间</th>
+                                        <th class="p-3">到账时间</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    <tr v-for="r in referralRecords" :key="r.order_code">
+                                        <td class="p-3 font-mono text-xs">{{ r.order_code }}</td>
+                                        <td class="p-3 font-mono text-xs">{{ r.invite_code || '-' }}</td>
+                                        <td class="p-3 text-xs">
+                                            <div class="font-mono">{{ r.inviter_username || '-' }}</div>
+                                            <div class="text-gray-400 font-mono">{{ r.inviter_device_id || '-' }}</div>
+                                        </td>
+                                        <td class="p-3 text-xs">
+                                            <div class="font-mono">{{ r.invitee_username || '-' }}</div>
+                                            <div class="text-gray-400 font-mono">{{ r.invitee_device_id || '-' }}</div>
+                                        </td>
+                                        <td class="p-3 text-xs">
+                                            <div>{{ r.reward_days || 0 }} 天</div>
+                                            <div class="text-emerald-600 font-mono">{{ r.bonus_token || '-' }}</div>
+                                        </td>
+                                        <td class="p-3 text-xs">{{ referralStatusLabel(r.status) }}</td>
+                                        <td class="p-3 text-xs">{{ formatShanghaiTime(r.created_at) }}</td>
+                                        <td class="p-3 text-xs">{{ r.rewarded_at ? formatShanghaiTime(r.rewarded_at) : '-' }}</td>
+                                    </tr>
+                                    <tr v-if="referralRecords.length === 0">
+                                        <td colspan="8" class="p-4 text-center text-gray-400">暂无邀请记录</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="p-3 border-t bg-gray-50 flex items-center justify-between text-sm">
+                            <div>共 {{ referralPagination.total }} 条</div>
+                            <div class="flex items-center gap-2">
+                                <button @click="fetchReferrals(referralPagination.page - 1)" :disabled="referralPagination.page <= 1" class="px-3 py-1 border rounded disabled:opacity-40">上一页</button>
+                                <span>第 {{ referralPagination.page }} / {{ Math.max(1, referralPagination.total_pages) }} 页</span>
+                                <button @click="fetchReferrals(referralPagination.page + 1)" :disabled="referralPagination.page >= Math.max(1, referralPagination.total_pages)" class="px-3 py-1 border rounded disabled:opacity-40">下一页</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- LHB Management -->
+                <div v-if="currentView === 'lhb'" class="max-w-7xl mx-auto space-y-4">
+                    <div class="flex flex-wrap items-end justify-between gap-3">
+                        <h2 class="text-2xl font-bold">龙虎榜管理</h2>
+                        <div class="flex items-end gap-2">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">开始日期</label>
+                                <input type="date" v-model="lhbRange.start_date" class="border rounded px-2 py-1 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">结束日期</label>
+                                <input type="date" v-model="lhbRange.end_date" class="border rounded px-2 py-1 text-sm">
+                            </div>
+                            <button @click="fetchLHBOverview" class="bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 px-3 py-2 rounded text-sm">刷新</button>
+                            <button @click="syncLHBMissing" :disabled="lhbSyncing" class="bg-red-600 hover:bg-red-700 text-white px-3 py-2 rounded text-sm disabled:opacity-50">
+                                {{ lhbSyncing ? '同步中...' : '一键补齐缺失' }}
+                            </button>
+                        </div>
+                    </div>
+
+                    <div class="bg-white border rounded p-4 flex flex-wrap items-end gap-4">
+                        <label class="flex items-center gap-2 text-sm">
+                            <input type="checkbox" v-model="lhbSettings.enabled">
+                            <span>启用自动同步</span>
+                        </label>
+                        <div>
+                            <div class="text-xs text-gray-500 mb-1">默认同步天数</div>
+                            <input type="number" v-model.number="lhbSettings.days" class="border rounded px-2 py-1 w-28 text-sm">
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500 mb-1">最小上榜金额</div>
+                            <input type="number" v-model.number="lhbSettings.min_amount" class="border rounded px-2 py-1 w-40 text-sm">
+                        </div>
+                        <button @click="saveLHBSettings" class="bg-gray-900 hover:bg-black text-white px-4 py-2 rounded text-sm">保存设置</button>
+                    </div>
+
+                    <div class="bg-white border rounded p-4 grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
+                        <div>
+                            <div class="text-xs text-gray-500">总记录数</div>
+                            <div class="text-lg font-bold">{{ lhbOverview.total_records || 0 }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500">已同步交易日</div>
+                            <div class="text-lg font-bold">{{ lhbOverview.available_date_count || 0 }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500">缺失交易日</div>
+                            <div class="text-lg font-bold text-red-600">{{ lhbOverview.missing_count || 0 }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500">最新日期</div>
+                            <div class="text-lg font-bold text-blue-600">{{ lhbOverview.latest_date || '-' }}</div>
+                        </div>
+                        <div>
+                            <div class="text-xs text-gray-500">同步状态</div>
+                            <div class="text-lg font-bold" :class="lhbOverview.is_syncing ? 'text-amber-600' : 'text-emerald-600'">
+                                {{ lhbOverview.is_syncing ? '运行中' : '空闲' }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                        <div class="bg-white border rounded p-4">
+                            <h3 class="font-bold mb-2">缺失日期</h3>
+                            <div v-if="!lhbOverview.missing_dates || lhbOverview.missing_dates.length === 0" class="text-sm text-gray-400">所选范围内没有缺失日期</div>
+                            <div v-else class="max-h-72 overflow-auto space-y-1">
+                                <div v-for="d in lhbOverview.missing_dates" :key="d" class="text-xs font-mono px-2 py-1 border rounded bg-red-50 text-red-700">
+                                    {{ d }}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <h3 class="font-bold mb-2">服务器已有日期（点击查看）</h3>
+                            <div v-if="!lhbOverview.available_dates || lhbOverview.available_dates.length === 0" class="text-sm text-gray-400">暂无数据</div>
+                            <div v-else class="max-h-72 overflow-auto space-y-1">
+                                <button
+                                    v-for="d in lhbOverview.available_dates"
+                                    :key="d"
+                                    @click="selectLHBDate(d)"
+                                    class="w-full text-left text-xs font-mono px-2 py-1 border rounded hover:bg-blue-50"
+                                    :class="lhbDate === d ? 'bg-blue-50 border-blue-300 text-blue-700' : 'bg-gray-50 text-gray-700'"
+                                >{{ d }}</button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white border rounded p-4">
+                        <div class="flex items-center justify-between mb-2">
+                            <h3 class="font-bold">日期明细: {{ lhbDate || '-' }}</h3>
+                            <button @click="fetchLHBDateData" :disabled="!lhbDate" class="text-sm px-3 py-1 border rounded hover:bg-gray-50 disabled:opacity-40">刷新</button>
+                        </div>
+                        <div v-if="!lhbDateData || lhbDateData.length === 0" class="text-sm text-gray-400">当前日期暂无数据</div>
+                        <div v-else class="max-h-[420px] overflow-auto">
+                            <table class="w-full text-sm text-left">
+                                <thead class="bg-gray-50 text-gray-500 sticky top-0">
+                                    <tr>
+                                        <th class="p-2">代码</th>
+                                        <th class="p-2">名称</th>
+                                        <th class="p-2">席位数</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    <tr v-for="item in lhbDateData" :key="item.code">
+                                        <td class="p-2 font-mono">{{ item.code }}</td>
+                                        <td class="p-2">{{ item.name }}</td>
+                                        <td class="p-2">{{ item.seats ? item.seats.length : 0 }}</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </main>
+
+        <!-- Custom Message Modal -->
+        <div v-if="msgModal.show" class="fixed inset-0 z-[220] flex items-center justify-center p-4 pointer-events-none">
+            <div class="bg-white rounded-lg shadow-2xl p-4 min-w-[200px] max-w-sm pointer-events-auto border border-gray-100 transform transition-all animate-[fade_0.2s_ease-out]">
+                <div class="flex items-center gap-3">
+                    <div :class="{
+                        'text-blue-500': msgModal.type === 'info',
+                        'text-green-500': msgModal.type === 'success',
+                        'text-red-500': msgModal.type === 'error'
+                    }">
+                        <svg v-if="msgModal.type === 'success'" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>
+                        <svg v-else-if="msgModal.type === 'error'" class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                        <svg v-else class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                    </div>
+                    <p class="text-sm font-medium text-gray-800">{{ msgModal.msg }}</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Confirm Modal -->
+        <div v-if="confirmModal.show" class="fixed inset-0 z-[210] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 transform transition-all scale-100">
+                <h3 class="text-lg font-bold text-gray-900 mb-2">确认操作</h3>
+                <p class="text-sm text-gray-600 mb-6">{{ confirmModal.msg }}</p>
+                <div class="flex justify-end gap-3">
+                    <button @click="handleConfirm(false)" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">取消</button>
+                    <button @click="handleConfirm(true)" class="px-4 py-2 text-sm bg-red-600 hover:bg-red-700 text-white rounded shadow transition-colors">确定</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Add Time Modal -->
+        <div v-if="addTimeModal.show" class="fixed inset-0 z-[180] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 transform transition-all scale-100">
+                <h3 class="text-lg font-bold text-gray-900 mb-2">增加时长</h3>
+                <p class="text-sm text-gray-600 mb-4">用户: <span class="font-mono">{{ addTimeModal.user?.device_id }}</span></p>
+                
+                <div class="mb-4">
+                    <label class="block text-sm font-medium text-gray-700 mb-1">增加分钟数</label>
+                    <input type="number" v-model.number="addTimeModal.minutes" class="w-full border rounded p-2 focus:ring-2 focus:ring-blue-500 outline-none">
+                    <div class="flex gap-2 mt-2">
+                        <button @click="addTimeModal.minutes = 60" class="text-xs bg-gray-100 px-2 py-1 rounded hover:bg-gray-200">1小时</button>
+                        <button @click="addTimeModal.minutes = 1440" class="text-xs bg-gray-100 px-2 py-1 rounded hover:bg-gray-200">1天</button>
+                        <button @click="addTimeModal.minutes = 43200" class="text-xs bg-gray-100 px-2 py-1 rounded hover:bg-gray-200">30天</button>
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-3">
+                    <button @click="addTimeModal.show = false" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">取消</button>
+                    <button @click="submitAddTime" class="px-4 py-2 text-sm bg-blue-600 hover:bg-blue-700 text-white rounded shadow transition-colors">确定</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Set Membership Modal -->
+        <div v-if="setMembershipModal.show" class="fixed inset-0 z-[180] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm">
+            <div class="bg-white rounded-lg shadow-xl w-full max-w-sm p-6 transform transition-all scale-100">
+                <h3 class="text-lg font-bold text-gray-900 mb-2">设置会员状态</h3>
+                <p class="text-sm text-gray-600 mb-4">用户: <span class="font-mono">{{ setMembershipModal.user?.username || setMembershipModal.user?.device_id }}</span></p>
+
+                <div class="space-y-3 mb-4">
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">会员版本</label>
+                        <select v-model="setMembershipModal.version" class="w-full border rounded p-2 text-sm">
+                            <option value="trial">试用版</option>
+                            <option value="basic">初级版</option>
+                            <option value="advanced">高级版</option>
+                            <option value="flagship">旗舰版</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-sm font-medium text-gray-700 mb-1">有效天数（从现在起）</label>
+                        <input type="number" min="0" v-model.number="setMembershipModal.days" class="w-full border rounded p-2 text-sm">
+                        <div class="flex gap-2 mt-2">
+                            <button @click="setMembershipModal.days = 30" class="text-xs bg-gray-100 px-2 py-1 rounded hover:bg-gray-200">30天</button>
+                            <button @click="setMembershipModal.days = 90" class="text-xs bg-gray-100 px-2 py-1 rounded hover:bg-gray-200">90天</button>
+                            <button @click="setMembershipModal.days = 365" class="text-xs bg-gray-100 px-2 py-1 rounded hover:bg-gray-200">365天</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="flex justify-end gap-3">
+                    <button @click="setMembershipModal.show = false" class="px-4 py-2 text-sm text-gray-500 hover:text-gray-700 transition-colors">取消</button>
+                    <button @click="submitSetMembership" class="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-700 text-white rounded shadow transition-colors">确认设置</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const { createApp } = Vue
+
+        createApp({
+            data() {
+                return {
+                    token: localStorage.getItem('admin_token') || '',
+                    loginForm: { username: 'admin', password: '' },
+                    currentView: 'dashboard',
+                    config: {
+                        community_config: {
+                            qq_group_number: '',
+                            qq_group_link: '',
+                            welcome_text: ''
+                        },
+                        referral_config: {
+                            enabled: true,
+                            reward_days: 30,
+                            share_base_url: '',
+                            share_template: ''
+                        }
+                    },
+                    users: [],
+                    userFilter: 'all',
+                    orders: [],
+                    orderStats: {},
+                    msgModal: { show: false, msg: '', type: 'info' },
+                    msgTimer: null,
+                    confirmModal: { show: false, msg: '', resolve: null },
+                    addTimeModal: { show: false, user: null, minutes: 60 },
+                    setMembershipModal: { show: false, user: null, version: 'basic', days: 30 },
+                    referralRecords: [],
+                    referralFilter: { status: 'rewarded', keyword: '' },
+                    referralPagination: { page: 1, page_size: 20, total: 0, total_pages: 1 },
+                    // Logs
+                    activeLogTab: 'system',
+                    sysLogs: [],
+                    userOpsLogs: [],
+                    userOpsFilter: {
+                        actor: '',
+                        status: '',
+                        action: '',
+                        path_keyword: '',
+                        user_keyword: ''
+                    },
+                    userOpsPagination: { page: 1, page_size: 50, total: 0, total_pages: 1 },
+                    aiCacheStats: {},
+                    aiCacheDetail: null,
+                    watchlistStats: [],
+                    // LHB Admin
+                    lhbRange: {
+                        start_date: '',
+                        end_date: ''
+                    },
+                    lhbOverview: {},
+                    lhbDate: '',
+                    lhbDateData: [],
+                    lhbSyncing: false,
+                    lhbSettings: {
+                        enabled: false,
+                        days: 30,
+                        min_amount: 10000000
+                    },
+                    dataFiles: [],
+                    dataFolders: [],
+                    selectedDataFile: '',
+                    dataFilePreview: '',
+                    dataFileMeta: {},
+                    // Admin Account
+                    adminPanelPath: '/admin',
+                    newAdminPassword: '',
+                    passwordMsg: ''
+                }
+            },
+            mounted() {
+                const today = new Date();
+                const start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
+                this.lhbRange.start_date = start.toISOString().slice(0, 10);
+                this.lhbRange.end_date = today.toISOString().slice(0, 10);
+                if (this.token) {
+                    this.fetchConfig();
+                    this.fetchAdminPanelPath();
+                    this.fetchDataFiles();
+                    // Pre-fetch
+                    this.fetchUsers();
+                    this.fetchOrders();
+                    this.fetchOrderStats();
+                    this.fetchReferrals(1);
+                    this.fetchWatchlistStats();
+                }
+            },
+            watch: {
+                currentView(val) {
+                    if (val === 'dashboard') this.fetchDataFiles();
+                    if (val === 'users') {
+                        this.fetchUsers();
+                    }
+                    if (val === 'watchlist') this.fetchWatchlistStats();
+                    if (val === 'orders') {
+                        this.fetchOrders();
+                        this.fetchOrderStats();
+                    }
+                    if (val === 'referrals') {
+                        this.fetchReferrals(1);
+                    }
+                    if (val === 'logs') this.fetchLogs('system');
+                    if (val === 'lhb') this.fetchLHBOverview();
+                }
+            },
+            methods: {
+                showMsg(msg, type = 'info') {
+                    if (this.msgTimer) {
+                        clearTimeout(this.msgTimer);
+                        this.msgTimer = null;
+                    }
+                    this.msgModal = { show: true, msg, type };
+                    const timeout = type === 'error' ? 4000 : 2500;
+                    this.msgTimer = setTimeout(() => {
+                        if (this.msgModal.msg === msg) this.msgModal.show = false;
+                    }, timeout);
+                },
+                showConfirm(msg) {
+                    return new Promise((resolve) => {
+                        this.confirmModal = { show: true, msg: msg, resolve: resolve };
+                    });
+                },
+                handleConfirm(result) {
+                    this.confirmModal.show = false;
+                    if (this.confirmModal.resolve) {
+                        this.confirmModal.resolve(result);
+                        this.confirmModal.resolve = null;
+                    }
+                },
+                versionLabel(version) {
+                    const v = String(version || '').toLowerCase();
+                    if (v === 'trial') return '试用版';
+                    if (v === 'basic') return '初级版';
+                    if (v === 'advanced') return '高级版';
+                    if (v === 'flagship') return '旗舰版';
+                    return version || '-';
+                },
+                orderStatusLabel(status) {
+                    const s = String(status || '').toLowerCase();
+                    if (s === 'pending') return '待支付';
+                    if (s === 'waiting_verification') return '待审核';
+                    if (s === 'completed') return '已完成';
+                    if (s === 'rejected') return '已拒绝';
+                    if (s === 'cancelled') return '已取消';
+                    return status || '-';
+                },
+                referralStatusLabel(status) {
+                    const s = String(status || '').toLowerCase();
+                    if (s === 'pending') return '待生效';
+                    if (s === 'rewarded') return '成功到账';
+                    if (s === 'rejected') return '已拒绝';
+                    if (s === 'cancelled') return '已取消';
+                    if (s === 'invalid') return '无效';
+                    return status || '-';
+                },
+                formatShanghaiTime(value) {
+                    if (!value) return '-';
+                    const raw = String(value).trim();
+                    let normalized = raw.replace(' ', 'T');
+                    if (/^\d+$/.test(normalized)) {
+                        const n = Number(normalized);
+                        const dt = new Date(n > 1e12 ? n : n * 1000);
+                        if (Number.isNaN(dt.getTime())) return raw;
+                        return new Intl.DateTimeFormat('zh-CN', {
+                            timeZone: 'Asia/Shanghai',
+                            year: 'numeric',
+                            month: '2-digit',
+                            day: '2-digit',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                            second: '2-digit',
+                            hour12: false
+                        }).format(dt);
+                    }
+                    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?$/.test(normalized)) {
+                        // Backend stores many timestamps as naive UTC; force UTC parse.
+                        normalized += 'Z';
+                    }
+                    const dt = new Date(normalized);
+                    if (Number.isNaN(dt.getTime())) return String(value);
+                    return new Intl.DateTimeFormat('zh-CN', {
+                        timeZone: 'Asia/Shanghai',
+                        year: 'numeric',
+                        month: '2-digit',
+                        day: '2-digit',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                        second: '2-digit',
+                        hour12: false
+                    }).format(dt);
+                },
+                formatFileSize(size) {
+                    const n = Number(size || 0);
+                    if (!Number.isFinite(n) || n <= 0) return '0 B';
+                    if (n < 1024) return `${n} B`;
+                    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+                    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+                    return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+                },
+                async fetchDataFiles() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/data/files', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        this.dataFiles = Array.isArray(data.files) ? data.files : [];
+                        this.dataFolders = Array.isArray(data.folders) ? data.folders : [];
+                    } catch (e) {
+                        console.error('fetchDataFiles failed', e);
+                    }
+                },
+                async openDataFile(path) {
+                    if (!path) return;
+                    this.selectedDataFile = path;
+                    this.dataFilePreview = '加载中...';
+                    this.dataFileMeta = {};
+                    try {
+                        const qs = new URLSearchParams({ path, max_chars: '200000' }).toString();
+                        const res = await fetch(API_BASE_URL + `/api/admin/data/file?${qs}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '读取文件失败');
+                        this.dataFileMeta = { size: Number(data.size || 0) };
+                        if (data.type === 'json') {
+                            this.dataFilePreview = this.formatJSON(data.data);
+                        } else if (data.type === 'text') {
+                            this.dataFilePreview = data.content || '';
+                            if (data.truncated) this.dataFilePreview += '\n\n[已截断显示]';
+                        } else {
+                            this.dataFilePreview = '[二进制文件，无法直接预览]';
+                        }
+                    } catch (e) {
+                        this.dataFilePreview = '';
+                        this.showMsg(e.message || '读取文件失败', 'error');
+                    }
+                },
+                getHeaders() {
+                    return {
+                        'Content-Type': 'application/json',
+                        'X-Admin-Token': this.token
+                    };
+                },
+                clearAuth(showTip = false) {
+                    this.token = '';
+                    localStorage.removeItem('admin_token');
+                    if (showTip) this.showMsg('登录已失效，请重新登录', 'error');
+                },
+                async login() {
+                    const username = (this.loginForm.username || '').trim();
+                    const password = (this.loginForm.password || '').trim();
+                    if (!username || !password) {
+                        this.showMsg('请输入用户名和密码', 'error');
+                        return;
+                    }
+
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/login', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ username, password })
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '登录失败');
+
+                        this.token = data.token;
+                        localStorage.setItem('admin_token', this.token);
+                        this.loginForm.password = '';
+                        this.showMsg('登录成功', 'success');
+                        this.fetchConfig();
+                        this.fetchAdminPanelPath();
+                        this.fetchDataFiles();
+                        this.fetchUsers();
+                        this.fetchOrders();
+                        this.fetchOrderStats();
+                        this.fetchReferrals(1);
+                        this.fetchWatchlistStats();
+                    } catch (e) {
+                        this.showMsg(e.message || '登录失败', 'error');
+                    }
+                },
+                async fetchLogs(type, page = null) {
+                    try {
+                        const headers = { 'X-Admin-Token': this.token };
+                        let url = '';
+                        if (type === 'system') {
+                            url = '/api/admin/logs/system';
+                        } else if (type === 'user_ops') {
+                            const nextPage = page || this.userOpsPagination.page || 1;
+                            const qs = new URLSearchParams({
+                                page: String(Math.max(1, Number(nextPage || 1))),
+                                page_size: String(this.userOpsPagination.page_size || 50),
+                                actor: this.userOpsFilter.actor || '',
+                                status: this.userOpsFilter.status || '',
+                                action: this.userOpsFilter.action || '',
+                                path_keyword: this.userOpsFilter.path_keyword || '',
+                                user_keyword: this.userOpsFilter.user_keyword || ''
+                            });
+                            url = `/api/admin/logs/user_ops?${qs.toString()}`;
+                        } else if (type === 'ai_cache') {
+                            url = '/api/admin/monitor/ai_cache';
+                        }
+
+                        const res = await fetch(API_BASE_URL + url, { headers });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+
+                        if (type === 'system') {
+                            this.sysLogs = data.logs || [];
+                        } else if (type === 'user_ops') {
+                            this.userOpsLogs = (data && Array.isArray(data.logs)) ? data.logs : [];
+                            this.userOpsPagination = {
+                                ...this.userOpsPagination,
+                                page: Number(data.page || 1),
+                                total: Number(data.total || 0),
+                                total_pages: Number(data.total_pages || 1)
+                            };
+                        } else if (type === 'ai_cache') {
+                            this.aiCacheStats = data || {};
+                            this.aiCacheDetail = null;
+                        }
+                    } catch (e) {
+                        console.error("Fetch Logs Error:", e);
+                    }
+                },
+                async fetchConfig() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/config', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) {
+                            throw new Error(`Config Load Failed: ${res.status} ${res.statusText}`);
+                        }
+                        const data = await res.json();
+                        this.config = {
+                            ...data,
+                            community_config: {
+                                qq_group_number: '',
+                                qq_group_link: '',
+                                welcome_text: '',
+                                ...(data.community_config || {})
+                            },
+                            referral_config: {
+                                enabled: true,
+                                reward_days: 30,
+                                share_base_url: '',
+                                share_template: '',
+                                ...(data.referral_config || {})
+                            }
+                        };
+                    } catch(e) { 
+                        console.error("Fetch Config Error:", e);
+                        this.showMsg(e.message, 'error'); 
+                    }
+                },
+                async fetchAdminPanelPath() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/panel_path', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (res.ok) {
+                            this.adminPanelPath = data.path || '/admin';
+                        }
+                    } catch (e) {
+                        console.error('Fetch admin panel path failed', e);
+                    }
+                },
+                async saveAdminPanelPath() {
+                    const path = (this.adminPanelPath || '').trim();
+                    if (!path) {
+                        this.showMsg('请输入后台路径', 'error');
+                        return;
+                    }
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/panel_path', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({ path })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '保存后台路径失败');
+                        this.adminPanelPath = data.path || path;
+                        this.showMsg(`后台地址已更新为 ${this.adminPanelPath}`, 'success');
+                    } catch (e) {
+                        this.showMsg(e.message || '保存后台路径失败', 'error');
+                    }
+                },
+                async updateAdminPassword() {
+                    const pwd = this.newAdminPassword;
+                    if (!pwd || pwd.length < 6) {
+                        this.passwordMsg = "密码至少6位";
+                        setTimeout(() => this.passwordMsg = '', 3000);
+                        return;
+                    }
+                    if (!await this.showConfirm("确定要修改管理员密码吗？修改后需要重新登录。")) return;
+                    
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/update_password', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                old_password: "",
+                                new_password: pwd
+                            })
+                        });
+                        const data = await res.json();
+                        if (res.ok) {
+                            this.showMsg("密码修改成功，请重新登录", "success");
+                            this.newAdminPassword = '';
+                            setTimeout(() => {
+                                this.clearAuth(false);
+                                location.reload();
+                            }, 1500);
+                        } else {
+                            this.passwordMsg = data.detail || "修改失败";
+                        }
+                    } catch (e) {
+                         this.showMsg(e.message, 'error');
+                    }
+                },
+                async saveConfig() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/config', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                auto_analysis_enabled: this.config.auto_analysis_enabled,
+                                use_smart_schedule: this.config.use_smart_schedule,
+                                fixed_interval_minutes: this.config.fixed_interval_minutes,
+                                schedule_plan: this.config.schedule_plan,
+                                lhb_enabled: this.config.lhb_enabled,
+                                lhb_days: this.config.lhb_days,
+                                lhb_min_amount: this.config.lhb_min_amount,
+                                email_config: this.config.email_config,
+                                api_keys: this.config.api_keys,
+                                community_config: this.config.community_config,
+                                referral_config: this.config.referral_config,
+                                pricing_config: this.config.pricing_config
+                            })
+                        });
+                        if(res.ok) {
+                            this.showMsg('保存成功', 'success');
+                        } else {
+                            throw new Error("Save Status: " + res.status);
+                        }
+                    } catch(e) { this.showMsg(e.message, 'error'); }
+                },
+                
+
+                // Users
+                setUserFilter(mode) {
+                    this.userFilter = mode || 'all';
+                    this.fetchUsers();
+                },
+                async fetchUsers() {
+                    try {
+                        const qs = new URLSearchParams({ account_type: this.userFilter || 'all' }).toString();
+                        const res = await fetch(API_BASE_URL + `/api/admin/users?${qs}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`Users Load Failed: ${res.status}`);
+                        this.users = await res.json();
+                    } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
+                },
+                
+                // Orders
+                async fetchOrders() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/orders', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`Orders Load Failed: ${res.status}`);
+                        this.orders = await res.json();
+                    } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
+                },
+                async fetchOrderStats() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/orders/stats', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`Order Stats Load Failed: ${res.status}`);
+                        this.orderStats = await res.json();
+                    } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
+                },
+                async fetchReferrals(page = 1) {
+                    try {
+                        const qs = new URLSearchParams({
+                            status: this.referralFilter.status || 'rewarded',
+                            page: String(Math.max(1, Number(page || 1))),
+                            page_size: String(this.referralPagination.page_size || 20),
+                            keyword: this.referralFilter.keyword || ''
+                        }).toString();
+                        const res = await fetch(API_BASE_URL + `/api/admin/referrals?${qs}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '邀请记录加载失败');
+                        this.referralRecords = Array.isArray(data.items) ? data.items : [];
+                        this.referralPagination = {
+                            ...this.referralPagination,
+                            page: Number(data.page || 1),
+                            total: Number(data.total || 0),
+                            total_pages: Number(data.total_pages || 1)
+                        };
+                    } catch (e) {
+                        this.showMsg(e.message || '邀请记录加载失败', 'error');
+                    }
+                },
+                async downloadDataBackup() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/data/export', { headers: { 'X-Admin-Token': this.token } });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            throw new Error(err.detail || '备份导出失败');
+                        }
+                        const blob = await res.blob();
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        const filename = (res.headers.get('content-disposition') || '').match(/filename=\"?([^\";]+)\"?/)?.[1] || 'sniper_data_export.zip';
+                        a.download = filename;
+                        document.body.appendChild(a);
+                        a.click();
+                        a.remove();
+                        URL.revokeObjectURL(url);
+                        this.showMsg('数据备份下载已开始', 'success');
+                    } catch (e) {
+                        this.showMsg(e.message || '备份导出失败', 'error');
+                    }
+                },
+                triggerRestoreFile() {
+                    if (this.$refs.restoreInput) {
+                        this.$refs.restoreInput.value = '';
+                        this.$refs.restoreInput.click();
+                    }
+                },
+                async handleRestoreFile(event) {
+                    const file = event && event.target && event.target.files ? event.target.files[0] : null;
+                    if (!file) return;
+                    const confirmed = await this.showConfirm(`确认恢复数据包 ${file.name}？该操作会覆盖当前数据。`);
+                    if (!confirmed) return;
+
+                    try {
+                        const form = new FormData();
+                        form.append('backup_file', file);
+                        const res = await fetch(API_BASE_URL + '/api/admin/data/restore', {
+                            method: 'POST',
+                            headers: { 'X-Admin-Token': this.token },
+                            body: form
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '恢复失败');
+                        this.showMsg(`恢复完成，快照: ${data.snapshot}`, 'success');
+                        this.fetchUsers();
+                        this.fetchOrders();
+                        this.fetchOrderStats();
+                        this.fetchReferrals(1);
+                    } catch (e) {
+                        this.showMsg(e.message || '恢复失败', 'error');
+                    }
+                },
+                async openCacheItem(key) {
+                    if (!key) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + `/api/admin/monitor/ai_cache/item?key=${encodeURIComponent(key)}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`Cache Item Load Failed: ${res.status}`);
+                        this.aiCacheDetail = await res.json();
+                    } catch (e) {
+                        this.showMsg(e.message || '加载缓存内容失败', 'error');
+                    }
+                },
+                formatJSON(data) {
+                    try {
+                        return JSON.stringify(data, null, 2);
+                    } catch (e) {
+                        return String(data ?? '');
+                    }
+                },
+                async fetchLHBOverview() {
+                    try {
+                        const qs = new URLSearchParams({
+                            start_date: this.lhbRange.start_date || '',
+                            end_date: this.lhbRange.end_date || ''
+                        }).toString();
+                        const res = await fetch(API_BASE_URL + `/api/admin/lhb/overview?${qs}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`LHB Overview Load Failed: ${res.status}`);
+                        const data = await res.json();
+                        const overview = (data && data.data) ? data.data : {};
+                        this.lhbOverview = overview;
+                        this.lhbSettings.enabled = !!overview.enabled;
+                        this.lhbSettings.days = Number(overview.days || 0);
+                        this.lhbSettings.min_amount = Number(overview.min_amount || 0);
+                        if (!this.lhbDate && overview.available_dates && overview.available_dates.length > 0) {
+                            this.selectLHBDate(overview.available_dates[0]);
+                        }
+                    } catch (e) {
+                        this.showMsg(e.message || '加载龙虎榜概览失败', 'error');
+                    }
+                },
+                async saveLHBSettings() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/lhb/settings', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                enabled: !!this.lhbSettings.enabled,
+                                days: Number(this.lhbSettings.days || 0),
+                                min_amount: Number(this.lhbSettings.min_amount || 0)
+                            })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '保存失败');
+                        this.showMsg('龙虎榜设置已保存', 'success');
+                        this.fetchLHBOverview();
+                    } catch (e) {
+                        this.showMsg(e.message || '保存失败', 'error');
+                    }
+                },
+                selectLHBDate(date) {
+                    this.lhbDate = date;
+                    this.fetchLHBDateData();
+                },
+                async fetchLHBDateData() {
+                    if (!this.lhbDate) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + `/api/admin/lhb/date_data?date=${encodeURIComponent(this.lhbDate)}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`LHB Date Load Failed: ${res.status}`);
+                        const data = await res.json();
+                        this.lhbDateData = Array.isArray(data.data) ? data.data : [];
+                    } catch (e) {
+                        this.showMsg(e.message || '加载日期明细失败', 'error');
+                    }
+                },
+                async syncLHBMissing() {
+                    if (this.lhbSyncing) return;
+                    this.lhbSyncing = true;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/lhb/sync_missing', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                start_date: this.lhbRange.start_date,
+                                end_date: this.lhbRange.end_date
+                            })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (res.ok) {
+                            if (data.status === 'no_missing') this.showMsg('所选范围没有缺失数据', 'info');
+                            else if (data.status === 'busy') this.showMsg('后台正在同步，请稍后再试', 'info');
+                            else this.showMsg(`已启动补齐任务，缺失 ${data.missing_dates ? data.missing_dates.length : 0} 天`, 'success');
+                            this.fetchLHBOverview();
+                        } else {
+                            throw new Error(data.detail || '同步失败');
+                        }
+                    } catch (e) {
+                        this.showMsg(e.message || '同步失败', 'error');
+                    } finally {
+                        this.lhbSyncing = false;
+                    }
+                },
+
+                async fetchWatchlistStats() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/watchlist_stats', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`Watchlist Stats Load Failed: ${res.status}`);
+                        const data = await res.json();
+                        const stats = Array.isArray(data.stats)
+                            ? data.stats
+                            : (Array.isArray(data.data) ? data.data : []);
+                        this.watchlistStats = stats;
+                    } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
+                },
+                async resetUserPassword(user) {
+                    if (!user || !user.id) return;
+                    if (!user.is_registered) {
+                        this.showMsg('该用户尚未注册账号，无法重置密码', 'info');
+                        return;
+                    }
+                    const confirmed = await this.showConfirm(`确认重置用户 ${user.username || user.device_id} 的密码并生成随机密码？`);
+                    if (!confirmed) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/users/reset_password', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                user_id: user.id,
+                                username: user.username || '',
+                                device_id: user.device_id || ''
+                            })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '重置密码失败');
+                        this.showMsg(`已重置 ${data.username} 密码: ${data.new_password}`, 'success');
+                    } catch (e) {
+                        this.showMsg(e.message || '重置密码失败', 'error');
+                    }
+                },
+                async toggleUserBan(user) {
+                    if (!user || !user.id || !user.is_registered) {
+                        this.showMsg('游客账号不支持封禁管理', 'info');
+                        return;
+                    }
+                    const nextBanned = !user.is_banned;
+                    let reason = '';
+                    if (nextBanned) {
+                        reason = prompt('请输入封禁原因（可选）', user.banned_reason || '违规使用') || '';
+                    }
+                    const confirmed = await this.showConfirm(nextBanned ? `确认封禁用户 ${user.username || user.device_id}？` : `确认解封用户 ${user.username || user.device_id}？`);
+                    if (!confirmed) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/users/ban', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                user_id: user.id,
+                                username: user.username || '',
+                                device_id: user.device_id || '',
+                                banned: nextBanned,
+                                reason
+                            })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '操作失败');
+                        this.showMsg(nextBanned ? '已封禁该用户' : '已解封该用户', 'success');
+                        this.fetchUsers();
+                    } catch (e) {
+                        this.showMsg(e.message || '封禁操作失败', 'error');
+                    }
+                },
+                setMembership(user) {
+                    if (!user || !user.id || !user.is_registered) {
+                        this.showMsg('游客账号不支持会员状态设置', 'info');
+                        return;
+                    }
+                    this.setMembershipModal.user = user;
+                    this.setMembershipModal.version = (user.version || 'basic').toLowerCase();
+                    this.setMembershipModal.days = 30;
+                    this.setMembershipModal.show = true;
+                },
+                async submitSetMembership() {
+                    const user = this.setMembershipModal.user;
+                    const version = (this.setMembershipModal.version || '').trim().toLowerCase();
+                    const days = Number(this.setMembershipModal.days);
+                    if (!user || !user.id) return;
+                    if (!['trial', 'basic', 'advanced', 'flagship'].includes(version)) {
+                        this.showMsg('版本无效', 'error');
+                        return;
+                    }
+                    if (!Number.isFinite(days) || days < 0) {
+                        this.showMsg('天数无效', 'error');
+                        return;
+                    }
+                    const confirmed = await this.showConfirm(`确认将用户 ${user.username || user.device_id} 设置为 ${this.versionLabel(version)}，到期天数 ${Math.floor(days)} 天？`);
+                    if (!confirmed) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/users/set_membership', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                user_id: user.id,
+                                version,
+                                days: Math.floor(days)
+                            })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '设置失败');
+                        this.showMsg('会员状态已更新', 'success');
+                        this.setMembershipModal.show = false;
+                        this.fetchUsers();
+                    } catch (e) {
+                        this.showMsg(e.message || '设置会员失败', 'error');
+                    }
+                },
+
+                openAddTime(user) {
+                    this.addTimeModal.user = user;
+                    this.addTimeModal.minutes = 60;
+                    this.addTimeModal.show = true;
+                },
+                async submitAddTime() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/users/add_time', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                user_id: this.addTimeModal.user.id,
+                                minutes: this.addTimeModal.minutes
+                            })
+                        });
+                        const data = await res.json();
+                        if (res.ok) {
+                            this.showMsg('时长增加成功', 'success');
+                            this.addTimeModal.show = false;
+                            this.fetchUsers();
+                        } else {
+                            this.showMsg(data.detail, 'error');
+                        }
+                    } catch (e) {
+                        this.showMsg(e.message, 'error');
+                    }
+                },
+                
+                async processOrder(order, action) {
+                    const confirmed = await this.showConfirm(action === 'approve' ? '确定验证通过该订单?' : '确定拒绝该订单?');
+                    if (!confirmed) return;
+                    
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/orders/approve', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                order_code: order.order_code,
+                                action: action
+                            })
+                        });
+                        const data = await res.json();
+                        if (data.status === 'success' || data.status === 'rejected') {
+                            this.showMsg('操作成功', 'success');
+                            this.fetchOrders();
+                            this.fetchOrderStats();
+                            this.fetchReferrals(1);
+                            this.fetchUsers(); // Refresh users too as one might have updated
+                        } else {
+                            this.showMsg(data.detail || '操作失败', 'error');
+                        }
+                    } catch (e) {
+                         this.showMsg(e.message, 'error');
+                    }
+                }
+            }
+        }).mount('#app')
+    </script>
+</body>
+</html>

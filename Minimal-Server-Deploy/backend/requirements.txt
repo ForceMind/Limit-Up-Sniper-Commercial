@@ -1,0 +1,13 @@
+fastapi
+uvicorn[standard]
+requests
+jinja2
+websockets
+akshare
+pandas
+scipy
+scikit-learn
+numpy
+sqlalchemy
+aiofiles
+python-multipart
