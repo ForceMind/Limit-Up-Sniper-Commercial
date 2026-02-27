@@ -314,6 +314,40 @@
                             </div>
                         </section>
 
+                        <section class="mb-8 border-b pb-8">
+                            <div class="flex items-center justify-between mb-3">
+                                <h3 class="text-xl font-semibold text-gray-700">数据文件浏览</h3>
+                                <button @click="fetchDataFiles" class="text-sm px-3 py-1.5 border rounded hover:bg-gray-100">刷新文件列表</button>
+                            </div>
+                            <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                                <div class="bg-white border rounded max-h-[420px] overflow-auto">
+                                    <div class="p-3 border-b bg-gray-50 text-xs text-gray-500">backend/data 文件 ({{ dataFiles.length }})</div>
+                                    <div v-if="dataFiles.length === 0" class="p-4 text-sm text-gray-400">暂无文件</div>
+                                    <button
+                                        v-for="f in dataFiles"
+                                        :key="f.path"
+                                        @click="openDataFile(f.path)"
+                                        class="w-full text-left px-3 py-2 border-b text-xs hover:bg-blue-50"
+                                        :class="selectedDataFile === f.path ? 'bg-blue-50 text-blue-700' : ''"
+                                    >
+                                        <div class="font-mono break-all">{{ f.path }}</div>
+                                        <div class="text-[11px] text-gray-500 mt-1">大小: {{ formatFileSize(f.size) }} · {{ formatShanghaiTime(f.modified_at) }}</div>
+                                    </button>
+                                </div>
+                                <div class="lg:col-span-2 bg-white border rounded">
+                                    <div class="p-3 border-b bg-gray-50 flex items-center justify-between">
+                                        <div class="text-sm font-bold">{{ selectedDataFile || '请选择左侧文件' }}</div>
+                                        <div class="text-xs text-gray-500" v-if="dataFileMeta.size">大小: {{ formatFileSize(dataFileMeta.size) }}</div>
+                                    </div>
+                                    <div class="p-3">
+                                        <div v-if="!selectedDataFile" class="text-sm text-gray-400">点击左侧文件可查看内容</div>
+                                        <pre v-else-if="dataFilePreview" class="text-xs bg-gray-50 border rounded p-3 max-h-[360px] overflow-auto whitespace-pre-wrap">{{ dataFilePreview }}</pre>
+                                        <div v-else class="text-sm text-gray-400">无可展示内容</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </section>
+
                         <div class="flex justify-end pt-4">
                             <button @click="saveConfig" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700">保存设置</button>
                         </div>
@@ -947,6 +981,10 @@
                         days: 30,
                         min_amount: 10000000
                     },
+                    dataFiles: [],
+                    selectedDataFile: '',
+                    dataFilePreview: '',
+                    dataFileMeta: {},
                     // Admin Account
                     adminPanelPath: '/admin',
                     newAdminPassword: '',
@@ -961,6 +999,7 @@
                 if (this.token) {
                     this.fetchConfig();
                     this.fetchAdminPanelPath();
+                    this.fetchDataFiles();
                     // Pre-fetch
                     this.fetchUsers();
                     this.fetchOrders();
@@ -971,6 +1010,7 @@
             },
             watch: {
                 currentView(val) {
+                    if (val === 'dashboard') this.fetchDataFiles();
                     if (val === 'users') {
                         this.fetchUsers();
                     }
@@ -1049,6 +1089,49 @@
                         hour12: false
                     }).format(dt);
                 },
+                formatFileSize(size) {
+                    const n = Number(size || 0);
+                    if (!Number.isFinite(n) || n <= 0) return '0 B';
+                    if (n < 1024) return `${n} B`;
+                    if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+                    if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+                    return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+                },
+                async fetchDataFiles() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/data/files', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        this.dataFiles = Array.isArray(data.files) ? data.files : [];
+                    } catch (e) {
+                        console.error('fetchDataFiles failed', e);
+                    }
+                },
+                async openDataFile(path) {
+                    if (!path) return;
+                    this.selectedDataFile = path;
+                    this.dataFilePreview = '加载中...';
+                    this.dataFileMeta = {};
+                    try {
+                        const qs = new URLSearchParams({ path, max_chars: '200000' }).toString();
+                        const res = await fetch(API_BASE_URL + `/api/admin/data/file?${qs}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '读取文件失败');
+                        this.dataFileMeta = { size: Number(data.size || 0) };
+                        if (data.type === 'json') {
+                            this.dataFilePreview = this.formatJSON(data.data);
+                        } else if (data.type === 'text') {
+                            this.dataFilePreview = data.content || '';
+                            if (data.truncated) this.dataFilePreview += '\n\n[已截断显示]';
+                        } else {
+                            this.dataFilePreview = '[二进制文件，无法直接预览]';
+                        }
+                    } catch (e) {
+                        this.dataFilePreview = '';
+                        this.showMsg(e.message || '读取文件失败', 'error');
+                    }
+                },
                 getHeaders() {
                     return {
                         'Content-Type': 'application/json',
@@ -1083,6 +1166,7 @@
                         this.showMsg('登录成功', 'success');
                         this.fetchConfig();
                         this.fetchAdminPanelPath();
+                        this.fetchDataFiles();
                         this.fetchUsers();
                         this.fetchOrders();
                         this.fetchOrderStats();

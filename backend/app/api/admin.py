@@ -1181,6 +1181,84 @@ async def restore_data_package(
         }
 
 
+def _safe_data_path(rel_path: str) -> Path:
+    raw = str(rel_path or "").strip().replace("\\", "/")
+    if not raw:
+        raise HTTPException(status_code=400, detail="path is required")
+    p = Path(raw)
+    if p.is_absolute() or ".." in p.parts:
+        raise HTTPException(status_code=400, detail="invalid path")
+    full = (DATA_DIR / p).resolve()
+    data_root = DATA_DIR.resolve()
+    if data_root not in [full, *full.parents]:
+        raise HTTPException(status_code=400, detail="path out of data dir")
+    if not full.exists() or not full.is_file():
+        raise HTTPException(status_code=404, detail="file not found")
+    return full
+
+
+@router.get("/data/files")
+async def list_data_files(authorized: bool = Depends(verify_admin)):
+    files = []
+    if not DATA_DIR.exists():
+        return {"files": files}
+    for file_path in DATA_DIR.rglob("*"):
+        if not file_path.is_file():
+            continue
+        stat = file_path.stat()
+        files.append(
+            {
+                "path": str(file_path.relative_to(DATA_DIR)).replace("\\", "/"),
+                "size": int(stat.st_size),
+                "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+            }
+        )
+    files.sort(key=lambda x: x["path"])
+    return {"files": files}
+
+
+@router.get("/data/file")
+async def get_data_file_content(
+    path: str,
+    max_chars: int = 200000,
+    authorized: bool = Depends(verify_admin),
+):
+    file_path = _safe_data_path(path)
+    suffix = file_path.suffix.lower()
+    max_chars = max(1000, min(int(max_chars or 200000), 1000000))
+
+    if suffix == ".json":
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return {
+                "type": "json",
+                "path": str(file_path.relative_to(DATA_DIR)).replace("\\", "/"),
+                "size": int(file_path.stat().st_size),
+                "data": data,
+            }
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"invalid json file: {e}")
+
+    try:
+        text = file_path.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return {
+            "type": "binary",
+            "path": str(file_path.relative_to(DATA_DIR)).replace("\\", "/"),
+            "size": int(file_path.stat().st_size),
+        }
+
+    truncated = len(text) > max_chars
+    return {
+        "type": "text",
+        "path": str(file_path.relative_to(DATA_DIR)).replace("\\", "/"),
+        "size": int(file_path.stat().st_size),
+        "truncated": truncated,
+        "content": text[:max_chars],
+    }
+
+
 # --- Logs & Monitor ---
 def _tail_file_lines(path: Path, max_lines: int) -> List[str]:
     if not path.exists():

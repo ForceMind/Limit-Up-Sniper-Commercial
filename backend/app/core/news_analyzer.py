@@ -611,12 +611,12 @@ def analyze_single_stock(stock_data, logger=None, prompt_type='normal', api_key=
     kline_summary = "暂无分时数据"
     try:
         target_date = lhb_info['date'] if lhb_info else datetime.now().strftime('%Y-%m-%d')
-        kline_df = lhb_manager.get_kline_1min(code, target_date)
+        kline_df = lhb_manager.get_kline_1min(code, target_date, allow_network=False)
         
         # If today is empty (e.g. weekend or before market), try yesterday
         if kline_df is None or kline_df.empty:
             prev_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-            kline_df = lhb_manager.get_kline_1min(code, prev_date)
+            kline_df = lhb_manager.get_kline_1min(code, prev_date, allow_network=False)
 
         if kline_df is not None and not kline_df.empty:
             # Simple feature extraction
@@ -656,10 +656,10 @@ def analyze_single_stock(stock_data, logger=None, prompt_type='normal', api_key=
     if not kline_data and prompt_type in ['trading_signal', 'day_trading_signal', 'min_trading_signal']:
         try:
             target_date = datetime.now().strftime('%Y-%m-%d')
-            df = lhb_manager.get_kline_1min(code, target_date)
+            df = lhb_manager.get_kline_1min(code, target_date, allow_network=False)
             if df is None or df.empty:
                 prev_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
-                df = lhb_manager.get_kline_1min(code, prev_date)
+                df = lhb_manager.get_kline_1min(code, prev_date, allow_network=False)
             
             if df is not None and not df.empty:
                 kline_data = df.to_dict('records')

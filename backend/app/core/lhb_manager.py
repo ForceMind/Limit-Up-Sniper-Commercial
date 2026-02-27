@@ -30,6 +30,8 @@ class LHBManager:
         }
         self.is_syncing = False
         self.hot_money_map = {}
+        self._kline_last_fetch_ts = {}
+        self._kline_last_attempt_ts = {}
         self.load_config()
         self.load_hot_money_map()
 
@@ -478,11 +480,13 @@ class LHBManager:
                 # if logger: logger(f"Failed K-line {code} {date_str}: {e}")
                 pass
 
-    def get_kline_1min(self, code, date_str):
+    def get_kline_1min(self, code, date_str, min_refresh_seconds=600, allow_network=True):
         file_path = KLINE_DIR / f"{code}_{date_str}.csv"
         
         # If it's today, we always fetch fresh data to ensure we have the latest minutes
         is_today = date_str == datetime.now().strftime('%Y-%m-%d')
+        cache_key = f"{''.join(filter(str.isdigit, str(code)))}_{date_str}"
+        now_ts = time.time()
         cached_df = None
         
         if file_path.exists() and not is_today:
@@ -492,9 +496,25 @@ class LHBManager:
                 cached_df = pd.read_csv(file_path)
             except Exception:
                 cached_df = None
-            
+
+        if not allow_network:
+            return cached_df
+
+        interval = max(0, int(min_refresh_seconds or 0))
+        if is_today and cached_df is not None and not cached_df.empty:
+            last_fetch_ts = self._kline_last_fetch_ts.get(cache_key, 0)
+            if now_ts - last_fetch_ts < interval:
+                return cached_df
+
+        last_attempt_ts = self._kline_last_attempt_ts.get(cache_key, 0)
+        if now_ts - last_attempt_ts < interval:
+            if cached_df is not None and not cached_df.empty:
+                return cached_df
+            return None
+             
         # Try to fetch if missing or if it's today
         try:
+            self._kline_last_attempt_ts[cache_key] = now_ts
             # Format date for akshare
             start_point = datetime.strptime(date_str + " 09:00:00", "%Y-%m-%d %H:%M:%S")
             end_point = datetime.strptime(date_str + " 15:00:00", "%Y-%m-%d %H:%M:%S")
@@ -514,6 +534,7 @@ class LHBManager:
             
             if kline is not None and not kline.empty:
                 kline.to_csv(file_path, index=False)
+                self._kline_last_fetch_ts[cache_key] = now_ts
                 return kline
         except Exception as e:
             print(f"Error fetching kline for {code}: {e}")

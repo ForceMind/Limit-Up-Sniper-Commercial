@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends
+﻿from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -10,6 +10,8 @@ import os
 import shutil
 import asyncio
 import time
+import copy
+import threading
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -36,6 +38,15 @@ DATA_DIR = BASE_DIR / "data"
 
 # Ensure data dir exists
 DATA_DIR.mkdir(exist_ok=True)
+DAY_KLINE_CACHE_DIR = DATA_DIR / "kline_day_cache"
+DAY_KLINE_CACHE_DIR.mkdir(exist_ok=True)
+
+# Centralized cache policy:
+# user-facing APIs read from cache only; background tasks refresh network data.
+REALTIME_CACHE_INTERVAL_SEC = 20
+KLINE_BG_SCAN_INTERVAL_SEC = 60
+KLINE_MIN_REFRESH_SEC = 600
+DAY_KLINE_REFRESH_SEC = 3600
 
 # Initialize DB Tables
 database.Base.metadata.create_all(bind=database.engine)
@@ -47,10 +58,10 @@ app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
 app.include_router(payment.router, prefix="/api/payment", tags=["payment"])
 
-# CORS配置
+# CORS閰嶇疆
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许所有来源，生产环境应限制为前端域名
+    allow_origins=["*"],  # 鍏佽鎵€鏈夋潵婧愶紝鐢熶骇鐜搴旈檺鍒朵负鍓嶇鍩熷悕
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -181,7 +192,7 @@ async def user_operation_logger(request: Request, call_next):
 
 @app.get("/api/status")
 async def get_system_status():
-    """获取系统状态 (交易日/时间)"""
+    """鑾峰彇绯荤粺鐘舵€?(浜ゆ槗鏃?鏃堕棿)"""
     return {
         "status": "success",
         "is_trading_time": is_trading_time(),
@@ -192,7 +203,7 @@ async def get_system_status():
 
 @app.get("/api/news_history/clear")
 async def clear_news_history(range: str = "all", user: models.User = Depends(check_data_permission)):
-    """清理新闻历史
+    """娓呯悊鏂伴椈鍘嗗彶
     range: all, before_today, before_3d, before_7d
     """
     history_file = DATA_DIR / "news_history.json"
@@ -227,7 +238,7 @@ async def clear_news_history(range: str = "all", user: models.User = Depends(che
         return {"status": "error", "message": str(e)}
 
 def load_watchlist():
-    """加载复盘生成的关注列表"""
+    """鍔犺浇澶嶇洏鐢熸垚鐨勫叧娉ㄥ垪琛?"""
     file_path = DATA_DIR / "watchlist.json"
     if file_path.exists():
         try:
@@ -239,7 +250,7 @@ def load_watchlist():
     return []
 
 def save_watchlist(data):
-    """保存关注列表"""
+    """淇濆瓨鍏虫敞鍒楄〃"""
     file_path = DATA_DIR / "watchlist.json"
     try:
         with open(file_path, "w", encoding="utf-8") as f:
@@ -248,7 +259,7 @@ def save_watchlist(data):
         print(f"Error saving watchlist: {e}")
 
 def load_favorites():
-    """加载自选股列表 (长期关注)"""
+    """鍔犺浇鑷€夎偂鍒楄〃 (闀挎湡鍏虫敞)"""
     file_path = DATA_DIR / "favorites.json"
     if file_path.exists():
         try:
@@ -259,7 +270,7 @@ def load_favorites():
     return []
 
 def save_favorites(data):
-    """保存自选股列表"""
+    """淇濆瓨鑷€夎偂鍒楄〃"""
     file_path = DATA_DIR / "favorites.json"
     try:
         with open(file_path, "w", encoding="utf-8") as f:
@@ -289,16 +300,11 @@ def clean_watchlist():
     if len(new_list) > 100:
         new_list = new_list[:100]
         
-    # [新增] 每日清理逻辑: 如果是新的一天(9:00前)，清理掉昨天的"已剔除"或"过期"数据
-    # 这里简单判断: 如果列表里有数据，且当前时间是 08:30-09:15 之间，且数据是旧的(added_time < today_start)，则清理
-    # 为了简化，我们只清理明确标记为 Discarded 的
+    # Daily cleanup: keep non-discarded entries only.
     final_list = []
     for item in new_list:
         if item.get('strategy_type') == 'Discarded':
-             # 如果是 Discarded，检查是否是今天生成的? 
-             # 实际上用户问"什么时候彻底删除"，我们可以定义为: 每次分析前(clean_watchlist被调用时)
-             # 如果状态是 Discarded，直接丢弃，不保留在列表中
-             continue
+            continue
         final_list.append(item)
     
     watchlist_data = final_list
@@ -306,7 +312,7 @@ def clean_watchlist():
     reload_watchlist_globals()
 
 def reload_watchlist_globals():
-    """重新加载全局变量"""
+    """閲嶆柊鍔犺浇鍏ㄥ眬鍙橀噺"""
     global watchlist_data, watchlist_map, WATCH_LIST, favorites_data, favorites_map
     watchlist_data = load_watchlist()
     watchlist_map = {item['code']: item for item in watchlist_data}
@@ -319,7 +325,7 @@ def reload_watchlist_globals():
 
 @app.get("/api/news_history")
 async def get_news_history(user: models.User = Depends(check_data_permission)):
-    """获取新闻历史记录"""
+    """鑾峰彇鏂伴椈鍘嗗彶璁板綍"""
     history_file = DATA_DIR / "news_history.json"
     if history_file.exists():
         try:
@@ -330,7 +336,7 @@ async def get_news_history(user: models.User = Depends(check_data_permission)):
             return {"status": "error", "message": str(e)}
     return {"status": "success", "data": []}
 
-# 全局变量
+# 鍏ㄥ眬鍙橀噺
 watchlist_data = load_watchlist()
 watchlist_map = {item['code']: item for item in watchlist_data}
 favorites_data = load_favorites()
@@ -340,6 +346,16 @@ limit_up_pool_data = []
 broken_limit_pool_data = []
 intraday_pool_data = [] # New global for fast intraday pool
 ANALYSIS_CACHE = {} # Cache for AI analysis results: {code: {content: str, timestamp: float}}
+
+cache_lock = threading.Lock()
+stock_quotes_cache = []
+stock_quotes_cache_ts = 0.0
+indices_cache = []
+indices_cache_ts = 0.0
+market_sentiment_cache = {}
+market_sentiment_cache_ts = 0.0
+day_kline_refresh_ts = {}
+analysis_key_locks = {}
 
 def load_analysis_cache():
     """Load AI analysis cache from disk"""
@@ -362,7 +378,7 @@ def save_analysis_cache():
         pass
 
 def cleanup_analysis_cache(max_age_days=7):
-    """清理超过指定天数的分析缓存"""
+    """娓呯悊瓒呰繃鎸囧畾澶╂暟鐨勫垎鏋愮紦瀛?"""
     global ANALYSIS_CACHE
     now = time.time()
     max_age_seconds = max_age_days * 86400
@@ -376,6 +392,238 @@ def cleanup_analysis_cache(max_age_days=7):
     if len(ANALYSIS_CACHE) < initial_count:
         save_analysis_cache()
         print(f"Cleanup: Removed {initial_count - len(ANALYSIS_CACHE)} expired analysis cache entries.")
+
+
+def _analysis_cache_is_expired(cache_entry, prompt_type: str, now: Optional[datetime] = None) -> bool:
+    """Decide whether a cached analysis is still valid for the given prompt type."""
+    if not cache_entry:
+        return True
+    timestamp = float(cache_entry.get("timestamp", 0) or 0)
+    if timestamp <= 0:
+        return True
+
+    cache_time = datetime.fromtimestamp(timestamp)
+    current_time = now or datetime.now()
+
+    if cache_time.date() < current_time.date():
+        return True
+
+    if prompt_type == "min_trading_signal":
+        if (
+            (cache_time.hour < 9 or (cache_time.hour == 9 and cache_time.minute < 30))
+            and (current_time.hour > 9 or (current_time.hour == 9 and current_time.minute >= 30))
+        ):
+            return True
+        return False
+
+    if prompt_type == "day_trading_signal":
+        return False
+
+    if cache_time.hour < 15 and current_time.hour >= 15:
+        return True
+    return False
+
+
+def _get_valid_analysis_content(cache_key: str, prompt_type: str, force: bool = False):
+    if force:
+        return None
+    cache_entry = ANALYSIS_CACHE.get(cache_key)
+    if not cache_entry:
+        return None
+    if _analysis_cache_is_expired(cache_entry, prompt_type):
+        return None
+    return cache_entry.get("content")
+
+
+def _get_analysis_lock(cache_key: str):
+    lock = analysis_key_locks.get(cache_key)
+    if lock is None:
+        lock = asyncio.Lock()
+        analysis_key_locks[cache_key] = lock
+    return lock
+
+
+def _set_stock_quotes_cache(rows):
+    global stock_quotes_cache, stock_quotes_cache_ts
+    with cache_lock:
+        stock_quotes_cache = rows or []
+        stock_quotes_cache_ts = time.time()
+
+
+def _get_stock_quotes_cache():
+    with cache_lock:
+        return copy.deepcopy(stock_quotes_cache)
+
+
+def refresh_indices_cache():
+    global indices_cache, indices_cache_ts
+    try:
+        rows = data_provider.fetch_indices() or []
+        with cache_lock:
+            indices_cache = rows
+            indices_cache_ts = time.time()
+    except Exception as e:
+        print(f"refresh_indices_cache error: {e}")
+
+
+def get_indices_cache():
+    with cache_lock:
+        return copy.deepcopy(indices_cache)
+
+
+def refresh_market_sentiment_cache():
+    global market_sentiment_cache, market_sentiment_cache_ts
+    try:
+        data = get_market_overview() or {}
+        with cache_lock:
+            market_sentiment_cache = data
+            market_sentiment_cache_ts = time.time()
+    except Exception as e:
+        print(f"refresh_market_sentiment_cache error: {e}")
+
+
+def get_market_sentiment_cache():
+    with cache_lock:
+        return copy.deepcopy(market_sentiment_cache)
+
+
+def _day_kline_cache_path(clean_code: str) -> Path:
+    return DAY_KLINE_CACHE_DIR / f"{clean_code}.json"
+
+
+def get_day_kline_from_cache(clean_code: str):
+    path = _day_kline_cache_path(clean_code)
+    if not path.exists():
+        return []
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+    except Exception:
+        pass
+    return []
+
+
+def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
+    now_ts = time.time()
+    last_ts = day_kline_refresh_ts.get(clean_code, 0)
+    if (not force) and now_ts - last_ts < DAY_KLINE_REFRESH_SEC:
+        return
+    day_kline_refresh_ts[clean_code] = now_ts
+
+    try:
+        import akshare as ak
+        import pandas as pd
+
+        end_date = datetime.now().strftime('%Y%m%d')
+        start_date = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
+        df = ak.stock_zh_a_hist(symbol=clean_code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
+        if df is None or df.empty:
+            return
+
+        columns = list(df.columns)
+        value_start = 1
+        if len(columns) > 1:
+            second_col = df.iloc[:, 1].astype(str).str.extract(r"(\d{6})", expand=False)
+            if second_col.notna().mean() > 0.5:
+                value_start = 2
+
+        def pick_col(candidates, fallback_index=None):
+            for c in candidates:
+                if c in df.columns:
+                    return c
+            if fallback_index is not None and len(columns) > fallback_index:
+                return columns[fallback_index]
+            return None
+
+        date_col = pick_col(["date", "day"], 0)
+        open_col = pick_col(["open"], value_start)
+        close_col = pick_col(["close"], value_start + 1)
+        high_col = pick_col(["high"], value_start + 2)
+        low_col = pick_col(["low"], value_start + 3)
+        volume_col = pick_col(["volume"], value_start + 4)
+        if not all([date_col, open_col, close_col, high_col, low_col]):
+            return
+
+        out_df = pd.DataFrame({
+            "date": df[date_col],
+            "open": df[open_col],
+            "close": df[close_col],
+            "high": df[high_col],
+            "low": df[low_col],
+        })
+        if volume_col:
+            out_df["volume"] = df[volume_col]
+        out_df["date"] = out_df["date"].astype(str).str.slice(0, 10)
+        for col in ["open", "close", "high", "low", "volume"]:
+            if col in out_df.columns:
+                out_df[col] = pd.to_numeric(out_df[col], errors="coerce")
+        out_df = out_df.dropna(subset=["date", "open", "close", "high", "low"])
+        if out_df.empty:
+            return
+
+        path = _day_kline_cache_path(clean_code)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(out_df.to_dict("records"), f, ensure_ascii=False)
+    except Exception as e:
+        print(f"refresh_day_kline_cache_for_code error {clean_code}: {e}")
+
+
+def _collect_kline_target_codes(max_count=180):
+    codes = set()
+    for c in WATCH_LIST or []:
+        if c:
+            codes.add(c)
+    for src in (limit_up_pool_data or []):
+        c = src.get("code")
+        if c:
+            codes.add(c)
+    for src in (intraday_pool_data or []):
+        c = src.get("code")
+        if c:
+            codes.add(c)
+    normalized = []
+    for c in codes:
+        nc = normalize_stock_code(str(c))
+        if nc:
+            normalized.append(nc)
+    normalized = list(dict.fromkeys(normalized))
+    return normalized[:max_count]
+
+
+async def realtime_cache_updater_task():
+    while True:
+        try:
+            await asyncio.to_thread(refresh_stock_quotes_cache)
+            await asyncio.to_thread(refresh_indices_cache)
+            await asyncio.to_thread(refresh_market_sentiment_cache)
+        except Exception as e:
+            print(f"realtime_cache_updater_task error: {e}")
+        await asyncio.sleep(REALTIME_CACHE_INTERVAL_SEC)
+
+
+async def kline_cache_updater_task():
+    while True:
+        try:
+            target_codes = _collect_kline_target_codes()
+            if target_codes:
+                date_str = datetime.now().strftime('%Y-%m-%d')
+                for code in target_codes:
+                    clean_code = "".join(filter(str.isdigit, code))
+                    if not clean_code:
+                        continue
+                    await asyncio.to_thread(
+                        lhb_manager.get_kline_1min,
+                        clean_code,
+                        date_str,
+                        KLINE_MIN_REFRESH_SEC,
+                        True,
+                    )
+                    await asyncio.to_thread(refresh_day_kline_cache_for_code, clean_code, False)
+        except Exception as e:
+            print(f"kline_cache_updater_task error: {e}")
+        await asyncio.sleep(KLINE_BG_SCAN_INTERVAL_SEC)
 
 async def update_intraday_pool():
     global intraday_pool_data
@@ -394,13 +642,13 @@ async def get_status():
     }
 
 @app.get("/api/add_watchlist")
-async def add_to_watchlist_api(code: str, name: str, reason: str = "手动添加", user: models.User = Depends(check_data_permission)):
+async def add_to_watchlist_api(code: str, name: str, reason: str = "鎵嬪姩娣诲姞", user: models.User = Depends(check_data_permission)):
     global favorites_data, watchlist_map
     
     # Check if exists in favorites
     for item in favorites_data:
         if item['code'] == code:
-            return {"status": "exists", "msg": "已在自选列表中"}
+            return {"status": "exists", "msg": "宸插湪鑷€夊垪琛ㄤ腑"}
             
     # Try to preserve existing info if it was in AI list
     existing_info = watchlist_map.get(code, {})
@@ -429,7 +677,7 @@ async def add_to_watchlist_api(code: str, name: str, reason: str = "手动添加
     save_favorites(favorites_data)
     reload_watchlist_globals()
     
-    return {"status": "ok", "msg": "添加成功"}
+    return {"status": "ok", "msg": "娣诲姞鎴愬姛"}
 
 @app.get("/api/remove_watchlist")
 async def remove_from_watchlist_api(code: str, user: models.User = Depends(check_data_permission)):
@@ -453,9 +701,9 @@ async def remove_from_watchlist_api(code: str, user: models.User = Depends(check
     
     if removed:
         reload_watchlist_globals()
-        return {"status": "ok", "msg": "删除成功"}
+        return {"status": "ok", "msg": "鍒犻櫎鎴愬姛"}
         
-    return {"status": "error", "msg": "未找到该股票"}
+    return {"status": "error", "msg": "鏈壘鍒拌鑲＄エ"}
 
 
 def load_market_pools():
@@ -512,7 +760,7 @@ async def update_market_pools_task():
                         if code in watchlist_map:
                             wl_item = watchlist_map[code]
                             # Priority: Manual Reason > AI Reason > Scanner Reason
-                            # Note: scanner uses 'reason' for "X连板"
+                            # Note: scanner uses 'reason' for "X杩炴澘"
                             # If manual/AI reason exists, maybe we append or replace? 
                             # User wants "reason" visible.
                             ai_reason = wl_item.get('reason') or wl_item.get('news_summary')
@@ -553,7 +801,7 @@ async def update_intraday_pool_task():
                     intraday_stocks, sealed_stocks = result
                     intraday_pool_data = intraday_stocks
                     
-                    # [Fix] 合并到关注列表，确保它们出现在主表且不会因为涨速下降而消失
+                    # Merge into watchlist to avoid disappearing after speed decay.
                     changed = False
                     for s in intraday_stocks:
                         if s['code'] not in watchlist_map:
@@ -561,7 +809,7 @@ async def update_intraday_pool_task():
                                 "code": s['code'],
                                 "name": s['name'],
                                 "concept": s['concept'],
-                                "news_summary": s['reason'], # 统一使用 news_summary
+                                "news_summary": s['reason'], # 缁熶竴浣跨敤 news_summary
                                 "strategy_type": "LimitUp",
                                 "added_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                                 "initial_score": s.get('score', 0)
@@ -571,11 +819,10 @@ async def update_intraday_pool_task():
                             changed = True
                     
                     if changed:
-                        # 更新全局监控列表并保存
                         WATCH_LIST = list(set(list(watchlist_map.keys()) + list(favorites_map.keys())))
                         await loop.run_in_executor(None, save_watchlist, watchlist_data)
                     
-                    # [New] 竞价列表清理逻辑 (10:00 后清理竞价策略股票)
+                    # [New] 绔炰环鍒楄〃娓呯悊閫昏緫 (10:00 鍚庢竻鐞嗙珵浠风瓥鐣ヨ偂绁?
                     if now.hour >= 10:
                         cleanup_changed = False
                         sealed_codes = {s['code'] for s in limit_up_pool_data}
@@ -583,7 +830,7 @@ async def update_intraday_pool_task():
                             if item.get('strategy_type') == 'Aggressive' and '已剔除' not in item.get('news_summary', ''):
                                 if item['code'] not in sealed_codes:
                                     item['strategy_type'] = 'Discarded'
-                                    item['news_summary'] = f"[竞价过期] {item.get('news_summary', '')}"
+                                    item['news_summary'] = f"[绔炰环杩囨湡] {item.get('news_summary', '')}"
                                     cleanup_changed = True
                         
                         if cleanup_changed:
@@ -609,7 +856,7 @@ if not WATCH_LIST:
     WATCH_LIST = ['sh600519', 'sz002405', 'sz300059']
 
 def refresh_watchlist():
-    """刷新全局监控列表"""
+    """鍒锋柊鍏ㄥ眬鐩戞帶鍒楄〃"""
     global watchlist_data, watchlist_map, WATCH_LIST
     watchlist_data = load_watchlist()
     watchlist_map = {item['code']: item for item in watchlist_data}
@@ -636,7 +883,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/api/search")
 async def search_stock(q: str, user: models.User = Depends(check_data_permission)):
     """
-    搜索股票 (支持代码、拼音、名称)
+    鎼滅储鑲＄エ (鏀寔浠ｇ爜銆佹嫾闊炽€佸悕绉?
     """
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, lambda: data_provider.search_stock(q))
@@ -670,16 +917,28 @@ async def api_favorite_quotes(codes: str = "", user: models.User = Depends(check
         return []
 
     unique_codes = list(dict.fromkeys(code_list))
-    try:
-        raw_stocks = data_provider.fetch_quotes(unique_codes)
-    except Exception:
-        return []
+    cached_quotes = _get_stock_quotes_cache()
+    cached_map = {}
+    for row in cached_quotes:
+        c = normalize_stock_code(str(row.get("code", "")))
+        if c:
+            cached_map[c] = copy.deepcopy(row)
+            digits = "".join(filter(str.isdigit, c))
+            if len(digits) == 6:
+                cached_map[digits] = copy.deepcopy(row)
 
     enriched = []
-    for stock in raw_stocks:
-        code = stock.get("code", "")
+    for req_code in unique_codes:
+        stock = copy.deepcopy(cached_map.get(req_code) or cached_map.get("".join(filter(str.isdigit, req_code))) or {})
+        code = normalize_stock_code(stock.get("code", req_code))
         if not code:
             continue
+        stock["code"] = code
+        stock.setdefault("name", req_code)
+        stock.setdefault("current", 0)
+        stock.setdefault("change_percent", 0)
+        stock.setdefault("turnover", 0)
+        stock.setdefault("circulation_value", 0)
         metrics = calculate_metrics(code)
         stock.update(metrics)
         stock["is_favorite"] = True
@@ -708,12 +967,12 @@ async def remove_watchlist_stat(payload: FavoriteStatRequest, user: models.User 
 
 @app.post("/api/add_stock")
 async def add_stock(code: str, user: models.User = Depends(check_data_permission)):
-    """手动添加股票到监控列表"""
+    """鎵嬪姩娣诲姞鑲＄エ鍒扮洃鎺у垪琛?"""
     global watchlist_data, watchlist_map, WATCH_LIST
     
     code = code.lower().strip()
     
-    # 自动补全前缀
+    # 鑷姩琛ュ叏鍓嶇紑
     if len(code) == 6 and code.isdigit():
         if code.startswith('6'):
             code = f"sh{code}"
@@ -722,17 +981,17 @@ async def add_stock(code: str, user: models.User = Depends(check_data_permission
         elif code.startswith('8') or code.startswith('4') or code.startswith('9'):
             code = f"bj{code}"
         else:
-            # 默认为 sh (或者报错)
+            # 榛樿涓?sh (鎴栬€呮姤閿?
             pass
     
-    # 简单的格式校验
+    # 绠€鍗曠殑鏍煎紡鏍￠獙
     if not (code.startswith('sh') or code.startswith('sz') or code.startswith('bj')):
         return {"status": "error", "message": "Invalid code format"}
         
-    # 如果已存在，强制更新为 Manual 策略
+    # 濡傛灉宸插瓨鍦紝寮哄埗鏇存柊涓?Manual 绛栫暐
     if code in watchlist_map:
         watchlist_map[code]['strategy_type'] = 'Manual'
-        watchlist_map[code]['news_summary'] = '手动添加 (覆盖)'
+        watchlist_map[code]['news_summary'] = '鎵嬪姩娣诲姞 (瑕嗙洊)'
         # Save
         try:
             file_path = DATA_DIR / "watchlist.json"
@@ -742,10 +1001,10 @@ async def add_stock(code: str, user: models.User = Depends(check_data_permission
             print(f"Error saving watchlist: {e}")
         return {"status": "success", "message": "Updated to Manual"}
         
-    # 计算高级指标
+    # 璁＄畻楂樼骇鎸囨爣
     metrics = calculate_metrics(code)
     
-    # 获取股票详细信息 (名称 + 行业/概念)
+    # 鑾峰彇鑲＄エ璇︾粏淇℃伅 (鍚嶇О + 琛屼笟/姒傚康)
     name, concept = data_provider.get_stock_info(code)
     
     # 添加新股票
@@ -754,7 +1013,7 @@ async def add_stock(code: str, user: models.User = Depends(check_data_permission
         "name": name, 
         "news_summary": "Manual Add",
         "concept": concept,
-        "initial_score": 5, # 默认中等分数
+        "initial_score": 5, # 榛樿涓瓑鍒嗘暟
         "strategy_type": "Manual",
         "seal_rate": metrics['seal_rate'],
         "broken_rate": metrics['broken_rate'],
@@ -789,22 +1048,22 @@ async def add_stock(code: str, user: models.User = Depends(check_data_permission
         
     return {"status": "success"}
 
-# 使用全局 Queue 来传递日志
 import queue
+# 使用全局 Queue 来传递日志
 log_queue = queue.Queue()
 
 async def log_broadcaster():
-    """从队列读取日志并广播"""
+    """浠庨槦鍒楄鍙栨棩蹇楀苟骞挎挱"""
     while True:
         try:
-            # 非阻塞获取
+            # Non-blocking read
             msg = log_queue.get_nowait()
             await ws_hub.broadcast_log(msg)
         except queue.Empty:
             await asyncio.sleep(0.1)
 
 def update_limit_up_pool_task():
-    """更新已涨停股票池"""
+    """鏇存柊宸叉定鍋滆偂绁ㄦ睜"""
     global limit_up_pool_data
     try:
         # Scan
@@ -818,9 +1077,9 @@ def update_limit_up_pool_task():
             metrics = calculate_metrics(code)
             
             # Check watchlist for reason
-            reason = "市场强势涨停"
+            reason = "甯傚満寮哄娍娑ㄥ仠"
             if code in watchlist_map:
-                reason = watchlist_map[code].get('news_summary', '自选股涨停')
+                reason = watchlist_map[code].get('news_summary', '鑷€夎偂娑ㄥ仠')
             
             stock['seal_rate'] = metrics['seal_rate']
             stock['broken_rate'] = metrics['broken_rate']
@@ -848,10 +1107,17 @@ async def startup_event():
     print("Startup: Updating base stock info...")
     add_runtime_log("Startup: Updating base stock info...")
     await asyncio.to_thread(data_provider.update_base_info)
+    # Warm core caches once at startup.
+    await asyncio.to_thread(refresh_stock_quotes_cache)
+    await asyncio.to_thread(refresh_indices_cache)
+    await asyncio.to_thread(refresh_market_sentiment_cache)
     
     asyncio.create_task(log_broadcaster())
     # Start background scheduler
     asyncio.create_task(scheduler_loop())
+    # Start centralized cache updater (all user APIs read these caches only)
+    asyncio.create_task(realtime_cache_updater_task())
+    asyncio.create_task(kline_cache_updater_task())
     # Start market pool updater
     asyncio.create_task(update_market_pools_task())
     # Start fast intraday scanner
@@ -859,42 +1125,41 @@ async def startup_event():
     # Start periodic cleanup task
     asyncio.create_task(periodic_cleanup_task())
     
-    # 启动时立即执行一次盘中扫描，确保列表不为空
-    print("Startup: Running initial intraday scan...")
+    # 鍚姩鏃剁珛鍗虫墽琛屼竴娆＄洏涓壂鎻忥紝纭繚鍒楄〃涓嶄负绌?    print("Startup: Running initial intraday scan...")
     add_runtime_log("Startup: Running initial intraday scan...")
     asyncio.create_task(run_initial_scan())
 
 async def periodic_cleanup_task():
-    """定期清理缓存文件"""
+    """瀹氭湡娓呯悊缂撳瓨鏂囦欢"""
     while True:
         try:
             print("Running periodic cleanup...")
-            # 1. 清理 AI 分析缓存 (7天)
+            # 1. 娓呯悊 AI 鍒嗘瀽缂撳瓨 (7澶?
             cleanup_analysis_cache(max_age_days=7)
-            # 2. 清理 AI 原始数据缓存 (7天)
+            # 2. 娓呯悊 AI 鍘熷鏁版嵁缂撳瓨 (7澶?
             ai_cache.cleanup(max_age_seconds=7 * 86400)
             
-            # 每 24 小时运行一次
+            # 每24小时运行一次
             await asyncio.sleep(86400)
         except Exception as e:
             print(f"Cleanup task error: {e}")
             await asyncio.sleep(3600)
 
 async def run_initial_scan():
-    """启动时立即运行一次扫描"""
+    """鍚姩鏃剁珛鍗宠繍琛屼竴娆℃壂鎻?"""
     try:
-        # 等待几秒确保其他组件就绪
+        # 绛夊緟鍑犵纭繚鍏朵粬缁勪欢灏辩华
         await asyncio.sleep(2)
-        # 仅在交易日且配置开启时执行初始扫描
+        # 浠呭湪浜ゆ槗鏃ヤ笖閰嶇疆寮€鍚椂鎵ц鍒濆鎵弿
         if is_market_open_day() and SYSTEM_CONFIG["auto_analysis_enabled"]:
             await asyncio.to_thread(execute_analysis, "intraday")
             print("Startup: Initial scan completed.")
             # Update last run time to prevent immediate re-run by scheduler
             SYSTEM_CONFIG["last_run_time"] = time.time()
         else:
-            print("启动: 跳过初始扫描 (非交易日或已禁用).")
+            print("鍚姩: 璺宠繃鍒濆鎵弿 (闈炰氦鏄撴棩鎴栧凡绂佺敤).")
     except Exception as e:
-        print(f"初始扫描错误: {e}")
+        print(f"鍒濆鎵弿閿欒: {e}")
 
 @app.get("/api/config")
 async def get_config(user: models.User = Depends(check_data_permission)):
@@ -1048,15 +1313,15 @@ async def scheduler_loop():
                     
                     if should_run:
                         try:
-                            mode_cn = "盘后复盘" if mode == "after_hours" else "盘中突击"
-                            SYSTEM_CONFIG["current_status"] = f"正在运行 {mode_cn}..."
+                            mode_cn = "鐩樺悗澶嶇洏" if mode == "after_hours" else "鐩樹腑绐佸嚮"
+                            SYSTEM_CONFIG["current_status"] = f"姝ｅ湪杩愯 {mode_cn}..."
                             # Update last_run_time BEFORE execution to prevent loop on error
                             SYSTEM_CONFIG["last_run_time"] = current_timestamp
                             
                             # Recalculate next run time immediately after update
                             SYSTEM_CONFIG["next_run_time"] = current_timestamp + interval_seconds
                             
-                            thread_logger(f">>> 触发定时分析: {mode}, 周期{interval_seconds/60:.0f}分, 回溯{lookback_hours}小时")
+                            thread_logger(f">>> 瑙﹀彂瀹氭椂鍒嗘瀽: {mode}, 鍛ㄦ湡{interval_seconds/60:.0f}鍒? 鍥炴函{lookback_hours}灏忔椂")
                             await asyncio.to_thread(execute_analysis, mode, lookback_hours)
                         except Exception as e:
                             print(f"Scheduler error: {e}")
@@ -1086,11 +1351,11 @@ async def scheduler_loop():
                 if lhb_manager.config['enabled'] and not lhb_manager.is_syncing:
                     # [Modified] Only run if today's data is missing
                     if not lhb_manager.has_data_for_today():
-                        thread_logger(f"[LHB] 启动定时同步任务 (18:00)...")
+                        thread_logger(f"[LHB] 鍚姩瀹氭椂鍚屾浠诲姟 (18:00)...")
                         loop = asyncio.get_event_loop()
                         loop.run_in_executor(None, lhb_manager.fetch_and_update_data, thread_logger)
                     else:
-                        thread_logger(f"[LHB] 今日数据已存在，跳过定时任务。")
+                        thread_logger("[LHB] 今日数据已存在，跳过定时任务。")
                     # Sleep to avoid multiple triggers
                     await asyncio.sleep(60)
 
@@ -1101,7 +1366,7 @@ async def scheduler_loop():
             await asyncio.sleep(60) # Sleep and retry
 
 def thread_logger(msg):
-    """线程安全的 logger"""
+    """绾跨▼瀹夊叏鐨?logger"""
     add_runtime_log(msg)
     log_queue.put(msg)
 
@@ -1122,9 +1387,9 @@ async def run_analysis(
     user: models.User = Depends(get_current_user), 
     db: Session = Depends(lambda: next(database.get_db()))
 ):
-    """触发复盘分析"""
+    """瑙﹀彂澶嶇洏鍒嗘瀽"""
     
-    # 1. 权限检查 & 扣费
+    # 1. 鏉冮檺妫€鏌?& 鎵ｈ垂
     limit_type = 'raid' if mode in ["intraday", "intraday_monitor"] else 'review'
     
     if limit_type == 'raid':
@@ -1132,14 +1397,14 @@ async def run_analysis(
     else:
         await check_review_permission(user, skip_quota=True)
     
-    # 2. 缓存检查 (5分钟) + 并发互斥，避免重复扣费和重复触发
+    # 2. 缂撳瓨妫€鏌?(5鍒嗛挓) + 骞跺彂浜掓枼锛岄伩鍏嶉噸澶嶆墸璐瑰拰閲嶅瑙﹀彂
     cache_key = "mid_day" if limit_type == 'raid' else "after_hours"
     lock = ANALYSIS_TRIGGER_LOCKS[cache_key]
     async with lock:
         last_time = LAST_ANALYSIS_TIME.get(cache_key, datetime.min)
         seconds_since_last = int((datetime.now() - last_time).total_seconds())
         if seconds_since_last < 300:
-            thread_logger(f"[Cache] {mode} 5分钟缓存命中，复用最近结果（{seconds_since_last}s 前）")
+            thread_logger(f"[Cache] {mode} 5鍒嗛挓缂撳瓨鍛戒腑锛屽鐢ㄦ渶杩戠粨鏋滐紙{seconds_since_last}s 鍓嶏級")
             return {
                 "status": "success",
                 "cached": True,
@@ -1147,7 +1412,7 @@ async def run_analysis(
                 "message": f"Returning cached {mode} data (updated {seconds_since_last}s ago)"
             }
 
-        # 3. 执行新的分析
+        # 3. 鎵ц鏂扮殑鍒嗘瀽
         if limit_type == 'raid':
             await check_raid_permission(user)
         else:
@@ -1162,7 +1427,7 @@ async def run_analysis(
 
 def execute_analysis(mode="after_hours", hours=None):
     try:
-        mode_name = "盘后复盘" if mode == "after_hours" else "盘中突击"
+        mode_name = "鐩樺悗澶嶇洏" if mode == "after_hours" else "鐩樹腑绐佸嚮"
         thread_logger(f">>> 开始执行{mode_name}任务 (回溯{hours if hours else '默认'}小时)...")
         
         # Clean watchlist before analysis (remove old/irrelevant)
@@ -1174,15 +1439,16 @@ def execute_analysis(mode="after_hours", hours=None):
         reload_watchlist_globals()
         thread_logger(f">>> {mode_name}任务完成，列表已更新 ({len(WATCH_LIST)} 个标的)。")
     except Exception as e:
-        thread_logger(f"!!! 分析任务出错: {e}")
+        thread_logger(f"!!! 鍒嗘瀽浠诲姟鍑洪敊: {e}")
         print(f"Analysis Error: {e}")
 
 
-def get_stock_quotes():
+def refresh_stock_quotes_cache():
     """
-    获取股票行情，使用统一的 DataProvider
+    鑾峰彇鑲＄エ琛屾儏锛屼娇鐢ㄧ粺涓€鐨?DataProvider
     """
     if not WATCH_LIST:
+        _set_stock_quotes_cache([])
         return []
         
     try:
@@ -1270,10 +1536,10 @@ def get_stock_quotes():
                 # Use AI info as base
                 stock['initial_score'] = ai_info.get("initial_score", 0)
                 stock['concept'] = ai_info.get("concept", stock.get('concept', '-'))
-                # 兼容 reason 和 news_summary
+                # 鍏煎 reason 鍜?news_summary
                 ai_curr_reason = ai_info.get("reason", ai_info.get("news_summary", ""))
                 stock['reason'] = ai_curr_reason if ai_curr_reason else stock.get('reason', '')
-                stock['news_summary'] = stock['reason'] # 确保前端能读取到详细逻辑
+                stock['news_summary'] = stock['reason'] # 纭繚鍓嶇鑳借鍙栧埌璇︾粏閫昏緫
                 
                 stock['seal_rate'] = ai_info.get("seal_rate", 0)
                 stock['broken_rate'] = ai_info.get("broken_rate", 0)
@@ -1293,8 +1559,8 @@ def get_stock_quotes():
                     if current_change >= limit_threshold:
                         ai_strategy = "LimitUp" # Promote to LimitUp view
                         # Prepend reason if not already there
-                        if "[弱转强]" not in stock['reason']:
-                            stock['reason'] = f"[弱转强] {stock['reason']}"
+                        if "[寮辫浆寮篯" not in stock['reason']:
+                            stock['reason'] = f"[寮辫浆寮篯 {stock['reason']}"
 
             # 2. Check Favorites
             if code in favorites_map:
@@ -1304,7 +1570,7 @@ def get_stock_quotes():
                 # If NOT in AI list, use Favorite info
                 if code not in watchlist_map:
                     stock['concept'] = fav_info.get("concept", stock.get('concept', '-'))
-                    stock['reason'] = fav_info.get("reason", "手动添加")
+                    stock['reason'] = fav_info.get("reason", "鎵嬪姩娣诲姞")
                     stock['initial_score'] = fav_info.get("initial_score", 0)
                     stock['added_time'] = fav_info.get("added_time", 0)
                     # Keep other metrics 0 or default
@@ -1341,14 +1607,19 @@ def get_stock_quotes():
             
             enriched_stocks.append(stock)
             
+        _set_stock_quotes_cache(enriched_stocks)
         return enriched_stocks
     except Exception as e:
         print(f"Error fetching quotes: {e}")
         return []
 
+def get_stock_quotes():
+    """Return cached quotes only (no network)."""
+    return _get_stock_quotes_cache()
+
 @app.post("/api/watchlist/remove")
 async def remove_from_watchlist(request: Request, user: models.User = Depends(check_data_permission)):
-    """从自选列表中移除股票"""
+    """浠庤嚜閫夊垪琛ㄤ腑绉婚櫎鑲＄エ"""
     global watchlist_data, watchlist_map, WATCH_LIST, favorites_data, favorites_map
     try:
         data = await request.json()
@@ -1383,8 +1654,8 @@ async def api_stocks(user: models.User = Depends(check_data_permission)):
 
 @app.get("/api/indices")
 async def api_indices(user: models.User = Depends(check_data_permission)):
-    """快速获取大盘指数"""
-    return data_provider.fetch_indices()
+    """蹇€熻幏鍙栧ぇ鐩樻寚鏁?"""
+    return get_indices_cache()
 
 @app.get("/api/limit_up_pool")
 async def api_limit_up_pool(user: models.User = Depends(check_data_permission)):
@@ -1395,24 +1666,13 @@ async def api_limit_up_pool(user: models.User = Depends(check_data_permission)):
 
 @app.get("/api/intraday_pool")
 async def api_intraday_pool(user: models.User = Depends(check_data_permission)):
-    """直接获取盘中打板扫描结果 (优先返回缓存)"""
-    global intraday_pool_data
-    if intraday_pool_data:
-        return intraday_pool_data
-        
-    # Fallback if empty (e.g. startup)
-    from app.core.market_scanner import scan_intraday_limit_up
-    loop = asyncio.get_event_loop()
-    stocks = await loop.run_in_executor(None, scan_intraday_limit_up)
-    if stocks:
-        intraday_pool_data = stocks
-    return stocks
+    """鐩存帴鑾峰彇鐩樹腑鎵撴澘鎵弿缁撴灉 (浼樺厛杩斿洖缂撳瓨)"""
+    return intraday_pool_data or []
 
 @app.get("/api/market_sentiment")
 async def api_market_sentiment(user: models.User = Depends(check_data_permission)):
-    """获取大盘情绪数据"""
-    loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(None, get_market_overview)
+    """鑾峰彇澶х洏鎯呯华鏁版嵁"""
+    return get_market_sentiment_cache()
 
 class StockAnalysisRequest(BaseModel):
     code: str
@@ -1430,7 +1690,7 @@ class StockAnalysisRequest(BaseModel):
 @app.post("/api/analyze_stock")
 async def api_analyze_stock(request: StockAnalysisRequest, user: models.User = Depends(get_current_user), db = Depends(lambda: next(database.get_db()))):
     """
-    调用AI分析单个股票 (支持缓存)
+    璋冪敤AI鍒嗘瀽鍗曚釜鑲＄エ (鏀寔缂撳瓨)
     """
     await check_ai_permission(user)
     user_service.consume_quota(db, user, 'ai')
@@ -1439,64 +1699,36 @@ async def api_analyze_stock(request: StockAnalysisRequest, user: models.User = D
     code = stock_data.get('code')
     force = stock_data.get('force', False)
     prompt_type = request.promptType
-    
+
     # Construct composite cache key
     cache_key = f"{code}_{prompt_type}"
-    
-    # Check Cache
-    if not force and cache_key in ANALYSIS_CACHE:
-        cache_entry = ANALYSIS_CACHE[cache_key]
-        cache_time = datetime.fromtimestamp(cache_entry['timestamp'])
-        now = datetime.now()
-        
-        # Expiry Logic
-        is_expired = False
-        
-        # 1. Basic Date Check: If cache is from yesterday, it's expired
-        if cache_time.date() < now.date():
-            is_expired = True
-        
-        # 2. Specific Logic based on promptType
-        if not is_expired:
-            if prompt_type == 'min_trading_signal':
-                # Minute analysis: Expire if new trading day starts (e.g. after 9:30)
-                # If cache is from before 9:30 today, and now is after 9:30, expire it?
-                # Or simply: Minute analysis is valid for the day, but if we are in a new day (handled by date check), it's gone.
-                # User requirement: "分时的分析新的交易日开盘后可以删除"
-                # This implies if I analyze at 10:00, and now it's 11:00, it's still valid.
-                # But if I analyze yesterday, it's invalid (handled by date).
-                # What if I analyze at 9:00 (pre-market)? It might be invalid after 9:30.
-                if cache_time.hour < 9 and cache_time.minute < 30 and (now.hour > 9 or (now.hour == 9 and now.minute >= 30)):
-                    is_expired = True
-            
-            elif prompt_type == 'day_trading_signal':
-                # Day analysis: "Wait until trading day is no longer visible" -> Keep for the whole day.
-                # Do NOT expire at 15:00.
-                pass
-            
-            else:
-                # Default logic for other types: Expire at 15:00
-                if cache_time.hour < 15 and now.hour >= 15:
-                    is_expired = True
-            
-        if not is_expired:
-            return {"status": "success", "analysis": cache_entry['content'], "cached": True}
 
-    loop = asyncio.get_event_loop()
-    # Pass promptType explicitly or let analyze_single_stock handle it from stock_data
-    # Pass api_key if provided
-    result = await loop.run_in_executor(None, lambda: analyze_single_stock(stock_data, prompt_type=prompt_type, api_key=api_key))
-    
-    # Update Cache
-    if result and not result.startswith("分析失败"):
-        ANALYSIS_CACHE[cache_key] = {
-            "content": result,
-            "timestamp": time.time()
-        }
-        # Persist cache to disk
-        save_analysis_cache()
-        
-    return {"status": "success", "analysis": result, "cached": False}
+    # Fast path: return cache if valid.
+    cached_content = _get_valid_analysis_content(cache_key, prompt_type, force=force)
+    if cached_content is not None:
+        return {"status": "success", "analysis": cached_content, "cached": True}
+
+    # Single-flight guard for high concurrency: one cache key => one live AI request.
+    analysis_lock = _get_analysis_lock(cache_key)
+    async with analysis_lock:
+        cached_content = _get_valid_analysis_content(cache_key, prompt_type, force=force)
+        if cached_content is not None:
+            return {"status": "success", "analysis": cached_content, "cached": True}
+
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            None,
+            lambda: analyze_single_stock(stock_data, prompt_type=prompt_type, api_key=api_key),
+        )
+
+        if result and not result.startswith("鍒嗘瀽澶辫触"):
+            ANALYSIS_CACHE[cache_key] = {
+                "content": result,
+                "timestamp": time.time()
+            }
+            save_analysis_cache()
+
+        return {"status": "success", "analysis": result, "cached": False}
 
 # --- LHB API ---
 class LHBConfigRequest(BaseModel):
@@ -1521,7 +1753,7 @@ async def sync_lhb_data(background_tasks: BackgroundTasks, days: Optional[int] =
         return {"status": "error", "message": "同步任务正在进行中"}
         
     background_tasks.add_task(lhb_manager.fetch_and_update_data, logger=thread_logger, force_days=days)
-    return {"status": "ok", "message": "龙虎榜同步已启动"}
+    return {"status": "ok", "message": "榫欒檸姒滃悓姝ュ凡鍚姩"}
 
 @app.get("/api/lhb/status")
 async def get_lhb_status(user: models.User = Depends(check_data_permission)):
@@ -1554,7 +1786,7 @@ async def analyze_lhb_daily_api(req: LHBAnalyzeRequest, user: models.User = Depe
 
 @app.get("/api/lhb/analysis")
 async def get_lhb_analysis_api(date: str, user: models.User = Depends(get_current_user)):
-    """获取已有的AI复盘结果 (如有)"""
+    """鑾峰彇宸叉湁鐨凙I澶嶇洏缁撴灉 (濡傛湁)"""
     await check_review_permission(user)
     cache_key = f"lhb_daily_analysis_{date}"
     cached = ai_cache.get(cache_key)
@@ -1609,7 +1841,7 @@ class AnalyzeRequest(BaseModel):
 
 @app.post("/api/lhb/fetch")
 async def fetch_lhb_data(background_tasks: BackgroundTasks, user: models.User = Depends(check_data_permission)):
-    """手动触发龙虎榜数据抓取"""
+    """鎵嬪姩瑙﹀彂榫欒檸姒滄暟鎹姄鍙?"""
     if lhb_manager.is_syncing:
         return {"status": "error", "message": "同步任务正在进行中，请稍后再试"}
     
@@ -1621,8 +1853,8 @@ async def fetch_lhb_data(background_tasks: BackgroundTasks, user: models.User = 
 @app.post("/api/analyze/stock")
 @app.post("/api/stock/analyze")
 async def analyze_stock_manual(request: AnalyzeRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
-    """手动触发个股AI分析"""
-    # 扣除次数
+    """鎵嬪姩瑙﹀彂涓偂AI鍒嗘瀽"""
+    # 鎵ｉ櫎娆℃暟
     await check_ai_permission(user)
     user_service.consume_quota(db, user, 'ai')
     
@@ -1638,22 +1870,20 @@ async def analyze_stock_manual(request: AnalyzeRequest, user: models.User = Depe
     }
     
     try:
-        # If turnover/circ_mv missing, try to fetch from market data
+        # If turnover/circ_mv missing, fill from in-memory quote cache only.
         if stock_data['turnover'] is None or stock_data['circulation_value'] is None:
-            df = data_provider.fetch_all_market_data()
-            if df is not None and not df.empty:
-                clean_req_code = "".join(filter(str.isdigit, request.code))
-                for _, row in df.iterrows():
-                    row_code = str(row['code'])
-                    clean_row_code = "".join(filter(str.isdigit, row_code))
-                    if clean_req_code == clean_row_code:
-                        stock_data['current'] = float(row['current'])
-                        stock_data['change_percent'] = float(row['change_percent'])
-                        if stock_data['turnover'] is None:
-                            stock_data['turnover'] = float(row.get('turnover', 0))
-                        if stock_data['circulation_value'] is None:
-                            stock_data['circulation_value'] = float(row.get('circ_mv', 0))
-                        break
+            clean_req_code = "".join(filter(str.isdigit, request.code))
+            for row in _get_stock_quotes_cache():
+                row_code = str(row.get("code", ""))
+                clean_row_code = "".join(filter(str.isdigit, row_code))
+                if clean_req_code == clean_row_code:
+                    stock_data['current'] = float(row.get('current', 0) or 0)
+                    stock_data['change_percent'] = float(row.get('change_percent', 0) or 0)
+                    if stock_data['turnover'] is None:
+                        stock_data['turnover'] = float(row.get('turnover', 0) or 0)
+                    if stock_data['circulation_value'] is None:
+                        stock_data['circulation_value'] = float(row.get('circulation_value', 0) or 0)
+                    break
     except:
         pass
 
@@ -1662,64 +1892,24 @@ async def analyze_stock_manual(request: AnalyzeRequest, user: models.User = Depe
 
 @app.get("/api/stock/kline")
 async def get_stock_kline(code: str, type: str = "1min", user: models.User = Depends(check_data_permission)):
-    """获取个股K线数据"""
+    """鑾峰彇涓偂K绾挎暟鎹?"""
     try:
         clean_code = "".join(filter(str.isdigit, code))
         if type == "1min":
             for offset in range(0, 5):
                 date_str = (datetime.now() - timedelta(days=offset)).strftime('%Y-%m-%d')
-                df = lhb_manager.get_kline_1min(clean_code, date_str)
+                df = lhb_manager.get_kline_1min(
+                    clean_code,
+                    date_str,
+                    KLINE_MIN_REFRESH_SEC,
+                    False,
+                )
                 if df is not None and not df.empty:
                     return {"status": "success", "data": df.to_dict('records')}
         elif type == "day":
-            import akshare as ak
-            import pandas as pd
-            end_date = datetime.now().strftime('%Y%m%d')
-            start_date = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
-            df = ak.stock_zh_a_hist(symbol=clean_code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
-            if df is not None and not df.empty:
-                columns = list(df.columns)
-                value_start = 1
-                if len(columns) > 1:
-                    second_col = df.iloc[:, 1].astype(str).str.extract(r"(\d{6})", expand=False)
-                    if second_col.notna().mean() > 0.5:
-                        value_start = 2
-
-                def pick_col(candidates, fallback_index=None):
-                    for c in candidates:
-                        if c in df.columns:
-                            return c
-                    if fallback_index is not None and len(columns) > fallback_index:
-                        return columns[fallback_index]
-                    return None
-
-                date_col = pick_col(["date", "day"], 0)
-                open_col = pick_col(["open"], value_start)
-                close_col = pick_col(["close"], value_start + 1)
-                high_col = pick_col(["high"], value_start + 2)
-                low_col = pick_col(["low"], value_start + 3)
-                volume_col = pick_col(["volume"], value_start + 4)
-
-                if all([date_col, open_col, close_col, high_col, low_col]):
-                    out_df = pd.DataFrame({
-                        "date": df[date_col],
-                        "open": df[open_col],
-                        "close": df[close_col],
-                        "high": df[high_col],
-                        "low": df[low_col],
-                    })
-                    if volume_col:
-                        out_df["volume"] = df[volume_col]
-                    out_df["date"] = out_df["date"].astype(str).str.slice(0, 10)
-                    for col in ["open", "close", "high", "low", "volume"]:
-                        if col in out_df.columns:
-                            out_df[col] = pd.to_numeric(out_df[col], errors="coerce")
-                    out_df = out_df.dropna(subset=["date", "open", "close", "high", "low"])
-                    if not out_df.empty:
-                        return {"status": "success", "data": out_df.to_dict('records')}
-                # Rename columns to match standard
-                df = df.rename(columns={"日期": "date", "开盘": "open", "收盘": "close", "最高": "high", "最低": "low", "成交量": "volume"})
-                return {"status": "success", "data": df.to_dict('records')}
+            rows = get_day_kline_from_cache(clean_code)
+            if rows:
+                return {"status": "success", "data": rows}
                 
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -1728,7 +1918,7 @@ async def get_stock_kline(code: str, type: str = "1min", user: models.User = Dep
 
 @app.get("/api/stock/ai_markers")
 async def get_ai_markers(code: str, type: str = None, user: models.User = Depends(check_data_permission)):
-    """获取个股的AI分析历史标记"""
+    """鑾峰彇涓偂鐨凙I鍒嗘瀽鍘嗗彶鏍囪"""
     # Determine priority based on type
     keys = []
     if type == 'day':
@@ -1779,3 +1969,4 @@ async def get_ai_markers(code: str, type: str = None, user: models.User = Depend
 # Must be last to not override API routes
 if FRONTEND_DIR.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
+
