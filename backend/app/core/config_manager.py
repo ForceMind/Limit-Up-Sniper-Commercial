@@ -92,6 +92,7 @@ def load_config():
                 # Update only persistent fields
                 for key in ["auto_analysis_enabled", "use_smart_schedule", "fixed_interval_minutes",
                            "schedule_plan", "news_auto_clean_enabled", "news_auto_clean_days",
+                           "last_run_time", "next_run_time",
                            "email_config", "api_keys", "community_config", "referral_config", "pricing_config"]:
                     if key in saved_config:
                         SYSTEM_CONFIG[key] = saved_config[key]
@@ -117,6 +118,8 @@ def save_config():
                 "auto_analysis_enabled": SYSTEM_CONFIG["auto_analysis_enabled"],
                 "use_smart_schedule": SYSTEM_CONFIG["use_smart_schedule"],
                 "fixed_interval_minutes": SYSTEM_CONFIG["fixed_interval_minutes"],
+                "last_run_time": SYSTEM_CONFIG.get("last_run_time", 0),
+                "next_run_time": SYSTEM_CONFIG.get("next_run_time", 0),
                 "schedule_plan": SYSTEM_CONFIG.get("schedule_plan", DEFAULT_SCHEDULE),
                 "news_auto_clean_enabled": SYSTEM_CONFIG.get("news_auto_clean_enabled", True),
                 "news_auto_clean_days": SYSTEM_CONFIG.get("news_auto_clean_days", 14),

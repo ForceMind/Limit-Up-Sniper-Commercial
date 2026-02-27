@@ -37,6 +37,15 @@ class LHBManager:
         self._kline_error_suppressed = 0
         self._kline_error_window_seconds = 60
         self._kline_error_max_logs = 8
+        self._kline_pause_until_ts = 0.0
+        self._kline_pause_reason = ""
+        self._kline_pause_log_ts = 0.0
+        self._kline_fail_window_start = 0.0
+        self._kline_fail_window_count = 0
+        self._kline_fail_window_seconds = 60
+        self._kline_fail_trigger_count = 3
+        self._kline_pause_seconds = 1800
+        self._kline_pause_seconds_hard = 3600
         self.load_config()
         self.load_hot_money_map()
 
@@ -500,6 +509,62 @@ class LHBManager:
         else:
             self._kline_error_suppressed += 1
 
+    def _is_hard_network_error(self, err) -> bool:
+        text = str(err or "").lower()
+        keywords = [
+            "remotedisconnected",
+            "connection aborted",
+            "connection reset",
+            "timed out",
+            "read timed out",
+            "too many requests",
+            "forbidden",
+            "blocked",
+        ]
+        return any(k in text for k in keywords)
+
+    def _activate_kline_pause(self, seconds: int, reason: str = ""):
+        now_ts = time.time()
+        pause_s = max(60, int(seconds or 0))
+        until_ts = now_ts + pause_s
+        if until_ts > self._kline_pause_until_ts:
+            self._kline_pause_until_ts = until_ts
+            self._kline_pause_reason = str(reason or "").strip()
+        # Reduce duplicate "paused" logs to at most once per minute.
+        if now_ts - self._kline_pause_log_ts >= 60:
+            remain = int(max(0, self._kline_pause_until_ts - now_ts))
+            msg = f"[龙虎榜] 检测到上游异常，暂停K线网络抓取 {remain}s"
+            if self._kline_pause_reason:
+                msg += f"（原因: {self._kline_pause_reason}）"
+            print(msg)
+            self._kline_pause_log_ts = now_ts
+
+    def _register_kline_network_error(self, err):
+        now_ts = time.time()
+        if self._is_hard_network_error(err):
+            self._activate_kline_pause(self._kline_pause_seconds_hard, "连接被远端中断/疑似反爬")
+            return
+
+        if now_ts - self._kline_fail_window_start >= self._kline_fail_window_seconds:
+            self._kline_fail_window_start = now_ts
+            self._kline_fail_window_count = 0
+        self._kline_fail_window_count += 1
+        if self._kline_fail_window_count >= self._kline_fail_trigger_count:
+            self._activate_kline_pause(self._kline_pause_seconds, "短时失败过多")
+            self._kline_fail_window_count = 0
+            self._kline_fail_window_start = now_ts
+
+    def register_external_kline_failure(self, err):
+        self._register_kline_network_error(err)
+
+    def is_kline_network_paused(self) -> bool:
+        now_ts = time.time()
+        return now_ts < self._kline_pause_until_ts
+
+    def get_kline_pause_remaining_seconds(self) -> int:
+        now_ts = time.time()
+        return int(max(0, self._kline_pause_until_ts - now_ts))
+
     def get_kline_1min(self, code, date_str, min_refresh_seconds=600, allow_network=True):
         file_path = KLINE_DIR / f"{code}_{date_str}.csv"
         
@@ -518,6 +583,13 @@ class LHBManager:
                 cached_df = None
 
         if not allow_network:
+            return cached_df
+        if self.is_kline_network_paused():
+            now_ts = time.time()
+            if now_ts - self._kline_pause_log_ts >= 60:
+                remain = self.get_kline_pause_remaining_seconds()
+                print(f"[龙虎榜] K线网络抓取暂停中，剩余 {remain}s")
+                self._kline_pause_log_ts = now_ts
             return cached_df
 
         interval = max(0, int(min_refresh_seconds or 0))
@@ -555,9 +627,12 @@ class LHBManager:
             if kline is not None and not kline.empty:
                 kline.to_csv(file_path, index=False)
                 self._kline_last_fetch_ts[cache_key] = now_ts
+                self._kline_fail_window_count = 0
+                self._kline_fail_window_start = now_ts
                 return kline
         except Exception as e:
             self._log_kline_fetch_error(code, e)
+            self._register_kline_network_error(e)
 
         # Today's fetch may temporarily fail; keep using the last cached file.
         if cached_df is not None and not cached_df.empty:

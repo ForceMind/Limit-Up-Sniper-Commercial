@@ -517,6 +517,8 @@ def get_day_kline_from_cache(clean_code: str):
 
 
 def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
+    if lhb_manager.is_kline_network_paused():
+        return
     now_ts = time.time()
     last_ts = day_kline_refresh_ts.get(clean_code, 0)
     if (not force) and now_ts - last_ts < DAY_KLINE_REFRESH_SEC:
@@ -594,6 +596,7 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
             print(f"[K线] 日K刷新失败 {clean_code}: {e}")
         else:
             kline_error_suppressed += 1
+        lhb_manager.register_external_kline_failure(e)
 
 
 def _collect_kline_target_codes(max_count=180):
@@ -643,8 +646,18 @@ async def kline_cache_updater_task():
     global kline_update_cursor
     while True:
         try:
+            if lhb_manager.is_kline_network_paused():
+                await asyncio.sleep(KLINE_BG_SCAN_INTERVAL_SEC)
+                continue
+
             target_codes = _collect_kline_target_codes()
             if target_codes:
+                now = datetime.now()
+                is_trade_window = (
+                    now.weekday() < 5
+                    and (now.hour > 9 or (now.hour == 9 and now.minute >= 30))
+                    and now.hour < 15
+                )
                 date_str = datetime.now().strftime('%Y-%m-%d')
                 cycle_codes, kline_update_cursor = _slice_codes_for_cycle(
                     target_codes,
@@ -660,9 +673,13 @@ async def kline_cache_updater_task():
                         clean_code,
                         date_str,
                         KLINE_MIN_REFRESH_SEC,
-                        True,
+                        is_trade_window,
                     )
+                    if lhb_manager.is_kline_network_paused():
+                        break
                     await asyncio.to_thread(refresh_day_kline_cache_for_code, clean_code, False)
+                    if lhb_manager.is_kline_network_paused():
+                        break
         except Exception as e:
             print(f"K线缓存更新任务错误: {e}")
         await asyncio.sleep(KLINE_BG_SCAN_INTERVAL_SEC)
@@ -1227,19 +1244,73 @@ async def periodic_cleanup_task():
             print(f"清理任务错误: {e}")
             await asyncio.sleep(3600)
 
+
+def _resolve_runtime_interval(now: datetime):
+    """
+    返回当前应使用的调度周期（秒）与模式。
+    模式可能为: intraday / after_hours / none
+    """
+    if not SYSTEM_CONFIG.get("use_smart_schedule", True):
+        interval_seconds = max(1, int(SYSTEM_CONFIG.get("fixed_interval_minutes", 60) or 60)) * 60
+        if (now.hour > 9 or (now.hour == 9 and now.minute >= 30)) and now.hour < 15:
+            mode = "intraday"
+        else:
+            mode = "after_hours"
+        return interval_seconds, mode
+
+    current_time_str = now.strftime("%H:%M")
+    interval_seconds = 3600
+    mode = "after_hours"
+    for rule in SYSTEM_CONFIG.get("schedule_plan", DEFAULT_SCHEDULE):
+        start = str(rule.get("start", "00:00"))
+        end = str(rule.get("end", "00:00"))
+        in_range = False
+        if start <= end:
+            if start <= current_time_str < end:
+                in_range = True
+        else:
+            if start <= current_time_str or current_time_str < end:
+                in_range = True
+        if not in_range:
+            continue
+        mode = str(rule.get("mode", "after_hours") or "after_hours")
+        interval_seconds = max(1, int(rule.get("interval", 60) or 60)) * 60
+        break
+
+    if mode == "none":
+        interval_seconds = 999999
+    return interval_seconds, mode
+
+
 async def run_initial_scan():
     """启动时立即运行一次扫描"""
     try:
         # 等待几秒确保其他组件就绪
         await asyncio.sleep(2)
-        # 仅在交易日且配置开启时执行初始扫描
-        if is_market_open_day() and SYSTEM_CONFIG["auto_analysis_enabled"]:
-            await asyncio.to_thread(execute_analysis, "intraday")
-            print("启动：首次扫描完成。")
-            # Update last run time to prevent immediate re-run by scheduler
-            SYSTEM_CONFIG["last_run_time"] = time.time()
-        else:
+        # 仅在交易日且配置开启时执行初始扫描；并严格按上次运行时间判断是否到期。
+        if not is_market_open_day() or not SYSTEM_CONFIG["auto_analysis_enabled"]:
             print("启动: 跳过初始扫描 (非交易日或已禁用).")
+            return
+
+        now = datetime.now()
+        interval_seconds, mode = _resolve_runtime_interval(now)
+        if mode == "none":
+            print("启动: 当前时段配置为暂停，跳过初始扫描。")
+            return
+
+        now_ts = time.time()
+        last_run_ts = float(SYSTEM_CONFIG.get("last_run_time", 0) or 0)
+        if last_run_ts > 0:
+            elapsed = max(0, now_ts - last_run_ts)
+            if elapsed < interval_seconds:
+                remain = int(interval_seconds - elapsed)
+                print(f"启动: 距离下次分析还有 {remain}s，跳过初始扫描。")
+                return
+
+        await asyncio.to_thread(execute_analysis, mode)
+        print("启动：首次扫描完成。")
+        SYSTEM_CONFIG["last_run_time"] = now_ts
+        save_config()
     except Exception as e:
         print(f"初始扫描错误: {e}")
 
@@ -1306,6 +1377,7 @@ async def scheduler_loop():
                 print("监控列表在1小时内刚更新，启动时跳过立即分析。")
                 # Set last_run_time to mtime so scheduler thinks it just ran
                 SYSTEM_CONFIG["last_run_time"] = mtime
+                save_config()
     except Exception as e:
         print(f"启动检查失败: {e}")
 
@@ -1385,6 +1457,7 @@ async def scheduler_loop():
             if SYSTEM_CONFIG["last_run_time"] > current_timestamp:
                 print(f"检测到 last_run_time 在未来，已重置: {SYSTEM_CONFIG['last_run_time']} -> {current_timestamp}")
                 SYSTEM_CONFIG["last_run_time"] = current_timestamp - interval_seconds # Force run if needed
+                save_config()
 
             # Update Next Run Time for UI
             # If we just ran (last_run_time is very close to now), next run is now + interval
@@ -1417,6 +1490,7 @@ async def scheduler_loop():
                             
                             # Recalculate next run time immediately after update
                             SYSTEM_CONFIG["next_run_time"] = current_timestamp + interval_seconds
+                            save_config()
                             
                             thread_logger(f">>> 触发定时分析: {mode}, 周期{interval_seconds/60:.0f}分钟, 回溯{lookback_hours}小时")
                             await asyncio.to_thread(execute_analysis, mode, lookback_hours)

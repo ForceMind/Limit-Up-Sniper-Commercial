@@ -4,6 +4,7 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -11,6 +12,7 @@ DATA_DIR = BASE_DIR / "data"
 USER_OP_LOG_FILE = DATA_DIR / "user_operation_logs.jsonl"
 
 _log_lock = threading.Lock()
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _safe_text(value: Any, max_len: int = 300) -> str:
@@ -36,7 +38,7 @@ def log_user_operation(
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
     entry: Dict[str, Any] = {
-        "time": datetime.utcnow().isoformat(),
+        "time": datetime.now(SHANGHAI_TZ).isoformat(timespec="seconds"),
         "actor": _safe_text(actor, 50),
         "action": _safe_text(action, 80),
         "status": _safe_text(status, 20),
