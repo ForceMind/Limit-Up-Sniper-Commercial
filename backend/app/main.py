@@ -1242,9 +1242,24 @@ async def run_initial_scan():
     except Exception as e:
         print(f"初始扫描错误: {e}")
 
+
+def _public_system_config():
+    safe = copy.deepcopy(SYSTEM_CONFIG)
+    safe.pop("api_keys", None)
+
+    # Keep email settings structure for compatibility, but never expose password.
+    email_cfg = safe.get("email_config")
+    if isinstance(email_cfg, dict):
+        email_cfg = dict(email_cfg)
+        email_cfg["smtp_password"] = ""
+        safe["email_config"] = email_cfg
+
+    return safe
+
+
 @app.get("/api/config")
 async def get_config(user: models.User = Depends(check_data_permission)):
-    return SYSTEM_CONFIG
+    return _public_system_config()
 
 class ConfigUpdate(BaseModel):
     auto_analysis_enabled: bool
@@ -1273,7 +1288,7 @@ async def update_config(config: ConfigUpdate, user: models.User = Depends(check_
     SYSTEM_CONFIG["last_run_time"] = time.time()
     
     save_config() # Persist changes
-    return {"status": "success", "config": SYSTEM_CONFIG}
+    return {"status": "success", "config": _public_system_config()}
 
 async def scheduler_loop():
     """Background scheduler for periodic tasks"""
