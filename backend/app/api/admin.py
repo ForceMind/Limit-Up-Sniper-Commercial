@@ -1613,7 +1613,7 @@ async def update_lhb_settings(
 ):
     lhb_manager.update_settings(payload.enabled, payload.days, payload.min_amount)
     add_runtime_log(
-        f"[龙虎榜] Updated settings: enabled={payload.enabled}, days={payload.days}, min_amount={payload.min_amount}"
+        f"[龙虎榜] 已更新配置: 启用={payload.enabled}, 天数={payload.days}, 最小金额={payload.min_amount}"
     )
     return {"status": "success", "config": lhb_manager.config}
 
@@ -1651,19 +1651,19 @@ async def sync_lhb_missing(
     if not missing_dates:
         return {
             "status": "no_missing",
-            "message": "No missing LHB dates in selected range.",
+            "message": "所选区间内无缺失的龙虎榜交易日。",
             "missing_dates": [],
         }
 
     if lhb_manager.is_syncing:
         return {
             "status": "busy",
-            "message": "LHB sync is already running.",
+            "message": "龙虎榜补数任务正在执行中。",
             "missing_dates": missing_dates,
         }
 
     add_runtime_log(
-        f"[龙虎榜] Start missing-date sync: {start_date} ~ {end_date}, count={len(missing_dates)}"
+        f"[龙虎榜] 启动缺失交易日补数: {start_date} ~ {end_date}, 共{len(missing_dates)}天"
     )
     background_tasks.add_task(
         lhb_manager.fetch_and_update_data,
@@ -1673,6 +1673,6 @@ async def sync_lhb_missing(
     )
     return {
         "status": "started",
-        "message": "Missing-date sync started.",
+        "message": "龙虎榜缺失交易日补数已启动。",
         "missing_dates": missing_dates,
     }

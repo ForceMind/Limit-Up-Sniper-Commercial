@@ -1058,7 +1058,7 @@ async def add_stock(code: str, user: models.User = Depends(check_data_permission
                 json.dump(watchlist_data, f, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"保存监控列表失败: {e}")
-        return {"status": "success", "message": "Updated to Manual"}
+        return {"status": "success", "message": "已更新为手动策略"}
         
     # 计算高级指标
     metrics = calculate_metrics(code)
@@ -1070,7 +1070,7 @@ async def add_stock(code: str, user: models.User = Depends(check_data_permission
     new_item = {
         "code": code,
         "name": name, 
-        "news_summary": "Manual Add",
+        "news_summary": "手动添加",
         "concept": concept,
         "initial_score": 5, # 默认中等分数
         "strategy_type": "Manual",
@@ -1483,7 +1483,7 @@ async def scheduler_loop():
                     
                     if should_run:
                         try:
-                            mode_cn = "盘后复盘" if mode == "after_hours" else "盘中突击"
+                            mode_cn = _mode_display_name(mode)
                             SYSTEM_CONFIG["current_status"] = f"正在执行 {mode_cn}..."
                             # Update last_run_time BEFORE execution to prevent loop on error
                             SYSTEM_CONFIG["last_run_time"] = current_timestamp
@@ -1492,7 +1492,7 @@ async def scheduler_loop():
                             SYSTEM_CONFIG["next_run_time"] = current_timestamp + interval_seconds
                             save_config()
                             
-                            thread_logger(f">>> 触发定时分析: {mode}, 周期{interval_seconds/60:.0f}分钟, 回溯{lookback_hours}小时")
+                            thread_logger(f">>> 触发定时分析: {mode_cn}，周期{interval_seconds/60:.0f}分钟，回溯{lookback_hours}小时")
                             await asyncio.to_thread(execute_analysis, mode, lookback_hours)
                         except Exception as e:
                             print(f"调度器错误: {e}")
@@ -1541,6 +1541,17 @@ def thread_logger(msg):
     add_runtime_log(msg)
     log_queue.put(msg)
 
+
+def _mode_display_name(mode: str) -> str:
+    value = str(mode or "").strip().lower()
+    if value == "after_hours":
+        return "盘后复盘"
+    if value in {"intraday", "intraday_monitor"}:
+        return "盘中突击"
+    if value == "none":
+        return "暂停"
+    return value or "未知模式"
+
 # Global Cache Timer
 LAST_ANALYSIS_TIME = {
     "mid_day": datetime.min,
@@ -1559,6 +1570,7 @@ async def run_analysis(
     db: Session = Depends(lambda: next(database.get_db()))
 ):
     """触发复盘分析"""
+    mode_cn = _mode_display_name(mode)
     
     # 1. 权限检查与扣费
     limit_type = 'raid' if mode in ["intraday", "intraday_monitor"] else 'review'
@@ -1575,12 +1587,12 @@ async def run_analysis(
         last_time = LAST_ANALYSIS_TIME.get(cache_key, datetime.min)
         seconds_since_last = int((datetime.now() - last_time).total_seconds())
         if seconds_since_last < 300:
-            thread_logger(f"[缓存] {mode} 5分钟缓存命中，复用最近结果（{seconds_since_last}s 前）")
+            thread_logger(f"[缓存] {mode_cn} 5分钟缓存命中，复用最近结果（{seconds_since_last}s 前）")
             return {
                 "status": "success",
                 "cached": True,
                 "seconds_since_last": seconds_since_last,
-                "message": f"Returning cached {mode} data (updated {seconds_since_last}s ago)"
+                "message": f"已返回缓存数据：{mode_cn}（{seconds_since_last}s 前更新）"
             }
 
         # 3. 执行新的分析
@@ -1594,11 +1606,11 @@ async def run_analysis(
     # Run in background to avoid blocking
     background_tasks.add_task(execute_analysis, mode)
     
-    return {"status": "success", "cached": False, "message": f"{mode} analysis started in background"}
+    return {"status": "success", "cached": False, "message": f"{mode_cn}任务已在后台启动"}
 
 def execute_analysis(mode="after_hours", hours=None):
     try:
-        mode_name = "盘后复盘" if mode == "after_hours" else "盘中突击"
+        mode_name = _mode_display_name(mode)
         thread_logger(f">>> 开始执行{mode_name}任务 (回溯{hours if hours else '默认'}小时)...")
         
         # Clean watchlist before analysis (remove old/irrelevant)

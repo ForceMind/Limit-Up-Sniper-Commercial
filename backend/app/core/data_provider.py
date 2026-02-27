@@ -18,6 +18,7 @@ class DataProvider:
         self._base_info_next_retry_ts = 0
         self._base_info_fail_cooldown_sec = 600
         self._base_info_last_error_log_ts = 0
+        self._base_info_skip_scan_log_ts = 0
         self._base_info_lock = threading.Lock()
         self._lock = threading.Lock() # Global lock for heavy operations (market overview)
 
@@ -543,7 +544,7 @@ class DataProvider:
             if now_ts < self._base_info_next_retry_ts:
                 return
             try:
-                self.log("[*] 正在从 AKShare 更新股票基础信息...")
+                self.log("[*] 正在从 AKShare 更新股票基础信息（用于流通市值与换手率计算）...")
                 df = ak.stock_zh_a_spot_em()
 
                 def _pick_col(candidates):
@@ -620,17 +621,21 @@ class DataProvider:
                         "circ_shares": circ_shares,
                     })
 
+                # 条数异常通常意味着上游接口返回结构变化或被限流，避免误判成功后触发全市场兜底扫描。
+                if len(valid_rows) < 500:
+                    raise ValueError(f"AKShare基础信息条数异常: {len(valid_rows)}")
+
                 self._base_info_df = pd.DataFrame(valid_rows)
                 self._base_info_ts = time.time()
                 self._base_info_next_retry_ts = 0
                 self._base_info_last_error_log_ts = 0
-                self.log(f"[*] 股票基础信息更新完成，已加载 {len(self._base_info_df)} 只股票。")
+                self.log(f"[*] 股票基础信息更新完成，已加载 {len(self._base_info_df)} 只股票（用于行情补全）。")
             except Exception as e:
                 now_ts = time.time()
                 self._base_info_next_retry_ts = now_ts + self._base_info_fail_cooldown_sec
                 if now_ts - self._base_info_last_error_log_ts >= 60:
                     wait_s = int(self._base_info_fail_cooldown_sec)
-                    self.log(f"[!] 从 AKShare 更新基础信息失败: {e}（{wait_s}s 后重试）")
+                    self.log(f"[!] 从 AKShare 更新基础信息失败: {e}（进入失败冷却，{wait_s}s 后重试）")
                     self._base_info_last_error_log_ts = now_ts
 
     def _fetch_sina_market_paged(self):
@@ -639,14 +644,25 @@ class DataProvider:
         Uses hq.sinajs.cn which is not blocked.
         """
         # 1. Ensure base info is available (refresh if older than 1 hour)
-        if self._base_info_df is None or time.time() - self._base_info_ts > 3600:
+        now_ts = time.time()
+        if self._base_info_df is None or now_ts - self._base_info_ts > 3600:
             self.update_base_info()
-            
+            now_ts = time.time()
+
         # 2. Prepare list
         if self._base_info_df is not None and not self._base_info_df.empty:
             candidates = self._base_info_df['code'].tolist()
             base_map = self._base_info_df.set_index('code').to_dict('index')
         else:
+            if now_ts < self._base_info_next_retry_ts:
+                # Base info failed and still in cooldown: avoid scanning huge synthetic universe.
+                if now_ts - self._base_info_skip_scan_log_ts >= 60:
+                    remain = int(max(0, self._base_info_next_retry_ts - now_ts))
+                    self.log(f"[*] 基础信息冷却中（剩余{remain}s），跳过全市场扫描并复用旧缓存")
+                    self._base_info_skip_scan_log_ts = now_ts
+                if self._last_market_df is not None:
+                    return self._last_market_df.copy()
+                return None
             candidates = self._generate_candidate_codes()
             base_map = {}
 

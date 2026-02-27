@@ -19,9 +19,9 @@ logger = logging.getLogger("payment")
 
 def send_email_notification(order, client_ip):
     """Send email notification using configured SMTP server."""
-    logger.info("======== NEW PAYMENT NOTIFICATION ========")
-    logger.info(f"Order: {order.order_code}")
-    logger.info(f"Amount: {order.amount}")
+    logger.info("======== 收到新支付通知 ========")
+    logger.info(f"订单号: {order.order_code}")
+    logger.info(f"金额: {order.amount}")
     add_runtime_log(f"[支付] 新订单通知: {order.order_code}, 金额={order.amount}, IP={client_ip}")
 
     # 1. Log to console/file
@@ -30,7 +30,7 @@ def send_email_notification(order, client_ip):
     # 2. Check if email is enabled
     email_config = SYSTEM_CONFIG.get("email_config", {})
     if not email_config.get("enabled"):
-        logger.info("Email notification disabled in config.")
+        logger.info("邮件通知未启用，已跳过发送。")
         return
 
     # 3. Try to send email
@@ -42,25 +42,25 @@ def send_email_notification(order, client_ip):
         smtp_port = int(email_config.get("smtp_port", 465))
 
         if not (sender_email and sender_password and recipient_email and smtp_server):
-            logger.error("Email config incomplete.")
+            logger.error("邮件配置不完整，无法发送通知。")
             return
 
         message = MIMEMultipart("alternative")
-        message["Subject"] = f"New Order: {order.order_code} - ¥{order.amount}"
+        message["Subject"] = f"新订单提醒: {order.order_code} - ¥{order.amount}"
         message["From"] = sender_email
         message["To"] = recipient_email
 
         text = f"""
-        New Order Received!
+        收到新的支付订单
 
-        Code: {order.order_code}
-        Amount: ¥{order.amount}
-        Version: {order.target_version}
-        Duration: {order.duration_days} days
-        User IP: {client_ip}
-        Time: {datetime.now()}
+        订单号: {order.order_code}
+        金额: ¥{order.amount}
+        版本: {order.target_version}
+        时长: {order.duration_days} 天
+        用户IP: {client_ip}
+        时间: {datetime.now()}
 
-        Please check Admin Panel to approve.
+        请前往后台管理页审核订单。
         """
 
         message.attach(MIMEText(text, "plain"))
@@ -77,10 +77,10 @@ def send_email_notification(order, client_ip):
                 server.login(sender_email, sender_password)
                 server.sendmail(sender_email, recipient_email, message.as_string())
 
-        logger.info(f"Email sent successfully to {recipient_email}")
+        logger.info(f"邮件发送成功: {recipient_email}")
 
     except Exception as e:
-        logger.error(f"Failed to send email: {e}")
+        logger.error(f"邮件发送失败: {e}")
 
 
 router = APIRouter()

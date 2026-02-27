@@ -26,6 +26,17 @@ DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "") # 请在环境变量中设�
 DEEPSEEK_API_URL = "https://api.deepseek.com/chat/completions"
 
 
+def _mode_display_name(mode: str) -> str:
+    value = str(mode or "").strip().lower()
+    if value in {"intraday", "intraday_monitor"}:
+        return "盘中突击"
+    if value == "after_hours":
+        return "盘后复盘"
+    if value == "none":
+        return "暂停"
+    return value or "未知模式"
+
+
 def _build_usage_meta(result):
     if not isinstance(result, dict):
         return {}
@@ -243,7 +254,7 @@ def get_cls_news(hours=12, logger=None):
             # time.sleep(1) 
             
         except Exception as e:
-            msg = f"[!] Error fetching news: {e}"
+            msg = f"[!] 抓取资讯失败: {e}"
             print(msg)
             if logger: logger(msg)
             break
@@ -352,12 +363,13 @@ def analyze_news_with_deepseek(news_batch, market_summary="", logger=None, mode=
     
     cached_result = ai_cache.get(cache_key)
     if cached_result:
-        msg = f"[*] 使用缓存的AI分析结果 (Key: {cache_key[:8]})..."
+        msg = f"[*] 使用缓存的AI分析结果 (缓存键: {cache_key[:8]})..."
         print(msg)
         if logger: logger(msg)
         return cached_result
 
-    msg = f"[*] 调用 AI 分析 {len(news_batch)} 条新闻及市场数据 ({mode})..."
+    mode_cn = _mode_display_name(mode)
+    msg = f"[*] 调用 AI 分析 {len(news_batch)} 条新闻及市场数据（{mode_cn}）..."
     print(msg)
     if logger: logger(msg)
 
@@ -495,7 +507,7 @@ def analyze_news_with_deepseek(news_batch, market_summary="", logger=None, mode=
                 raise ValueError("Content Risk")
                 
         if response.status_code != 200:
-            msg = f"[!] AI API Error: {response.text}"
+            msg = f"[!] AI接口调用失败: {response.text}"
             print(msg)
             if logger: logger(msg)
             return []
@@ -516,7 +528,7 @@ def analyze_news_with_deepseek(news_batch, market_summary="", logger=None, mode=
             return []
             
     except Exception as e:
-        msg = f"[!] Analysis Failed: {e}"
+        msg = f"[!] AI分析失败: {e}"
         print(msg)
         if logger: logger(msg)
         return {}
@@ -553,7 +565,7 @@ def analyze_news_with_deepseek(news_batch, market_summary="", logger=None, mode=
         
         return data
     except Exception as e:
-        if logger: logger(f"[!] 解析AI结果失败: {e}\nRaw Content: {content[:100]}...")
+        if logger: logger(f"[!] 解析AI结果失败: {e}\n原始内容: {content[:100]}...")
         return {}
 
 def analyze_single_stock(stock_data, logger=None, prompt_type='normal', api_key=None, force_update=False):
@@ -926,7 +938,8 @@ def analyze_single_stock(stock_data, logger=None, prompt_type='normal', api_key=
         return f"分析失败: {str(e)}"
 
 def generate_watchlist(logger=None, mode="after_hours", hours=None, update_callback=None):
-    msg = f"[-] 启动{mode}分析 (AI Powered)..."
+    mode_cn = _mode_display_name(mode)
+    msg = f"[-] 启动{mode_cn}分析..."
     print(msg)
     if logger: logger(msg)
     
@@ -948,7 +961,7 @@ def generate_watchlist(logger=None, mode="after_hours", hours=None, update_callb
     # Sort by timestamp descending
     news_items.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
     
-    msg = f"[-] 获取到 {len(news_items)} 条有效资讯 (CLS: {len(news_items_cls)}, EastMoney: {len(news_items_em)})。"
+    msg = f"[-] 获取到 {len(news_items)} 条有效资讯（财联社: {len(news_items_cls)}，东方财富: {len(news_items_em)}）。"
     print(msg)
     if logger: logger(msg)
     
@@ -1236,7 +1249,7 @@ def generate_watchlist(logger=None, mode="after_hours", hours=None, update_callb
                     if tag not in item.get('news_summary', ''):
                         item['news_summary'] = f"{tag} {item.get('news_summary', '')}"
     except Exception as e:
-        if logger: logger(f"[!] LHB integration failed: {e}")
+        if logger: logger(f"[!] 龙虎榜融合失败: {e}")
 
     # [Request 4] Batch fetch turnover for all stocks
     try:
@@ -1250,7 +1263,7 @@ def generate_watchlist(logger=None, mode="after_hours", hours=None, update_callb
                 if code in quote_map:
                     item['turnover'] = quote_map[code].get('turnover', 0)
     except Exception as e:
-        if logger: logger(f"[!] Failed to update turnover: {e}")
+        if logger: logger(f"[!] 更新换手率失败: {e}")
 
     # [Request 1] Sort: Manual (Newest First) > AI (Score Desc)
     def sort_key(item):
@@ -1400,7 +1413,7 @@ def analyze_daily_lhb(date_str, lhb_data, logger=None, force_update=False):
             ai_cache.set(cache_key, content, meta=_build_usage_meta(result))
             return content
         else:
-            return f"分析失败: API Error {response.status_code}"
+            return f"分析失败: AI接口返回错误 {response.status_code}"
     except Exception as e:
         return f"分析异常: {e}"
 
