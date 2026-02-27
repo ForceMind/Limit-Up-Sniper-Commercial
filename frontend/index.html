@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>涨停狙击手 (Limit-Up Sniper) v2.5.2</title>
+    <title>涨停狙击手 (Limit-Up Sniper) v2.5.3</title>
     <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <link rel="manifest" href="static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -1200,10 +1200,10 @@
                     </div>
                 </div>
                 <div class="grid grid-cols-2 gap-2">
-                    <button @click="showQQInviteModal = false" class="py-2 rounded border border-gray-300 text-sm">稍后再说</button>
+                    <button @click="closeQQInviteModal" class="py-2 rounded border border-gray-300 text-sm">稍后再说</button>
                     <button @click="copyQQGroupInfo" class="py-2 rounded bg-blue-600 text-white text-sm font-bold">复制群号</button>
                 </div>
-                <button v-if="qqInviteInfo.qq_group_link" @click="openQQGroupLink" class="w-full mt-2 py-2 rounded bg-emerald-600 text-white text-sm font-bold">一键加群</button>
+                <button v-if="qqInviteInfo.qq_group_link" @click="joinQQGroupAndContinue" class="w-full mt-2 py-2 rounded bg-emerald-600 text-white text-sm font-bold">一键加群</button>
             </div>
         </div>
 
@@ -1531,7 +1531,7 @@
                     isRegisteredAccount: false,
                     accountCanApplyTrial: false,
                     fingerprintId: '',
-                    frontendVersion: 'v2.5.2',
+                    frontendVersion: 'v2.5.3',
                     serverVersion: '获取中...',
                     loginLoading: false,
                     loadingChart: false,
@@ -1575,6 +1575,8 @@
                         qq_group_welcome_text: ''
                     },
                     showOnboardingModal: false,
+                    pendingOnboardingAfterQQ: false,
+                    pendingOnboardingForce: false,
                     onboardingStep: 0,
                     onboardingUsername: '',
                     onboardingSteps: [
@@ -1795,6 +1797,11 @@
                     if (!key) return;
                     if (forceStart) localStorage.removeItem(key);
                     if (localStorage.getItem(key) === '1') return;
+                    if (this.showQQInviteModal) {
+                        this.pendingOnboardingAfterQQ = true;
+                        this.pendingOnboardingForce = !!forceStart;
+                        return;
+                    }
                     this.onboardingUsername = this.displayUsername || localStorage.getItem('sniper_username') || '';
                     this.onboardingStep = 0;
                     this.showOnboardingModal = false;
@@ -1802,6 +1809,15 @@
                     setTimeout(() => {
                         this.showOnboardingModal = true;
                     }, 180);
+                },
+                closeQQInviteModal() {
+                    this.showQQInviteModal = false;
+                    if (this.pendingOnboardingAfterQQ) {
+                        const forceStart = !!this.pendingOnboardingForce;
+                        this.pendingOnboardingAfterQQ = false;
+                        this.pendingOnboardingForce = false;
+                        this.maybeStartOnboarding(forceStart);
+                    }
                 },
                 nextOnboardingStep() {
                     if (this.onboardingStep < this.onboardingSteps.length - 1) {
@@ -1926,9 +1942,14 @@
                     const link = (this.qqInviteInfo.qq_group_link || '').trim();
                     if (!link) {
                         this.showMsg('暂未配置QQ群链接', 'info');
-                        return;
+                        return false;
                     }
                     window.open(link, '_blank');
+                    return true;
+                },
+                joinQQGroupAndContinue() {
+                    this.openQQGroupLink();
+                    this.closeQQInviteModal();
                 },
                 // --- User & Auth Methods ---
                 normalizeStockCode(code) {
@@ -2157,10 +2178,17 @@
                                 qq_group_welcome_text: (data.qq_group_welcome_text || '').trim()
                             };
                             if (this.qqInviteInfo.qq_group_number || this.qqInviteInfo.qq_group_link) {
+                                this.pendingOnboardingAfterQQ = true;
+                                this.pendingOnboardingForce = true;
                                 this.showQQInviteModal = true;
+                            } else {
+                                this.pendingOnboardingAfterQQ = false;
+                                this.pendingOnboardingForce = false;
+                                this.maybeStartOnboarding(true);
                             }
-                            this.maybeStartOnboarding(true);
                         } else {
+                            this.pendingOnboardingAfterQQ = false;
+                            this.pendingOnboardingForce = false;
                             this.maybeStartOnboarding(false);
                         }
                         this.showMsg(mode === 'register' ? '注册成功' : '登录成功', 'success');
@@ -4005,7 +4033,7 @@
                 fetch(API_BASE_URL + '/api/status')
                     .then(res => res.json())
                     .then(data => {
-                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.5.0';
+                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.5.3';
                         if (data.status === 'success') {
                             const isMarketOpenDay = data.is_market_open_day;
                             
