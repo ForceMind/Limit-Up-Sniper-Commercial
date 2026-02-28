@@ -4,6 +4,7 @@ import os
 import json
 import time
 import random
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -46,8 +47,20 @@ class LHBManager:
         self._kline_fail_trigger_count = 3
         self._kline_pause_seconds = 1800
         self._kline_pause_seconds_hard = 3600
+        self._akshare_request_lock = threading.Lock()
+        self._akshare_last_request_ts = 0.0
+        self._akshare_min_interval_sec = 1.2
         self.load_config()
         self.load_hot_money_map()
+
+    def _throttle_akshare_request(self, min_interval_sec=None):
+        interval = self._akshare_min_interval_sec if min_interval_sec is None else max(0.0, float(min_interval_sec))
+        with self._akshare_request_lock:
+            now_ts = time.time()
+            wait_s = interval - (now_ts - self._akshare_last_request_ts)
+            if wait_s > 0:
+                time.sleep(wait_s)
+            self._akshare_last_request_ts = time.time()
 
     def load_hot_money_map(self):
         map_path = DATA_DIR / "seat_mappings.json"
@@ -142,6 +155,7 @@ class LHBManager:
             start_dt, end_dt = end_dt, start_dt
 
         try:
+            self._throttle_akshare_request()
             hist_df = ak.tool_trade_date_hist_sina()
             dates = hist_df['trade_date'].tolist()
             in_range = [d for d in dates if start_dt <= d <= end_dt]
@@ -228,6 +242,7 @@ class LHBManager:
                 start_date = end_date - timedelta(days=days * 1.5 + 20) # Increase buffer
                 
                 try:
+                    self._throttle_akshare_request()
                     tool_trade_date_hist_sina_df = ak.tool_trade_date_hist_sina()
                     trade_dates = tool_trade_date_hist_sina_df['trade_date'].tolist()
                     # Filter dates
@@ -286,6 +301,7 @@ class LHBManager:
                 
                 try:
                     # akshare: stock_lhb_detail_em (东方财富)
+                    self._throttle_akshare_request()
                     lhb_df = ak.stock_lhb_detail_em(start_date=date_str, end_date=date_str)
                     if lhb_df is None or lhb_df.empty:
                         log(f"  - akshare returned empty for {date_str}")
@@ -312,6 +328,7 @@ class LHBManager:
                         try:
                             # stock_lhb_stock_detail_em (Get details for specific date)
                             # flag="买入" to get buy seats. We can also get "卖出" if needed.
+                            self._throttle_akshare_request()
                             detail_df = ak.stock_lhb_stock_detail_em(symbol=stock_code, date=date_str, flag="买入")
                             if detail_df is None or detail_df.empty:
                                 time.sleep(0.2)
@@ -484,6 +501,7 @@ class LHBManager:
                 start_dt = date_str + " 09:00:00"
                 end_dt = date_str + " 15:00:00"
                 
+                self._throttle_akshare_request()
                 kline = ak.stock_zh_a_hist_min_em(symbol=code, start_date=start_dt, end_date=end_dt, period="1", adjust="qfq")
                 
                 if kline is not None and not kline.empty:
@@ -622,6 +640,7 @@ class LHBManager:
             # Remove non-digits from code just in case
             clean_code = "".join(filter(str.isdigit, str(code)))
             
+            self._throttle_akshare_request()
             kline = ak.stock_zh_a_hist_min_em(symbol=clean_code, start_date=start_dt, end_date=end_dt, period="1", adjust="qfq")
             
             if kline is not None and not kline.empty:

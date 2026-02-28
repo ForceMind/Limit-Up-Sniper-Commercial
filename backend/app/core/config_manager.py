@@ -45,6 +45,13 @@ SYSTEM_CONFIG = {
         "aliyun": "",
         "other": ""
     },
+    "data_provider_config": {
+        "biying_enabled": False,
+        "biying_license_key": "",
+        "biying_endpoint": "",
+        "biying_cert_path": "",
+        "biying_daily_limit": 200
+    },
     "community_config": {
         "qq_group_number": "",
         "qq_group_link": "",
@@ -93,7 +100,7 @@ def load_config():
                 for key in ["auto_analysis_enabled", "use_smart_schedule", "fixed_interval_minutes",
                            "schedule_plan", "news_auto_clean_enabled", "news_auto_clean_days",
                            "last_run_time", "next_run_time",
-                           "email_config", "api_keys", "community_config", "referral_config", "pricing_config"]:
+                           "email_config", "api_keys", "data_provider_config", "community_config", "referral_config", "pricing_config"]:
                     if key in saved_config:
                         SYSTEM_CONFIG[key] = saved_config[key]
         except Exception as e:
@@ -125,6 +132,7 @@ def save_config():
                 "news_auto_clean_days": SYSTEM_CONFIG.get("news_auto_clean_days", 14),
                 "email_config": SYSTEM_CONFIG.get("email_config", {}),
                 "api_keys": SYSTEM_CONFIG.get("api_keys", {}),
+                "data_provider_config": SYSTEM_CONFIG.get("data_provider_config", {}),
                 "community_config": SYSTEM_CONFIG.get("community_config", {}),
                 "referral_config": SYSTEM_CONFIG.get("referral_config", {}),
                 "pricing_config": SYSTEM_CONFIG.get("pricing_config", {})

@@ -34,6 +34,7 @@ def log_user_operation(
     detail: str = "",
     username: str = "",
     device_id: str = "",
+    device_info: str = "",
     ip: str = "",
     extra: Optional[Dict[str, Any]] = None,
 ) -> None:
@@ -46,6 +47,7 @@ def log_user_operation(
         "path": _safe_text(path, 180),
         "username": _safe_text(username, 64),
         "device_id": _safe_text(device_id, 80),
+        "device_info": _safe_text(device_info, 240),
         "ip": _safe_text(ip, 64),
         "detail": _safe_text(detail, 300),
     }

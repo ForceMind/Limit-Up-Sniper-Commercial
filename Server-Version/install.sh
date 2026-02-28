@@ -133,9 +133,9 @@ DATA_DIR="$APP_DIR/backend/data"
 mkdir -p "$DATA_DIR"
 CONFIG_FILE="$DATA_DIR/config.json"
 
-# 如果配置文件不存在，创建一个默认的(不包含 Key)
+# 如果配置文件不存在，创建一个默认文件
 if [ ! -f "$CONFIG_FILE" ]; then
-    cat > $CONFIG_FILE <<EOF
+    cat > "$CONFIG_FILE" <<EOF
 {
     "api_keys": {
         "deepseek": "",
@@ -147,10 +147,150 @@ if [ ! -f "$CONFIG_FILE" ]; then
     "fixed_interval_minutes": 60,
     "lhb_enabled": true,
     "lhb_days": 3,
-    "lhb_min_amount": 20000000
+    "lhb_min_amount": 20000000,
+    "data_provider_config": {
+        "biying_enabled": false,
+        "biying_license_key": "",
+        "biying_endpoint": "",
+        "biying_cert_path": "",
+        "biying_daily_limit": 200
+    }
 }
 EOF
 fi
+
+# 读取已有必盈配置，作为默认值
+BIYING_ENABLED_DEFAULT="false"
+BIYING_KEY_DEFAULT=""
+BIYING_ENDPOINT_DEFAULT=""
+BIYING_CERT_DEFAULT=""
+BIYING_DAILY_LIMIT_DEFAULT="200"
+eval "$(python3 - "$CONFIG_FILE" <<'PY'
+import json
+import shlex
+import sys
+
+path = sys.argv[1]
+cfg = {}
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        loaded = json.load(f)
+        if isinstance(loaded, dict):
+            cfg = loaded
+except Exception:
+    cfg = {}
+
+provider = cfg.get("data_provider_config") or {}
+
+def quote(v):
+    return shlex.quote(str(v if v is not None else ""))
+
+print("BIYING_ENABLED_DEFAULT=" + quote("true" if provider.get("biying_enabled") else "false"))
+print("BIYING_KEY_DEFAULT=" + quote(provider.get("biying_license_key", "")))
+print("BIYING_ENDPOINT_DEFAULT=" + quote(provider.get("biying_endpoint", "")))
+print("BIYING_CERT_DEFAULT=" + quote(provider.get("biying_cert_path", "")))
+try:
+    daily_limit = int(provider.get("biying_daily_limit", 200) or 200)
+except Exception:
+    daily_limit = 200
+if daily_limit < 1:
+    daily_limit = 200
+print("BIYING_DAILY_LIMIT_DEFAULT=" + quote(daily_limit))
+PY
+)"
+
+if [ "$BIYING_ENABLED_DEFAULT" = "true" ]; then
+    BIYING_ENABLED_HINT="Y"
+else
+    BIYING_ENABLED_HINT="N"
+fi
+
+read -p "是否启用必盈数据源? [y/N] (当前: $BIYING_ENABLED_HINT): " INPUT_BIYING_ENABLED
+case "$INPUT_BIYING_ENABLED" in
+    [Yy]|[Yy][Ee][Ss]) BIYING_ENABLED="true" ;;
+    [Nn]|[Nn][Oo]) BIYING_ENABLED="false" ;;
+    "") BIYING_ENABLED="$BIYING_ENABLED_DEFAULT" ;;
+    *) BIYING_ENABLED="$BIYING_ENABLED_DEFAULT" ;;
+esac
+
+if [ "$BIYING_ENABLED" = "true" ]; then
+    read -p "请输入必盈 License Key (回车使用当前值): " INPUT_BIYING_KEY
+    BIYING_LICENSE_KEY="${INPUT_BIYING_KEY:-$BIYING_KEY_DEFAULT}"
+    read -p "请输入必盈接口地址 (回车使用当前值): " INPUT_BIYING_ENDPOINT
+    BIYING_ENDPOINT="${INPUT_BIYING_ENDPOINT:-$BIYING_ENDPOINT_DEFAULT}"
+    read -p "请输入必盈证书路径 (可选，回车使用当前值): " INPUT_BIYING_CERT
+    BIYING_CERT_PATH="${INPUT_BIYING_CERT:-$BIYING_CERT_DEFAULT}"
+    read -p "请输入必盈每日调用上限 (默认/当前: $BIYING_DAILY_LIMIT_DEFAULT): " INPUT_BIYING_LIMIT
+    BIYING_DAILY_LIMIT="${INPUT_BIYING_LIMIT:-$BIYING_DAILY_LIMIT_DEFAULT}"
+else
+    BIYING_LICENSE_KEY="$BIYING_KEY_DEFAULT"
+    BIYING_ENDPOINT="$BIYING_ENDPOINT_DEFAULT"
+    BIYING_CERT_PATH="$BIYING_CERT_DEFAULT"
+    BIYING_DAILY_LIMIT="$BIYING_DAILY_LIMIT_DEFAULT"
+fi
+
+if ! [[ "$BIYING_DAILY_LIMIT" =~ ^[0-9]+$ ]] || [ "$BIYING_DAILY_LIMIT" -lt 1 ]; then
+    BIYING_DAILY_LIMIT=200
+fi
+
+# 合并写回配置，确保旧配置不会丢失
+python3 - "$CONFIG_FILE" "$API_KEY" "$BIYING_ENABLED" "$BIYING_LICENSE_KEY" "$BIYING_ENDPOINT" "$BIYING_CERT_PATH" "$BIYING_DAILY_LIMIT" <<'PY'
+import json
+import sys
+
+config_path = sys.argv[1]
+api_key = sys.argv[2]
+biying_enabled = sys.argv[3].lower() == "true"
+biying_license_key = sys.argv[4]
+biying_endpoint = sys.argv[5]
+biying_cert_path = sys.argv[6]
+try:
+    biying_daily_limit = int(sys.argv[7] or 200)
+except Exception:
+    biying_daily_limit = 200
+if biying_daily_limit < 1:
+    biying_daily_limit = 200
+
+config = {}
+try:
+    with open(config_path, "r", encoding="utf-8") as f:
+        loaded = json.load(f)
+        if isinstance(loaded, dict):
+            config = loaded
+except Exception:
+    config = {}
+
+api_keys = config.get("api_keys")
+if not isinstance(api_keys, dict):
+    api_keys = {}
+if api_key:
+    api_keys["deepseek"] = api_key
+else:
+    api_keys.setdefault("deepseek", "")
+api_keys.setdefault("aliyun", "")
+api_keys.setdefault("other", "")
+config["api_keys"] = api_keys
+
+provider = config.get("data_provider_config")
+if not isinstance(provider, dict):
+    provider = {}
+provider["biying_enabled"] = biying_enabled
+provider["biying_license_key"] = biying_license_key
+provider["biying_endpoint"] = biying_endpoint
+provider["biying_cert_path"] = biying_cert_path
+provider["biying_daily_limit"] = biying_daily_limit
+config["data_provider_config"] = provider
+
+config.setdefault("auto_analysis_enabled", False)
+config.setdefault("use_smart_schedule", True)
+config.setdefault("fixed_interval_minutes", 60)
+config.setdefault("lhb_enabled", True)
+config.setdefault("lhb_days", 3)
+config.setdefault("lhb_min_amount", 20000000)
+
+with open(config_path, "w", encoding="utf-8") as f:
+    json.dump(config, f, indent=2, ensure_ascii=False)
+PY
 
 # 5. 配置 Systemd 服务
 echo -e "${YELLOW}[4/5] 配置系统后台服务...${NC}"

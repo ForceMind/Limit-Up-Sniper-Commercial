@@ -13,6 +13,7 @@ import re
 import shutil
 import tempfile
 import zipfile
+import subprocess
 from pathlib import Path
 from app.core.config_manager import SYSTEM_CONFIG, save_config
 from app.core.lhb_manager import lhb_manager
@@ -964,6 +965,7 @@ class AdminConfigUpdate(BaseModel):
     lhb_min_amount: Optional[int] = None
     email_config: Optional[dict] = None
     api_keys: Optional[dict] = None
+    data_provider_config: Optional[dict] = None
     community_config: Optional[dict] = None
     referral_config: Optional[dict] = None
     pricing_config: Optional[dict] = None
@@ -1006,6 +1008,14 @@ async def get_admin_config(authorized: bool = Depends(verify_admin)):
             "aliyun": "",
             "other": ""
         }
+    if 'data_provider_config' not in config:
+        config['data_provider_config'] = {
+            "biying_enabled": False,
+            "biying_license_key": "",
+            "biying_endpoint": "",
+            "biying_cert_path": "",
+            "biying_daily_limit": 200,
+        }
     if 'community_config' not in config:
         config['community_config'] = {
             "qq_group_number": "",
@@ -1040,6 +1050,16 @@ async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depe
 
     if config.api_keys is not None:
         SYSTEM_CONFIG["api_keys"] = _merge_dict(SYSTEM_CONFIG.get("api_keys"), config.api_keys)
+
+    if config.data_provider_config is not None:
+        merged_provider_cfg = _merge_dict(SYSTEM_CONFIG.get("data_provider_config"), config.data_provider_config)
+        try:
+            merged_provider_cfg["biying_daily_limit"] = max(
+                1, min(int(merged_provider_cfg.get("biying_daily_limit", 200) or 200), 100000)
+            )
+        except Exception:
+            merged_provider_cfg["biying_daily_limit"] = 200
+        SYSTEM_CONFIG["data_provider_config"] = merged_provider_cfg
 
     if config.community_config is not None:
         SYSTEM_CONFIG["community_config"] = _merge_dict(SYSTEM_CONFIG.get("community_config"), config.community_config)
@@ -1324,6 +1344,39 @@ def _tail_file_lines(path: Path, max_lines: int) -> List[str]:
         return []
 
 
+def _tail_journal_lines(max_lines: int) -> List[str]:
+    safe_lines = max(1, min(int(max_lines or 200), 5000))
+    service_name = (os.getenv("SYSTEMD_SERVICE_NAME") or "limit-up-sniper").strip()
+    if not service_name:
+        return []
+    cmd = [
+        "journalctl",
+        "-u",
+        service_name,
+        "-n",
+        str(safe_lines),
+        "--no-pager",
+        "-o",
+        "short-iso",
+    ]
+    try:
+        proc = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=5,
+            check=False,
+        )
+        if proc.returncode != 0:
+            return []
+        lines = [x.rstrip("\n") for x in proc.stdout.splitlines() if x.strip()]
+        return lines[-safe_lines:]
+    except Exception:
+        return []
+
+
 def _safe_float(v: Any) -> float:
     try:
         return float(v or 0)
@@ -1417,13 +1470,17 @@ def _contains_ci(text: str, keyword: str) -> bool:
 @router.get("/logs/system")
 async def get_system_logs(lines: int = 200, authorized: bool = Depends(verify_admin)):
     safe_lines = max(20, min(int(lines or 200), 2000))
+    journal_logs = _tail_journal_lines(safe_lines)
     file_logs = _tail_file_lines(BASE_DIR / "app.log", safe_lines)
     runtime_logs = get_runtime_logs(limit=safe_lines)
 
-    merged = (file_logs + runtime_logs)[-safe_lines:]
+    merged = (journal_logs + file_logs + runtime_logs)[-safe_lines:]
     if not merged:
         merged = ["No system logs yet."]
-    return {"logs": merged}
+    return {
+        "logs": merged,
+        "source": "journalctl+app.log+runtime" if journal_logs else "app.log+runtime",
+    }
 
 
 @router.get("/logs/login")
@@ -1488,6 +1545,7 @@ async def get_user_operation_logs(
             candidate = " ".join([
                 str(row.get("username", "")).strip(),
                 str(row.get("device_id", "")).strip(),
+                str(row.get("device_info", "")).strip(),
                 str(row.get("ip", "")).strip(),
             ]).lower()
             if user_kw not in candidate:

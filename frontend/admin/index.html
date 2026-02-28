@@ -196,6 +196,39 @@
                             </div>
                         </section>
 
+                        <section class="mb-8 border-b border-gray-200 pb-8 bg-white p-6 rounded-lg shadow-sm">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
+                                <span class="text-emerald-500">📡</span> 数据源配置
+                            </h3>
+                            <div class="bg-emerald-50 border border-emerald-100 rounded-lg p-4 space-y-4">
+                                <label class="flex items-center gap-3 text-sm">
+                                    <input type="checkbox" v-model="config.data_provider_config.biying_enabled" class="w-4 h-4 text-emerald-600">
+                                    <span>启用必盈数据源（未配置完整时自动回退当前逻辑）</span>
+                                </label>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">License Key</label>
+                                        <input type="password" v-model="config.data_provider_config.biying_license_key" class="w-full border rounded p-2 text-sm font-mono" placeholder="例如: xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">接口地址</label>
+                                        <input type="text" v-model="config.data_provider_config.biying_endpoint" class="w-full border rounded p-2 text-sm" placeholder="https://api.biyingapi.com">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">证书路径（可选）</label>
+                                        <input type="text" v-model="config.data_provider_config.biying_cert_path" class="w-full border rounded p-2 text-sm font-mono" placeholder="/opt/limit-up-sniper/certs/biying.pem">
+                                    </div>
+                                    <div>
+                                        <label class="block text-xs text-gray-600 mb-1">每日调用上限</label>
+                                        <input type="number" min="1" max="100000" v-model.number="config.data_provider_config.biying_daily_limit" class="w-full border rounded p-2 text-sm">
+                                    </div>
+                                </div>
+                                <div class="text-xs text-gray-600">
+                                    已接入关联行业概念、实时行情（多股）、5分钟分时与日K历史；1分钟K线仍使用现有数据通道。
+                                </div>
+                            </div>
+                        </section>
+
                         <!-- Pricing Configuration -->
                         <section class="mb-8 border-b pb-8">
                             <h3 class="text-xl font-semibold mb-4 text-gray-700">价格配置</h3>
@@ -366,7 +399,7 @@
                 <div v-if="currentView === 'logs'" class="h-full flex flex-col p-4 max-w-7xl mx-auto space-y-6">
                     <!-- Tabs -->
                     <div class="flex gap-4 border-b border-gray-200 pb-2">
-                        <button @click="activeLogTab='system'; fetchLogs('system')" :class="activeLogTab=='system'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">系统日志 (Stdout)</button>
+                        <button @click="activeLogTab='system'; fetchLogs('system')" :class="activeLogTab=='system'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">系统日志 (journalctl)</button>
                         <button @click="activeLogTab='user_ops'; fetchLogs('user_ops')" :class="activeLogTab=='user_ops'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">用户操作日志</button>
                         <button @click="activeLogTab='ai_cache'; fetchLogs('ai_cache')" :class="activeLogTab=='ai_cache'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">AI 缓存监控</button>
                     </div>
@@ -406,7 +439,7 @@
                                         <th class="p-3">动作</th>
                                         <th class="p-3">接口</th>
                                         <th class="p-3">用户</th>
-                                        <th class="p-3">设备</th>
+                                        <th class="p-3">设备信息</th>
                                         <th class="p-3">IP</th>
                                         <th class="p-3">状态</th>
                                         <th class="p-3">详情</th>
@@ -419,7 +452,10 @@
                                         <td class="p-3 whitespace-nowrap">{{ log.action || '-' }}</td>
                                         <td class="p-3 font-mono text-xs">{{ (log.method || '-') + ' ' + (log.path || '-') }}</td>
                                         <td class="p-3 text-xs font-mono">{{ log.username || '-' }}</td>
-                                        <td class="p-3 text-xs font-mono">{{ log.device_id || '-' }}</td>
+                                        <td class="p-3 text-xs">
+                                            <div class="font-mono">{{ log.device_info || '-' }}</div>
+                                            <div class="text-gray-400 font-mono">{{ log.device_id || '-' }}</div>
+                                        </td>
                                         <td class="p-3 font-mono text-xs">{{ log.ip || '-' }}</td>
                                         <td class="p-3 font-bold whitespace-nowrap" :class="(log.status || '').toLowerCase() === 'success' ? 'text-green-600' : 'text-red-500'">{{ log.status || '-' }}</td>
                                         <td class="p-3 text-xs text-gray-600">{{ log.detail || '-' }}</td>
@@ -1013,6 +1049,13 @@
                     loginForm: { username: 'admin', password: '' },
                     currentView: 'dashboard',
                     config: {
+                        data_provider_config: {
+                            biying_enabled: false,
+                            biying_license_key: '',
+                            biying_endpoint: '',
+                            biying_cert_path: '',
+                            biying_daily_limit: 200
+                        },
                         community_config: {
                             qq_group_number: '',
                             qq_group_link: '',
@@ -1340,6 +1383,14 @@
                         const data = await res.json();
                         this.config = {
                             ...data,
+                            data_provider_config: {
+                                biying_enabled: false,
+                                biying_license_key: '',
+                                biying_endpoint: '',
+                                biying_cert_path: '',
+                                biying_daily_limit: 200,
+                                ...(data.data_provider_config || {})
+                            },
                             community_config: {
                                 qq_group_number: '',
                                 qq_group_link: '',
@@ -1440,6 +1491,7 @@
                                 lhb_min_amount: this.config.lhb_min_amount,
                                 email_config: this.config.email_config,
                                 api_keys: this.config.api_keys,
+                                data_provider_config: this.config.data_provider_config,
                                 community_config: this.config.community_config,
                                 referral_config: this.config.referral_config,
                                 pricing_config: this.config.pricing_config

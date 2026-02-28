@@ -12,6 +12,7 @@ import asyncio
 import time
 import copy
 import threading
+import re
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -117,6 +118,79 @@ def _client_ip_from_request(request: Request) -> str:
     return ""
 
 
+def _parse_device_os(user_agent: str, platform_hint: str, header_os: str) -> str:
+    hint = (header_os or "").strip()
+    if hint:
+        return hint
+
+    ua = (user_agent or "").lower()
+    if "windows nt 10.0" in ua:
+        return "Windows"
+    if "windows" in ua:
+        return "Windows"
+    if "android" in ua:
+        m = re.search(r"android\s+([0-9.]+)", ua)
+        return f"Android {m.group(1)}" if m else "Android"
+    if "iphone os" in ua:
+        m = re.search(r"iphone os\s+([0-9_]+)", ua)
+        return f"iOS {m.group(1).replace('_', '.')}" if m else "iOS"
+    if "ipad" in ua:
+        return "iPadOS"
+    if "mac os x" in ua or "macintosh" in ua:
+        return "macOS"
+    if "linux" in ua:
+        return "Linux"
+
+    platform = (platform_hint or "").strip().strip('"')
+    if platform:
+        return platform
+    return "Unknown OS"
+
+
+def _parse_device_browser(user_agent: str) -> str:
+    ua = (user_agent or "").lower()
+    if not ua:
+        return "Unknown Browser"
+    if "edg/" in ua:
+        return "Edge"
+    if "firefox/" in ua:
+        return "Firefox"
+    if "chrome/" in ua and "edg/" not in ua:
+        return "Chrome"
+    if "safari/" in ua and "chrome/" not in ua:
+        return "Safari"
+    if "micromessenger/" in ua:
+        return "WeChat"
+    return "Other"
+
+
+def _resolve_device_type(user_agent: str) -> str:
+    ua = (user_agent or "").lower()
+    if any(k in ua for k in ("mobile", "android", "iphone", "ipad")):
+        return "mobile"
+    return "desktop"
+
+
+def _device_info_from_request(request: Request) -> str:
+    ua = (request.headers.get("User-Agent") or "").strip()
+    platform_hint = (request.headers.get("Sec-CH-UA-Platform") or "").strip()
+    model = (request.headers.get("X-Device-Model") or "").strip()
+    header_os = (request.headers.get("X-Device-OS") or "").strip()
+    app_version = (request.headers.get("X-App-Version") or "").strip()
+
+    parts = []
+    if model:
+        parts.append(model)
+    parts.append(_parse_device_os(ua, platform_hint, header_os))
+    parts.append(_parse_device_browser(ua))
+    parts.append(_resolve_device_type(ua))
+    if app_version:
+        parts.append(f"App {app_version}")
+
+    info = " | ".join([x for x in parts if x]).strip()
+    return info[:240]
+
+
 def _should_log_api_path(path: str) -> bool:
     if not path.startswith("/api/"):
         return False
@@ -160,6 +234,10 @@ async def user_operation_logger(request: Request, call_next):
     path = request.url.path
     method = request.method
     start_ts = time.time()
+    username = (request.headers.get("X-User-Name") or "").strip()
+    device_id = (request.headers.get("X-Device-ID") or "").strip()
+    device_info = _device_info_from_request(request)
+    client_ip = _client_ip_from_request(request)
 
     try:
         response = await call_next(request)
@@ -171,9 +249,10 @@ async def user_operation_logger(request: Request, call_next):
                 actor=_resolve_actor(path, request),
                 method=method,
                 path=path,
-                ip=_client_ip_from_request(request),
-                username=(request.headers.get("X-User-Name") or "").strip(),
-                device_id=(request.headers.get("X-Device-ID") or "").strip(),
+                ip=client_ip,
+                username=username,
+                device_id=device_id,
+                device_info=device_info,
                 detail=f"exception={str(e)}",
             )
         raise
@@ -187,9 +266,10 @@ async def user_operation_logger(request: Request, call_next):
             actor=_resolve_actor(path, request),
             method=method,
             path=path,
-            ip=_client_ip_from_request(request),
-            username=(request.headers.get("X-User-Name") or "").strip(),
-            device_id=(request.headers.get("X-Device-ID") or "").strip(),
+            ip=client_ip,
+            username=username,
+            device_id=device_id,
+            device_info=device_info,
             detail=f"status_code={status_code}, latency_ms={latency_ms}",
             extra={"status_code": status_code, "latency_ms": latency_ms},
         )
@@ -520,6 +600,15 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
     if lhb_manager.is_kline_network_paused():
         return
     now_ts = time.time()
+    cache_path = _day_kline_cache_path(clean_code)
+    if (not force) and cache_path.exists():
+        try:
+            mtime = cache_path.stat().st_mtime
+            if now_ts - mtime < DAY_KLINE_REFRESH_SEC:
+                day_kline_refresh_ts[clean_code] = mtime
+                return
+        except Exception:
+            pass
     last_ts = day_kline_refresh_ts.get(clean_code, 0)
     if (not force) and now_ts - last_ts < DAY_KLINE_REFRESH_SEC:
         return
@@ -529,12 +618,22 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
     day_kline_attempt_ts[clean_code] = now_ts
 
     try:
+        biying_rows = data_provider.fetch_day_kline_history(clean_code, days=365)
+        if biying_rows:
+            with open(cache_path, "w", encoding="utf-8") as f:
+                json.dump(biying_rows, f, ensure_ascii=False)
+            day_kline_refresh_ts[clean_code] = now_ts
+            return
+
         import akshare as ak
         import pandas as pd
 
         end_date = datetime.now().strftime('%Y%m%d')
         start_date = (datetime.now() - timedelta(days=365)).strftime('%Y%m%d')
-        df = ak.stock_zh_a_hist(symbol=clean_code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq")
+        df = data_provider._call_provider(
+            "akshare",
+            lambda: ak.stock_zh_a_hist(symbol=clean_code, period="daily", start_date=start_date, end_date=end_date, adjust="qfq"),
+        )
         if df is None or df.empty:
             return
 
@@ -579,8 +678,7 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
         if out_df.empty:
             return
 
-        path = _day_kline_cache_path(clean_code)
-        with open(path, "w", encoding="utf-8") as f:
+        with open(cache_path, "w", encoding="utf-8") as f:
             json.dump(out_df.to_dict("records"), f, ensure_ascii=False)
         day_kline_refresh_ts[clean_code] = now_ts
     except Exception as e:
@@ -1162,10 +1260,14 @@ async def startup_event():
     # Load caches
     load_analysis_cache()
     
-    # Update base info (CircMV etc) on startup
-    print("启动：正在更新股票基础信息...")
-    add_runtime_log("启动：正在更新股票基础信息...")
-    await asyncio.to_thread(data_provider.update_base_info)
+    # Update base info only during market trading session.
+    if is_market_open_day() and is_trading_time():
+        print("启动：正在更新股票基础信息...")
+        add_runtime_log("启动：正在更新股票基础信息...")
+        await asyncio.to_thread(data_provider.update_base_info)
+    else:
+        print("启动：当前非交易时段，跳过基础信息更新。")
+        add_runtime_log("启动：当前非交易时段，跳过基础信息更新。")
     # Warm core caches once at startup.
     await asyncio.to_thread(refresh_stock_quotes_cache)
     await asyncio.to_thread(refresh_indices_cache)
@@ -1318,6 +1420,12 @@ async def run_initial_scan():
 def _public_system_config():
     safe = copy.deepcopy(SYSTEM_CONFIG)
     safe.pop("api_keys", None)
+    provider_cfg = safe.get("data_provider_config")
+    if isinstance(provider_cfg, dict):
+        provider_cfg = dict(provider_cfg)
+        provider_cfg["biying_license_key"] = ""
+        provider_cfg["biying_cert_path"] = ""
+        safe["data_provider_config"] = provider_cfg
 
     # Keep email settings structure for compatibility, but never expose password.
     email_cfg = safe.get("email_config")
@@ -1553,6 +1661,7 @@ def _mode_display_name(mode: str) -> str:
     return value or "未知模式"
 
 # Global Cache Timer
+ANALYSIS_REUSE_SECONDS = 15 * 60
 LAST_ANALYSIS_TIME = {
     "mid_day": datetime.min,
     "after_hours": datetime.min
@@ -1580,19 +1689,19 @@ async def run_analysis(
     else:
         await check_review_permission(user, skip_quota=True)
     
-    # 2. 缓存检查（5分钟）+ 并发互斥，避免重复扣费和重复触发
+    # 2. 缓存检查（15分钟）+ 并发互斥，避免重复扣费和重复触发
     cache_key = "mid_day" if limit_type == 'raid' else "after_hours"
     lock = ANALYSIS_TRIGGER_LOCKS[cache_key]
     async with lock:
         last_time = LAST_ANALYSIS_TIME.get(cache_key, datetime.min)
         seconds_since_last = int((datetime.now() - last_time).total_seconds())
-        if seconds_since_last < 300:
-            thread_logger(f"[缓存] {mode_cn} 5分钟缓存命中，复用最近结果（{seconds_since_last}s 前）")
+        if seconds_since_last < ANALYSIS_REUSE_SECONDS:
+            thread_logger(f"[缓存] {mode_cn} 15分钟缓存命中，复用最近结果（{seconds_since_last}s 前）")
             return {
                 "status": "success",
                 "cached": True,
                 "seconds_since_last": seconds_since_last,
-                "message": f"已返回缓存数据：{mode_cn}（{seconds_since_last}s 前更新）"
+                "message": f"已同步服务器最近结果：{mode_cn}（{seconds_since_last}s 前）"
             }
 
         # 3. 执行新的分析
@@ -1620,6 +1729,8 @@ def execute_analysis(mode="after_hours", hours=None):
         refresh_watchlist()
         # Reload globals so /api/stocks returns new data
         reload_watchlist_globals()
+        cache_key = "mid_day" if str(mode or "").strip().lower() in {"intraday", "intraday_monitor"} else "after_hours"
+        LAST_ANALYSIS_TIME[cache_key] = datetime.now()
         thread_logger(f">>> {mode_name}任务完成，列表已更新 ({len(WATCH_LIST)} 个标的)。")
     except Exception as e:
         thread_logger(f"!!! 分析任务出错: {e}")
