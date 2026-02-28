@@ -162,7 +162,7 @@ fi
 # 读取已有必盈配置，作为默认值
 BIYING_ENABLED_DEFAULT="false"
 BIYING_KEY_DEFAULT=""
-BIYING_ENDPOINT_DEFAULT=""
+BIYING_ENDPOINT_DEFAULT="https://api.biyingapi.com"
 BIYING_CERT_DEFAULT=""
 BIYING_DAILY_LIMIT_DEFAULT="200"
 eval "$(python3 - "$CONFIG_FILE" <<'PY'
@@ -187,7 +187,10 @@ def quote(v):
 
 print("BIYING_ENABLED_DEFAULT=" + quote("true" if provider.get("biying_enabled") else "false"))
 print("BIYING_KEY_DEFAULT=" + quote(provider.get("biying_license_key", "")))
-print("BIYING_ENDPOINT_DEFAULT=" + quote(provider.get("biying_endpoint", "")))
+existing_endpoint = str(provider.get("biying_endpoint", "") or "").strip()
+if not existing_endpoint:
+    existing_endpoint = "https://api.biyingapi.com"
+print("BIYING_ENDPOINT_DEFAULT=" + quote(existing_endpoint))
 print("BIYING_CERT_DEFAULT=" + quote(provider.get("biying_cert_path", "")))
 try:
     daily_limit = int(provider.get("biying_daily_limit", 200) or 200)
@@ -216,12 +219,9 @@ esac
 if [ "$BIYING_ENABLED" = "true" ]; then
     read -p "请输入必盈 License Key (回车使用当前值): " INPUT_BIYING_KEY
     BIYING_LICENSE_KEY="${INPUT_BIYING_KEY:-$BIYING_KEY_DEFAULT}"
-    read -p "请输入必盈接口地址 (回车使用当前值): " INPUT_BIYING_ENDPOINT
-    BIYING_ENDPOINT="${INPUT_BIYING_ENDPOINT:-$BIYING_ENDPOINT_DEFAULT}"
-    read -p "请输入必盈证书路径 (可选，回车使用当前值): " INPUT_BIYING_CERT
-    BIYING_CERT_PATH="${INPUT_BIYING_CERT:-$BIYING_CERT_DEFAULT}"
-    read -p "请输入必盈每日调用上限 (默认/当前: $BIYING_DAILY_LIMIT_DEFAULT): " INPUT_BIYING_LIMIT
-    BIYING_DAILY_LIMIT="${INPUT_BIYING_LIMIT:-$BIYING_DAILY_LIMIT_DEFAULT}"
+    BIYING_ENDPOINT="$BIYING_ENDPOINT_DEFAULT"
+    BIYING_CERT_PATH="$BIYING_CERT_DEFAULT"
+    BIYING_DAILY_LIMIT="$BIYING_DAILY_LIMIT_DEFAULT"
 else
     BIYING_LICENSE_KEY="$BIYING_KEY_DEFAULT"
     BIYING_ENDPOINT="$BIYING_ENDPOINT_DEFAULT"
