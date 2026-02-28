@@ -157,6 +157,9 @@ data/analysis_cache.json
 data/news_history.json
 data/lhb_history.csv
 data/ai_cache.json
+backend/data/**
+!backend/data/.gitkeep
+backend/backups/
 Desktop-Version/._data_backup/
 *.bak
 *.tmp
