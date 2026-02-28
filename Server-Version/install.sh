@@ -157,7 +157,7 @@ ensure_runtime_files() {
     "biying_license_key": "",
     "biying_endpoint": "https://api.biyingapi.com",
     "biying_cert_path": "",
-    "biying_daily_limit": 200
+    "biying_minute_limit": 3000
   },
   "community_config": {
     "qq_group_number": "",
@@ -223,12 +223,12 @@ endpoint = str(provider.get('biying_endpoint', '') or '').strip() or 'https://ap
 print('BIYING_ENDPOINT_DEFAULT=' + q(endpoint))
 print('BIYING_CERT_DEFAULT=' + q(provider.get('biying_cert_path', '')))
 try:
-    daily = int(provider.get('biying_daily_limit', 200) or 200)
+    daily = int(provider.get('biying_minute_limit', 3000) or 3000)
 except Exception:
-    daily = 200
+    daily = 3000
 if daily < 1:
-    daily = 200
-print('BIYING_DAILY_LIMIT_DEFAULT=' + q(daily))
+    daily = 3000
+print('BIYING_MINUTE_LIMIT_DEFAULT=' + q(daily))
 PY
 )"
 
@@ -271,13 +271,13 @@ prompt_keys_and_merge_config() {
 
     BIYING_ENDPOINT="$BIYING_ENDPOINT_DEFAULT"
     BIYING_CERT_PATH="$BIYING_CERT_DEFAULT"
-    BIYING_DAILY_LIMIT="$BIYING_DAILY_LIMIT_DEFAULT"
+    BIYING_MINUTE_LIMIT="$BIYING_MINUTE_LIMIT_DEFAULT"
 
-    if ! [[ "$BIYING_DAILY_LIMIT" =~ ^[0-9]+$ ]] || [ "$BIYING_DAILY_LIMIT" -lt 1 ]; then
-        BIYING_DAILY_LIMIT=200
+    if ! [[ "$BIYING_MINUTE_LIMIT" =~ ^[0-9]+$ ]] || [ "$BIYING_MINUTE_LIMIT" -lt 1 ]; then
+        BIYING_MINUTE_LIMIT=3000
     fi
 
-    python3 - "$CONFIG_FILE" "$API_KEY" "$BIYING_ENABLED" "$BIYING_LICENSE_KEY" "$BIYING_ENDPOINT" "$BIYING_CERT_PATH" "$BIYING_DAILY_LIMIT" <<'PY'
+    python3 - "$CONFIG_FILE" "$API_KEY" "$BIYING_ENABLED" "$BIYING_LICENSE_KEY" "$BIYING_ENDPOINT" "$BIYING_CERT_PATH" "$BIYING_MINUTE_LIMIT" <<'PY'
 import json
 import sys
 
@@ -288,11 +288,11 @@ biying_key = sys.argv[4]
 biying_endpoint = sys.argv[5]
 biying_cert = sys.argv[6]
 try:
-    biying_daily = int(sys.argv[7] or 200)
+    biying_minute = int(sys.argv[7] or 3000)
 except Exception:
-    biying_daily = 200
-if biying_daily < 1:
-    biying_daily = 200
+    biying_minute = 3000
+if biying_minute < 1:
+    biying_minute = 3000
 
 cfg = {}
 try:
@@ -316,7 +316,8 @@ provider['biying_enabled'] = biying_enabled
 provider['biying_license_key'] = biying_key
 provider['biying_endpoint'] = biying_endpoint
 provider['biying_cert_path'] = biying_cert
-provider['biying_daily_limit'] = biying_daily
+provider['biying_minute_limit'] = biying_minute
+provider.pop('biying_daily_limit', None)
 cfg['data_provider_config'] = provider
 
 email_cfg = cfg.get('email_config') if isinstance(cfg.get('email_config'), dict) else {}

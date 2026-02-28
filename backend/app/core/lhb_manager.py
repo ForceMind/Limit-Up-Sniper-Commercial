@@ -31,6 +31,7 @@ class LHBManager:
         }
         self.is_syncing = False
         self.hot_money_map = {}
+        self.vip_seats = set()
         self._kline_last_fetch_ts = {}
         self._kline_last_attempt_ts = {}
         self._kline_error_window_start = 0.0
@@ -52,6 +53,7 @@ class LHBManager:
         self._akshare_min_interval_sec = 1.2
         self.load_config()
         self.load_hot_money_map()
+        self.load_vip_seats()
 
     def _throttle_akshare_request(self, min_interval_sec=None):
         interval = self._akshare_min_interval_sec if min_interval_sec is None else max(0.0, float(min_interval_sec))
@@ -77,6 +79,24 @@ class LHBManager:
                     # print(f"[龙虎榜] Hot money map loaded ({len(self.hot_money_map)} entries)")
             except Exception as e:
                 print(f"[龙虎榜] 加载游资映射失败: {e}")
+
+    def load_vip_seats(self):
+        if not SEATS_FILE.exists():
+            self.vip_seats = set()
+            return
+        try:
+            mtime = SEATS_FILE.stat().st_mtime
+            if hasattr(self, "_vip_mtime") and self._vip_mtime == mtime:
+                return
+            with open(SEATS_FILE, 'r', encoding='utf-8') as f:
+                loaded = json.load(f)
+            if isinstance(loaded, list):
+                self.vip_seats = {str(x).strip() for x in loaded if str(x).strip()}
+            else:
+                self.vip_seats = set()
+            self._vip_mtime = mtime
+        except Exception:
+            self.vip_seats = set()
 
     def find_hot_money_name(self, seat_name):
         """逻辑统一：查找席位对应的游资名称"""
@@ -459,13 +479,24 @@ class LHBManager:
             self.is_syncing = False
 
     def update_vip_seats(self, df):
-        # Count appearances
+        # Count appearances in recent data, but keep manually maintained base seats.
         seat_counts = df['buyer_seat_name'].value_counts()
-        # Filter seats appearing > 3 times (configurable?)
-        vip_seats = seat_counts[seat_counts >= 3].index.tolist()
-        
+        auto_vip = [str(x).strip() for x in seat_counts[seat_counts >= 3].index.tolist() if str(x).strip()]
+
+        manual_vip = []
+        if SEATS_FILE.exists():
+            try:
+                with open(SEATS_FILE, 'r', encoding='utf-8') as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, list):
+                    manual_vip = [str(x).strip() for x in loaded if str(x).strip()]
+            except Exception:
+                manual_vip = []
+
+        vip_seats = sorted(set(manual_vip + auto_vip))
         with open(SEATS_FILE, 'w', encoding='utf-8') as f:
             json.dump(vip_seats, f, ensure_ascii=False, indent=2)
+        self.load_vip_seats()
 
     def download_kline_data(self, df, logger=None):
         """
@@ -706,6 +737,7 @@ class LHBManager:
         try:
             # 实时重载席位表，确保修改立即生效
             self.load_hot_money_map()
+            self.load_vip_seats()
             
             df = pd.read_csv(LHB_FILE, dtype={'stock_code': str, 'trade_date': str})
             # Ensure trade_date is string
@@ -749,7 +781,8 @@ class LHBManager:
                     "name": seat_name_stripped,
                     "buy": row['buy_amount'],
                     "sell": row['sell_amount'],
-                    "hot_money": dynamic_hot_money or (row['hot_money'] if pd.notna(row['hot_money']) else "")
+                    "hot_money": dynamic_hot_money or (row['hot_money'] if pd.notna(row['hot_money']) else ""),
+                    "is_vip": seat_name_stripped in self.vip_seats
                 })
             
             # Convert grouped dict to list

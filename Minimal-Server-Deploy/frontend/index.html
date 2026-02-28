@@ -102,7 +102,7 @@
                             'text-purple-500': userInfo.version==='advanced',
                             'text-red-500': userInfo.version==='flagship'
                         }">
-                            {{ features[userInfo.version]?.desc || userInfo.version }}
+                            {{ membershipName(userInfo.version) }}
                             <span v-if="userInfo.is_expired && userInfo.version !== 'trial'" class="text-red-500 text-[10px]">(已过期)</span>
                         </div>
                         <div class="text-[10px] text-gray-500">{{ membershipExpiryText }}</div>
@@ -909,7 +909,7 @@
                             'text-purple-500': userInfo.version==='advanced',
                             'text-red-500': userInfo.version==='flagship'
                         }">
-                            {{ features[userInfo.version]?.desc || userInfo.version }}
+                            {{ membershipName(userInfo.version) }}
                             <span v-if="userInfo.is_expired && userInfo.version !== 'trial'" class="text-red-500 text-sm">(已过期)</span>
                         </div>
                         <div class="text-xs text-gray-500 dark:text-gray-400">{{ membershipExpiryText }}</div>
@@ -1757,6 +1757,14 @@
                 }
             },
             methods: {
+                membershipName(version) {
+                    const v = String(version || '').toLowerCase();
+                    if (v === 'trial') return '体验版';
+                    if (v === 'basic') return '初级版';
+                    if (v === 'advanced') return '高级版';
+                    if (v === 'flagship') return '旗舰版';
+                    return String(version || '-');
+                },
                 startUserTimers() {
                     // Check every 10 seconds for expiry
                     this.expiryTimer = setInterval(() => {

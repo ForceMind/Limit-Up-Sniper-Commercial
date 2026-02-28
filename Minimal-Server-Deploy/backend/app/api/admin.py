@@ -36,6 +36,8 @@ ADMIN_CREDENTIALS_FILE = DATA_DIR / "admin_credentials.json"
 ADMIN_SESSIONS_FILE = DATA_DIR / "admin_sessions.json"
 ADMIN_PANEL_PATH_FILE = DATA_DIR / "admin_panel_path.json"
 USER_ACCOUNTS_FILE = DATA_DIR / "user_accounts.json"
+SEAT_MAPPINGS_FILE = DATA_DIR / "seat_mappings.json"
+VIP_SEATS_FILE = DATA_DIR / "vip_seats.json"
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX_ATTEMPTS = 5
 SESSION_EXPIRE_HOURS = 24
@@ -1008,14 +1010,20 @@ async def get_admin_config(authorized: bool = Depends(verify_admin)):
             "aliyun": "",
             "other": ""
         }
-    if 'data_provider_config' not in config:
-        config['data_provider_config'] = {
-            "biying_enabled": False,
-            "biying_license_key": "",
-            "biying_endpoint": "",
-            "biying_cert_path": "",
-            "biying_daily_limit": 200,
-        }
+    provider_cfg = config.get('data_provider_config')
+    if not isinstance(provider_cfg, dict):
+        provider_cfg = {}
+    try:
+        minute_limit = int(provider_cfg.get("biying_minute_limit", 3000) or 3000)
+    except Exception:
+        minute_limit = 3000
+    provider_cfg["biying_enabled"] = bool(provider_cfg.get("biying_enabled", False))
+    provider_cfg["biying_license_key"] = str(provider_cfg.get("biying_license_key", "") or "")
+    provider_cfg["biying_endpoint"] = str(provider_cfg.get("biying_endpoint", "") or "")
+    provider_cfg["biying_cert_path"] = str(provider_cfg.get("biying_cert_path", "") or "")
+    provider_cfg["biying_minute_limit"] = max(1, min(minute_limit, 100000))
+    provider_cfg.pop("biying_daily_limit", None)
+    config['data_provider_config'] = provider_cfg
     if 'community_config' not in config:
         config['community_config'] = {
             "qq_group_number": "",
@@ -1054,11 +1062,12 @@ async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depe
     if config.data_provider_config is not None:
         merged_provider_cfg = _merge_dict(SYSTEM_CONFIG.get("data_provider_config"), config.data_provider_config)
         try:
-            merged_provider_cfg["biying_daily_limit"] = max(
-                1, min(int(merged_provider_cfg.get("biying_daily_limit", 200) or 200), 100000)
+            merged_provider_cfg["biying_minute_limit"] = max(
+                1, min(int(merged_provider_cfg.get("biying_minute_limit", 3000) or 3000), 100000)
             )
         except Exception:
-            merged_provider_cfg["biying_daily_limit"] = 200
+            merged_provider_cfg["biying_minute_limit"] = 3000
+        merged_provider_cfg.pop("biying_daily_limit", None)
         SYSTEM_CONFIG["data_provider_config"] = merged_provider_cfg
 
     if config.community_config is not None:
@@ -1633,6 +1642,77 @@ async def get_ai_cache_item(key: str, authorized: bool = Depends(verify_admin)):
 
 
 # --- LHB Admin ---
+def _normalize_lhb_seat_mappings(raw: Any) -> Dict[str, str]:
+    out: Dict[str, str] = {}
+    if isinstance(raw, dict):
+        for key, val in raw.items():
+            seat_name = str(key or "").strip()
+            hot_name = str(val or "").strip()
+            if seat_name and hot_name:
+                out[seat_name] = hot_name
+        return dict(sorted(out.items(), key=lambda kv: kv[0]))
+
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            seat_name = str(
+                item.get("seat_name")
+                or item.get("seat")
+                or item.get("name")
+                or item.get("key")
+                or ""
+            ).strip()
+            hot_name = str(
+                item.get("hot_money_name")
+                or item.get("hot_money")
+                or item.get("value")
+                or ""
+            ).strip()
+            if seat_name and hot_name:
+                out[seat_name] = hot_name
+    return dict(sorted(out.items(), key=lambda kv: kv[0]))
+
+
+def _normalize_lhb_vip_seats(raw: Any) -> List[str]:
+    items: List[str] = []
+    if isinstance(raw, list):
+        source = raw
+    elif isinstance(raw, tuple):
+        source = list(raw)
+    elif isinstance(raw, str):
+        source = [raw]
+    else:
+        source = []
+
+    for item in source:
+        if isinstance(item, dict):
+            seat = str(item.get("seat_name") or item.get("name") or item.get("seat") or "").strip()
+        else:
+            seat = str(item or "").strip()
+        if seat:
+            items.append(seat)
+
+    deduped = list(dict.fromkeys(items))
+    deduped.sort()
+    return deduped
+
+
+def _load_lhb_seat_mappings() -> Dict[str, str]:
+    data = _load_json(SEAT_MAPPINGS_FILE, {})
+    return _normalize_lhb_seat_mappings(data)
+
+
+def _load_lhb_vip_seats() -> List[str]:
+    data = _load_json(VIP_SEATS_FILE, [])
+    return _normalize_lhb_vip_seats(data)
+
+
+class AdminLHBSeatConfigUpdate(BaseModel):
+    seat_mappings: Optional[Any] = None
+    vip_seats: Optional[Any] = None
+
+
 class AdminLHBRangeRequest(BaseModel):
     start_date: str
     end_date: str
@@ -1642,6 +1722,55 @@ class AdminLHBSettingsRequest(BaseModel):
     enabled: bool
     days: int
     min_amount: int
+
+
+@router.get("/lhb/seat_configs")
+async def get_lhb_seat_configs(authorized: bool = Depends(verify_admin)):
+    mappings = _load_lhb_seat_mappings()
+    vip_seats = _load_lhb_vip_seats()
+    return {
+        "status": "success",
+        "seat_mappings": [{"seat_name": k, "hot_money_name": v} for k, v in mappings.items()],
+        "vip_seats": vip_seats,
+    }
+
+
+@router.post("/lhb/seat_configs")
+async def update_lhb_seat_configs(
+    payload: AdminLHBSeatConfigUpdate,
+    authorized: bool = Depends(verify_admin),
+):
+    if payload.seat_mappings is None and payload.vip_seats is None:
+        raise HTTPException(status_code=400, detail="至少提供 seat_mappings 或 vip_seats")
+
+    mappings = _load_lhb_seat_mappings()
+    vip_seats = _load_lhb_vip_seats()
+
+    if payload.seat_mappings is not None:
+        mappings = _normalize_lhb_seat_mappings(payload.seat_mappings)
+        _save_json(SEAT_MAPPINGS_FILE, mappings)
+
+    if payload.vip_seats is not None:
+        vip_seats = _normalize_lhb_vip_seats(payload.vip_seats)
+        _save_json(VIP_SEATS_FILE, vip_seats)
+
+    lhb_manager.load_hot_money_map()
+    add_runtime_log(
+        f"[龙虎榜] 席位配置已更新: 映射={len(mappings)} 条, VIP席位={len(vip_seats)} 条"
+    )
+    log_user_operation(
+        "update_lhb_seat_configs",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/lhb/seat_configs",
+        detail=f"seat_mappings={len(mappings)}, vip_seats={len(vip_seats)}",
+    )
+    return {
+        "status": "success",
+        "seat_mappings": [{"seat_name": k, "hot_money_name": v} for k, v in mappings.items()],
+        "vip_seats": vip_seats,
+    }
 
 
 @router.get("/lhb/overview")

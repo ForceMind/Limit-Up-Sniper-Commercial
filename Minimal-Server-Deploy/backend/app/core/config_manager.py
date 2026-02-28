@@ -50,7 +50,7 @@ SYSTEM_CONFIG = {
         "biying_license_key": "",
         "biying_endpoint": "",
         "biying_cert_path": "",
-        "biying_daily_limit": 200
+        "biying_minute_limit": 3000
     },
     "community_config": {
         "qq_group_number": "",

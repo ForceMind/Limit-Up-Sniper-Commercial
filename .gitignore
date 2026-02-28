@@ -159,6 +159,8 @@ data/lhb_history.csv
 data/ai_cache.json
 backend/data/**
 !backend/data/.gitkeep
+!backend/data/seat_mappings.json
+!backend/data/vip_seats.json
 backend/backups/
 Desktop-Version/._data_backup/
 *.bak

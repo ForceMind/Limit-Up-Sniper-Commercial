@@ -45,8 +45,6 @@ class DataProvider:
         self._base_info_lock = threading.Lock()
         self._lock = threading.Lock() # Global lock for heavy operations (market overview)
         self._biying_usage_lock = threading.Lock()
-        self._biying_usage_file = DATA_DIR / "biying_usage.json"
-        self._biying_usage = {"date": "", "count": 0}
         self._biying_minute_state = {"minute": "", "count": 0}
         self._biying_quota_log_ts = 0.0
         self._biying_http_err_log_ts = 0.0
@@ -184,12 +182,16 @@ class DataProvider:
         try:
             from app.core.config_manager import SYSTEM_CONFIG
             cfg = SYSTEM_CONFIG.get("data_provider_config", {}) or {}
+            try:
+                minute_limit = int(cfg.get("biying_minute_limit", 3000) or 3000)
+            except Exception:
+                minute_limit = 3000
             return {
                 "enabled": bool(cfg.get("biying_enabled")),
                 "license_key": str(cfg.get("biying_license_key", "")).strip(),
                 "endpoint": str(cfg.get("biying_endpoint", "")).strip(),
                 "cert_path": str(cfg.get("biying_cert_path", "")).strip(),
-                "daily_limit": max(1, int(cfg.get("biying_daily_limit", 200) or 200)),
+                "minute_limit": max(1, min(minute_limit, 100000)),
             }
         except Exception:
             return {
@@ -197,7 +199,7 @@ class DataProvider:
                 "license_key": "",
                 "endpoint": "",
                 "cert_path": "",
-                "daily_limit": 200,
+                "minute_limit": 3000,
             }
 
     def _biying_enabled(self, cfg=None):
@@ -213,40 +215,14 @@ class DataProvider:
             return f"{parsed.scheme}://{parsed.netloc}"
         return "https://api.biyingapi.com"
 
-    def _load_biying_usage_unlocked(self):
-        today = self._today_cn_ymd()
-        usage = {"date": today, "count": 0}
-        try:
-            if self._biying_usage_file.exists():
-                with open(self._biying_usage_file, "r", encoding="utf-8") as f:
-                    data = json.load(f)
-                if isinstance(data, dict):
-                    usage["date"] = str(data.get("date", today) or today)
-                    usage["count"] = int(data.get("count", 0) or 0)
-        except Exception:
-            pass
-        if usage["date"] != today:
-            usage = {"date": today, "count": 0}
-        self._biying_usage = usage
-        return usage
-
-    def _save_biying_usage_unlocked(self):
-        try:
-            with open(self._biying_usage_file, "w", encoding="utf-8") as f:
-                json.dump(self._biying_usage, f, ensure_ascii=False, indent=2)
-        except Exception:
-            pass
-
     def _reserve_biying_quota(self, cfg, calls=1):
         calls = max(1, int(calls or 1))
         with self._biying_usage_lock:
-            usage = self._load_biying_usage_unlocked()
-            limit = max(1, int((cfg or {}).get("daily_limit", 200) or 200))
             minute_key = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d%H%M")
             if self._biying_minute_state.get("minute") != minute_key:
                 self._biying_minute_state = {"minute": minute_key, "count": 0}
             minute_count = int(self._biying_minute_state.get("count", 0) or 0)
-            minute_limit = 3000
+            minute_limit = max(1, int((cfg or {}).get("minute_limit", 3000) or 3000))
             if minute_count + calls > minute_limit:
                 now_ts = time.time()
                 if now_ts - self._biying_quota_log_ts >= 60:
@@ -254,17 +230,7 @@ class DataProvider:
                     self.log(f"[*] 必盈分钟频率保护触发（剩余 {remain}/{minute_limit} 次/分钟），回退到默认数据源")
                     self._biying_quota_log_ts = now_ts
                 return False
-            if usage["count"] + calls > limit:
-                now_ts = time.time()
-                if now_ts - self._biying_quota_log_ts >= 60:
-                    remain = max(0, limit - usage["count"])
-                    self.log(f"[*] 必盈配额不足（今日剩余 {remain}/{limit}），回退到默认数据源")
-                    self._biying_quota_log_ts = now_ts
-                return False
             self._biying_minute_state["count"] = minute_count + calls
-            usage["count"] += calls
-            self._biying_usage = usage
-            self._save_biying_usage_unlocked()
             return True
 
     def _biying_request_json(self, path, params=None, timeout=6):

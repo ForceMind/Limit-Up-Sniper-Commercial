@@ -219,8 +219,8 @@
                                         <input type="text" v-model="config.data_provider_config.biying_cert_path" class="w-full border rounded p-2 text-sm font-mono" placeholder="/opt/limit-up-sniper/certs/biying.pem">
                                     </div>
                                     <div>
-                                        <label class="block text-xs text-gray-600 mb-1">每日调用上限</label>
-                                        <input type="number" min="1" max="100000" v-model.number="config.data_provider_config.biying_daily_limit" class="w-full border rounded p-2 text-sm">
+                                        <label class="block text-xs text-gray-600 mb-1">每分钟调用上限</label>
+                                        <input type="number" min="1" max="100000" v-model.number="config.data_provider_config.biying_minute_limit" class="w-full border rounded p-2 text-sm">
                                     </div>
                                 </div>
                                 <div class="text-xs text-gray-600">
@@ -871,6 +871,78 @@
                         <button @click="saveLHBSettings" class="bg-gray-900 hover:bg-black text-white px-4 py-2 rounded text-sm">保存设置</button>
                     </div>
 
+                    <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+                        <div class="bg-white border rounded p-4">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="font-bold">游资席位映射（seat_mappings）</h3>
+                                <button @click="addLHBSeatMappingRow" class="text-xs px-2 py-1 border rounded hover:bg-gray-50">+ 添加</button>
+                            </div>
+                            <div class="text-xs text-gray-500 mb-2">左侧填券商席位关键字，右侧填游资名称。</div>
+                            <div class="max-h-72 overflow-auto border rounded">
+                                <table class="w-full text-xs">
+                                    <thead class="bg-gray-50 text-gray-500 sticky top-0">
+                                        <tr>
+                                            <th class="p-2 text-left">席位关键字</th>
+                                            <th class="p-2 text-left">游资名称</th>
+                                            <th class="p-2 text-left w-16">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y">
+                                        <tr v-for="(row, idx) in lhbSeatMappings" :key="`map-${idx}`">
+                                            <td class="p-2">
+                                                <input v-model.trim="row.seat_name" class="w-full border rounded px-2 py-1">
+                                            </td>
+                                            <td class="p-2">
+                                                <input v-model.trim="row.hot_money_name" class="w-full border rounded px-2 py-1">
+                                            </td>
+                                            <td class="p-2">
+                                                <button @click="removeLHBSeatMappingRow(idx)" class="text-red-600 hover:text-red-700">删除</button>
+                                            </td>
+                                        </tr>
+                                        <tr v-if="lhbSeatMappings.length === 0">
+                                            <td colspan="3" class="p-3 text-center text-gray-400">暂无映射配置</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+
+                        <div class="bg-white border rounded p-4">
+                            <div class="flex items-center justify-between mb-2">
+                                <h3 class="font-bold">VIP席位列表（vip_seats）</h3>
+                                <button @click="addLHBVipSeatRow" class="text-xs px-2 py-1 border rounded hover:bg-gray-50">+ 添加</button>
+                            </div>
+                            <div class="text-xs text-gray-500 mb-2">用于标记重点席位，支持手工维护。</div>
+                            <div class="max-h-72 overflow-auto border rounded">
+                                <table class="w-full text-xs">
+                                    <thead class="bg-gray-50 text-gray-500 sticky top-0">
+                                        <tr>
+                                            <th class="p-2 text-left">席位名称</th>
+                                            <th class="p-2 text-left w-16">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y">
+                                        <tr v-for="(row, idx) in lhbVipSeats" :key="`vip-${idx}`">
+                                            <td class="p-2">
+                                                <input v-model.trim="row.seat_name" class="w-full border rounded px-2 py-1">
+                                            </td>
+                                            <td class="p-2">
+                                                <button @click="removeLHBVipSeatRow(idx)" class="text-red-600 hover:text-red-700">删除</button>
+                                            </td>
+                                        </tr>
+                                        <tr v-if="lhbVipSeats.length === 0">
+                                            <td colspan="2" class="p-3 text-center text-gray-400">暂无VIP席位</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="flex justify-end">
+                        <button @click="saveLHBSeatConfigs" class="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded text-sm">保存席位配置</button>
+                    </div>
+
                     <div class="bg-white border rounded p-4 grid grid-cols-2 md:grid-cols-5 gap-3 text-sm">
                         <div>
                             <div class="text-xs text-gray-500">总记录数</div>
@@ -1054,7 +1126,7 @@
                             biying_license_key: '',
                             biying_endpoint: '',
                             biying_cert_path: '',
-                            biying_daily_limit: 200
+                            biying_minute_limit: 3000
                         },
                         community_config: {
                             qq_group_number: '',
@@ -1109,6 +1181,8 @@
                         days: 30,
                         min_amount: 10000000
                     },
+                    lhbSeatMappings: [],
+                    lhbVipSeats: [],
                     dataFiles: [],
                     dataFolders: [],
                     selectedDataFile: '',
@@ -1152,7 +1226,10 @@
                         this.fetchReferrals(1);
                     }
                     if (val === 'logs') this.fetchLogs('system');
-                    if (val === 'lhb') this.fetchLHBOverview();
+                    if (val === 'lhb') {
+                        this.fetchLHBOverview();
+                        this.fetchLHBSeatConfigs();
+                    }
                 }
             },
             methods: {
@@ -1381,16 +1458,23 @@
                             throw new Error(`Config Load Failed: ${res.status} ${res.statusText}`);
                         }
                         const data = await res.json();
+                        const providerCfg = {
+                            biying_enabled: false,
+                            biying_license_key: '',
+                            biying_endpoint: '',
+                            biying_cert_path: '',
+                            biying_minute_limit: 3000,
+                            ...(data.data_provider_config || {})
+                        };
+                        if (!Number.isFinite(Number(providerCfg.biying_minute_limit)) || Number(providerCfg.biying_minute_limit) <= 0) {
+                            const legacy = Number(providerCfg.biying_daily_limit || 3000);
+                            providerCfg.biying_minute_limit = Number.isFinite(legacy) && legacy > 0 ? legacy : 3000;
+                        }
+                        delete providerCfg.biying_daily_limit;
+
                         this.config = {
                             ...data,
-                            data_provider_config: {
-                                biying_enabled: false,
-                                biying_license_key: '',
-                                biying_endpoint: '',
-                                biying_cert_path: '',
-                                biying_daily_limit: 200,
-                                ...(data.data_provider_config || {})
-                            },
+                            data_provider_config: providerCfg,
                             community_config: {
                                 qq_group_number: '',
                                 qq_group_link: '',
@@ -1478,6 +1562,13 @@
                 },
                 async saveConfig() {
                     try {
+                        const providerCfg = {
+                            ...(this.config.data_provider_config || {})
+                        };
+                        const minuteLimit = Number(providerCfg.biying_minute_limit);
+                        providerCfg.biying_minute_limit = Number.isFinite(minuteLimit) && minuteLimit > 0 ? Math.floor(minuteLimit) : 3000;
+                        delete providerCfg.biying_daily_limit;
+
                         const res = await fetch(API_BASE_URL + '/api/admin/config', {
                             method: 'POST',
                             headers: this.getHeaders(),
@@ -1491,7 +1582,7 @@
                                 lhb_min_amount: this.config.lhb_min_amount,
                                 email_config: this.config.email_config,
                                 api_keys: this.config.api_keys,
-                                data_provider_config: this.config.data_provider_config,
+                                data_provider_config: providerCfg,
                                 community_config: this.config.community_config,
                                 referral_config: this.config.referral_config,
                                 pricing_config: this.config.pricing_config
@@ -1632,6 +1723,75 @@
                         return JSON.stringify(data, null, 2);
                     } catch (e) {
                         return String(data ?? '');
+                    }
+                },
+                addLHBSeatMappingRow() {
+                    this.lhbSeatMappings.push({ seat_name: '', hot_money_name: '' });
+                },
+                removeLHBSeatMappingRow(index) {
+                    this.lhbSeatMappings.splice(index, 1);
+                },
+                addLHBVipSeatRow() {
+                    this.lhbVipSeats.push({ seat_name: '' });
+                },
+                removeLHBVipSeatRow(index) {
+                    this.lhbVipSeats.splice(index, 1);
+                },
+                async fetchLHBSeatConfigs() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/lhb/seat_configs', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        if (!res.ok) throw new Error(`Seat Config Load Failed: ${res.status}`);
+                        const data = await res.json();
+                        const mappings = Array.isArray(data.seat_mappings) ? data.seat_mappings : [];
+                        const vipSeats = Array.isArray(data.vip_seats) ? data.vip_seats : [];
+                        this.lhbSeatMappings = mappings.map((x) => ({
+                            seat_name: String((x && x.seat_name) || '').trim(),
+                            hot_money_name: String((x && x.hot_money_name) || '').trim(),
+                        }));
+                        this.lhbVipSeats = vipSeats.map((x) => ({
+                            seat_name: String(x || '').trim(),
+                        }));
+                    } catch (e) {
+                        this.showMsg(e.message || '加载席位配置失败', 'error');
+                    }
+                },
+                async saveLHBSeatConfigs() {
+                    const mappings = [];
+                    for (const row of this.lhbSeatMappings || []) {
+                        const seatName = String((row && row.seat_name) || '').trim();
+                        const hotName = String((row && row.hot_money_name) || '').trim();
+                        if (seatName && hotName) {
+                            mappings.push({ seat_name: seatName, hot_money_name: hotName });
+                        }
+                    }
+                    const vipSeats = [];
+                    for (const row of this.lhbVipSeats || []) {
+                        const seatName = String((row && row.seat_name) || '').trim();
+                        if (seatName) vipSeats.push(seatName);
+                    }
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/lhb/seat_configs', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({
+                                seat_mappings: mappings,
+                                vip_seats: vipSeats,
+                            })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '保存席位配置失败');
+                        this.showMsg('席位配置已保存', 'success');
+                        this.lhbSeatMappings = (Array.isArray(data.seat_mappings) ? data.seat_mappings : []).map((x) => ({
+                            seat_name: String((x && x.seat_name) || '').trim(),
+                            hot_money_name: String((x && x.hot_money_name) || '').trim(),
+                        }));
+                        this.lhbVipSeats = (Array.isArray(data.vip_seats) ? data.vip_seats : []).map((x) => ({
+                            seat_name: String(x || '').trim(),
+                        }));
+                    } catch (e) {
+                        this.showMsg(e.message || '保存席位配置失败', 'error');
                     }
                 },
                 async fetchLHBOverview() {
