@@ -2300,8 +2300,8 @@ async def run_provider_self_test(authorized: bool = Depends(verify_admin)):
     if data_provider._biying_enabled(biying_cfg):
         run_step("必盈股票列表(_fetch_stock_list_biying)", lambda: data_provider._fetch_stock_list_biying())
         run_step("必盈个股概念(_fetch_stock_info_biying)", lambda: data_provider._fetch_stock_info_biying("000001"))
-        run_step("必盈多股实时(_fetch_realtime_quotes_biying)", lambda: data_provider._fetch_realtime_quotes_biying(["000001", "600519"]))
-        run_step("必盈最新分时(_fetch_intraday_kline_biying)", lambda: data_provider._fetch_intraday_kline_biying("000001", period="5", lt=60))
+        run_step("必盈多股实时(_fetch_quotes_biying)", lambda: data_provider._fetch_quotes_biying(["000001", "600519"]))
+        run_step("必盈最新分时(_fetch_intraday_data_biying)", lambda: data_provider._fetch_intraday_data_biying("000001"))
         run_step("必盈日K(fetch_day_kline_history)", lambda: data_provider.fetch_day_kline_history("000001", days=90))
     else:
         results.append(

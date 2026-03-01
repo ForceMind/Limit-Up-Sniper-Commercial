@@ -146,58 +146,6 @@
                         </div>
                     </div>
 
-                    <div class="bg-white border rounded p-4">
-                        <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
-                            <div>
-                                <div class="text-lg font-bold">外网接口体检</div>
-                                <div class="text-xs text-gray-500">点击后顺序测试各数据源接口，并记录结果日志</div>
-                            </div>
-                            <div class="flex items-center gap-2">
-                                <button @click="runProviderSelfTest" :disabled="providerTestRunning" class="px-3 py-1.5 rounded text-sm text-white disabled:opacity-60"
-                                    :class="providerTestRunning ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'">
-                                    {{ providerTestRunning ? '体检中...' : '测试一次所有接口' }}
-                                </button>
-                                <button @click="fetchProviderTestLogs()" class="px-3 py-1.5 rounded text-sm border hover:bg-gray-50">刷新日志</button>
-                            </div>
-                        </div>
-                        <div v-if="providerTestLogs.length === 0" class="text-sm text-gray-500 py-4 text-center border rounded">暂无体检日志</div>
-                        <div v-else class="space-y-3 max-h-96 overflow-auto pr-1">
-                            <div v-for="item in providerTestLogs" :key="item.test_id + '_' + item.time" class="border rounded p-3">
-                                <div class="flex flex-wrap items-center justify-between gap-2">
-                                    <div class="text-sm font-semibold">批次 {{ item.test_id || '-' }}</div>
-                                    <div class="text-xs text-gray-500">{{ formatShanghaiTime(item.time) }} · 耗时 {{ Number(item.duration_ms || 0) }} ms</div>
-                                </div>
-                                <div class="text-xs mt-1" :class="Number(item.fail_count || 0) > 0 ? 'text-amber-600' : 'text-emerald-600'">
-                                    成功 {{ Number(item.success_count || 0) }} · 失败 {{ Number(item.fail_count || 0) }}
-                                </div>
-                                <div class="overflow-x-auto mt-2">
-                                    <table class="w-full min-w-[760px] text-xs">
-                                        <thead>
-                                            <tr class="text-gray-500 border-b">
-                                                <th class="p-2 text-left">接口</th>
-                                                <th class="p-2 text-left">结果</th>
-                                                <th class="p-2 text-left">耗时</th>
-                                                <th class="p-2 text-left">详情</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            <tr v-for="step in (item.items || [])" :key="step.name + '_' + step.elapsed_ms" class="border-b last:border-b-0">
-                                                <td class="p-2 font-mono text-[11px]">{{ step.name || '-' }}</td>
-                                                <td class="p-2">
-                                                    <span class="px-1.5 py-0.5 rounded"
-                                                        :class="step.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'">
-                                                        {{ step.ok ? '成功' : '失败' }}
-                                                    </span>
-                                                </td>
-                                                <td class="p-2">{{ Number(step.elapsed_ms || 0) }} ms</td>
-                                                <td class="p-2 text-gray-600">{{ step.detail || '-' }}</td>
-                                            </tr>
-                                        </tbody>
-                                    </table>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
                 </div>
 
                 <!-- Config -->
@@ -589,9 +537,63 @@
                     </div>
 
                     <!-- System Logs -->
-                    <div v-if="activeLogTab === 'system'" class="flex-1 bg-gray-900 text-green-400 p-4 rounded font-mono text-xs overflow-auto max-h-[70vh]">
-                        <div v-if="sysLogs.length === 0" class="text-gray-500">暂无日志或无法读取日志文件</div>
-                        <div v-for="(line, i) in sysLogs" :key="i" class="whitespace-pre-wrap border-b border-gray-800 pb-1 mb-1">{{ line }}</div>
+                    <div v-if="activeLogTab === 'system'" class="flex-1 space-y-4">
+                        <div class="bg-white border rounded p-4">
+                            <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+                                <div>
+                                    <div class="text-lg font-bold">外网接口体检</div>
+                                    <div class="text-xs text-gray-500">点击后顺序测试各数据源接口，并记录结果日志</div>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button @click="runProviderSelfTest" :disabled="providerTestRunning" class="px-3 py-1.5 rounded text-sm text-white disabled:opacity-60"
+                                        :class="providerTestRunning ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'">
+                                        {{ providerTestRunning ? '体检中...' : '测试一次所有接口' }}
+                                    </button>
+                                    <button @click="fetchProviderTestLogs()" class="px-3 py-1.5 rounded text-sm border hover:bg-gray-50">刷新体检</button>
+                                </div>
+                            </div>
+                            <div v-if="providerTestLogs.length === 0" class="text-sm text-gray-500 py-4 text-center border rounded">暂无体检日志</div>
+                            <div v-else class="space-y-3 max-h-[280px] overflow-auto pr-1">
+                                <div v-for="item in providerTestLogs" :key="item.test_id + '_' + item.time" class="border rounded p-3">
+                                    <div class="flex flex-wrap items-center justify-between gap-2">
+                                        <div class="text-sm font-semibold">批次 {{ item.test_id || '-' }}</div>
+                                        <div class="text-xs text-gray-500">{{ formatShanghaiTime(item.time) }} · 耗时 {{ Number(item.duration_ms || 0) }} ms</div>
+                                    </div>
+                                    <div class="text-xs mt-1" :class="Number(item.fail_count || 0) > 0 ? 'text-amber-600' : 'text-emerald-600'">
+                                        成功 {{ Number(item.success_count || 0) }} · 失败 {{ Number(item.fail_count || 0) }}
+                                    </div>
+                                    <div class="overflow-x-auto mt-2">
+                                        <table class="w-full min-w-[760px] text-xs">
+                                            <thead>
+                                                <tr class="text-gray-500 border-b">
+                                                    <th class="p-2 text-left">接口</th>
+                                                    <th class="p-2 text-left">结果</th>
+                                                    <th class="p-2 text-left">耗时</th>
+                                                    <th class="p-2 text-left">详情</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="step in (item.items || [])" :key="step.name + '_' + step.elapsed_ms" class="border-b last:border-b-0">
+                                                    <td class="p-2 font-mono text-[11px]">{{ step.name || '-' }}</td>
+                                                    <td class="p-2">
+                                                        <span class="px-1.5 py-0.5 rounded"
+                                                            :class="step.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'">
+                                                            {{ step.ok ? '成功' : '失败' }}
+                                                        </span>
+                                                    </td>
+                                                    <td class="p-2">{{ Number(step.elapsed_ms || 0) }} ms</td>
+                                                    <td class="p-2 text-gray-600">{{ step.detail || '-' }}</td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="bg-gray-900 text-green-400 p-4 rounded font-mono text-xs overflow-auto max-h-[50vh]">
+                            <div v-if="sysLogs.length === 0" class="text-gray-500">暂无日志或无法读取日志文件</div>
+                            <div v-for="(line, i) in sysLogs" :key="i" class="whitespace-pre-wrap border-b border-gray-800 pb-1 mb-1">{{ line }}</div>
+                        </div>
                     </div>
 
                     <!-- User Operation Logs -->
@@ -1540,7 +1542,6 @@
                 if (this.token) {
                     this.fetchConfig();
                     this.fetchTodayOverview();
-                    this.fetchProviderTestLogs();
                     this.startOverviewAutoRefresh();
                     this.fetchAdminPanelPath();
                     this.fetchDataFiles();
@@ -1562,7 +1563,6 @@
                 currentView(val) {
                     if (val === 'overview') {
                         this.fetchTodayOverview();
-                        this.fetchProviderTestLogs();
                         this.startOverviewAutoRefresh();
                     } else {
                         this.stopOverviewAutoRefresh();
@@ -1586,7 +1586,10 @@
                     if (val === 'news') {
                         this.fetchNews(1);
                     }
-                    if (val === 'logs') this.fetchLogs('system');
+                    if (val === 'logs') {
+                        this.activeLogTab = 'system';
+                        this.fetchLogs('system');
+                    }
                     if (val === 'lhb') {
                         this.fetchLHBOverview();
                         this.fetchLHBSeatConfigs();
@@ -1717,7 +1720,7 @@
                         const data = await res.json();
                         if (!res.ok) throw new Error(data.detail || '接口体检失败');
                         this.showMsg('接口体检已完成', 'success');
-                        await this.fetchProviderTestLogs();
+                        await this.fetchLogs('system');
                     } catch (e) {
                         this.showMsg(e.message || '接口体检失败', 'error');
                     } finally {
@@ -1873,7 +1876,6 @@
                         this.showMsg('登录成功', 'success');
                         this.currentView = 'overview';
                         this.fetchTodayOverview();
-                        this.fetchProviderTestLogs();
                         this.startOverviewAutoRefresh();
                         this.fetchConfig();
                         this.fetchAdminPanelPath();
@@ -1915,6 +1917,7 @@
 
                         if (type === 'system') {
                             this.sysLogs = data.logs || [];
+                            await this.fetchProviderTestLogs();
                         } else if (type === 'user_ops') {
                             this.userOpsLogs = (data && Array.isArray(data.logs)) ? data.logs : [];
                             this.userOpsPagination = {
