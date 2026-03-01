@@ -1064,6 +1064,7 @@ def normalize_stock_code(code: str):
 
 class FavoriteStatRequest(BaseModel):
     code: str
+    stock_name: str = ""
 
 
 @app.get("/api/favorites/quotes")
@@ -1110,7 +1111,7 @@ async def add_watchlist_stat(payload: FavoriteStatRequest, user: models.User = D
     code = normalize_stock_code(payload.code)
     if not code:
         return {"status": "error", "message": "Invalid code"}
-    watchlist_stats.add_favorite_stat(str(user.id), code)
+    watchlist_stats.add_favorite_stat(str(user.id), code, payload.stock_name)
     return {"status": "success"}
 
 

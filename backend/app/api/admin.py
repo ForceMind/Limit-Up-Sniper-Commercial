@@ -23,8 +23,16 @@ from app.core.ai_cache import ai_cache
 from app.core.runtime_logs import get_runtime_logs, add_runtime_log
 from app.core.ws_hub import ws_hub
 from app.core.operation_log import log_user_operation, get_recent_user_operations
-from datetime import datetime, timedelta
+from app.core.news_admin_store import (
+    build_news_item_id,
+    load_news_analysis_records,
+    load_news_history,
+    save_news_analysis_records,
+    save_news_history,
+)
+from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
+from zoneinfo import ZoneInfo
 
 router = APIRouter()
 
@@ -42,6 +50,7 @@ RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX_ATTEMPTS = 5
 SESSION_EXPIRE_HOURS = 24
 failed_attempts: Dict[str, List[float]] = {}
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _load_json(path: Path, default):
@@ -958,9 +967,9 @@ async def approve_order(
 
 # --- System Configuration ---
 class AdminConfigUpdate(BaseModel):
-    auto_analysis_enabled: bool
-    use_smart_schedule: bool
-    fixed_interval_minutes: int
+    auto_analysis_enabled: Optional[bool] = None
+    use_smart_schedule: Optional[bool] = None
+    fixed_interval_minutes: Optional[int] = None
     schedule_plan: Optional[List[dict]] = None
     lhb_enabled: Optional[bool] = None
     lhb_days: Optional[int] = None
@@ -974,10 +983,254 @@ class AdminConfigUpdate(BaseModel):
 
 
 @router.get("/watchlist_stats")
-async def get_watchlist_stats(authorized: bool = Depends(verify_admin)):
+async def get_watchlist_stats(
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_admin),
+):
+    stats = watchlist_stats.list_favorite_stats()
+
+    # Fill missing stock names from current watchlist cache when possible.
+    watchlist_map: Dict[str, str] = {}
+    watchlist_file = DATA_DIR / "watchlist.json"
+    if watchlist_file.exists():
+        try:
+            with open(watchlist_file, "r", encoding="utf-8") as f:
+                rows = json.load(f)
+            if isinstance(rows, list):
+                for row in rows:
+                    if not isinstance(row, dict):
+                        continue
+                    code = str(row.get("code", "")).strip().lower()
+                    name = str(row.get("name", "")).strip()
+                    if code and name:
+                        watchlist_map[code] = name
+                        digits = "".join(filter(str.isdigit, code))
+                        if len(digits) == 6:
+                            watchlist_map[digits] = name
+        except Exception:
+            pass
+
+    for item in stats:
+        code = str(item.get("code", "")).strip().lower()
+        if item.get("name"):
+            continue
+        fallback_name = watchlist_map.get(code) or watchlist_map.get("".join(filter(str.isdigit, code)))
+        if fallback_name:
+            item["name"] = fallback_name
+
     return {
         "status": "success",
-        "data": watchlist_stats.list_favorite_stats()
+        "storage_file": "backend/data/watchlist_stats.json",
+        "data": stats,
+    }
+
+
+@router.get("/watchlist_stats/users")
+async def get_watchlist_stat_users(
+    code: str,
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_admin),
+):
+    code_norm = str(code or "").strip().lower()
+    if not code_norm:
+        raise HTTPException(status_code=400, detail="Missing code")
+
+    user_items = watchlist_stats.list_favorite_users(code_norm)
+    if not user_items:
+        return {"status": "success", "code": code_norm, "users": []}
+
+    ids: List[int] = []
+    for item in user_items:
+        try:
+            ids.append(int(str(item.get("user_id", "")).strip()))
+        except Exception:
+            continue
+    db_users: Dict[int, models.User] = {}
+    if ids:
+        rows = db.query(models.User).filter(models.User.id.in_(ids)).all()
+        db_users = {int(x.id): x for x in rows}
+
+    accounts = _load_user_accounts()
+    device_to_username = _device_username_map(accounts)
+
+    users: List[Dict[str, Any]] = []
+    for item in user_items:
+        raw_user_id = str(item.get("user_id", "")).strip()
+        try:
+            uid = int(raw_user_id)
+        except Exception:
+            uid = -1
+        user_row = db_users.get(uid)
+        device_id = str(user_row.device_id).strip() if user_row else ""
+        username = device_to_username.get(device_id, "")
+        users.append(
+            {
+                "user_id": uid if uid > 0 else raw_user_id,
+                "username": username,
+                "device_id": device_id,
+                "joined_at": str(item.get("joined_at", "")).strip(),
+                "account_type": "registered" if username else "guest",
+            }
+        )
+
+    users.sort(key=lambda x: str(x.get("joined_at", "")), reverse=True)
+    return {"status": "success", "code": code_norm, "users": users}
+
+
+@router.get("/overview/today")
+async def get_today_overview(
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_admin),
+):
+    now_sh, start_sh, end_sh, start_utc, end_utc = _today_range_utc_naive()
+
+    # Users
+    new_users = (
+        db.query(models.User)
+        .filter(models.User.created_at >= start_utc, models.User.created_at < end_utc)
+        .all()
+    )
+    total_new_users = len(new_users)
+
+    accounts = _load_user_accounts()
+    device_to_username = _device_username_map(accounts)
+    registered_devices = set(device_to_username.keys())
+    new_registered_users = sum(1 for u in new_users if str(u.device_id or "").strip() in registered_devices)
+    new_guest_users = max(0, total_new_users - new_registered_users)
+
+    registered_account_today = 0
+    for account in accounts.values():
+        if not isinstance(account, dict):
+            continue
+        dt_sh = _as_shanghai_datetime(account.get("created_at"), assume_utc_when_naive=True)
+        if dt_sh and start_sh <= dt_sh < end_sh:
+            registered_account_today += 1
+
+    # Orders
+    today_orders = (
+        db.query(models.PurchaseOrder)
+        .filter(models.PurchaseOrder.created_at >= start_utc, models.PurchaseOrder.created_at < end_utc)
+        .all()
+    )
+    orders_total = len(today_orders)
+    orders_completed = 0
+    orders_waiting = 0
+    orders_pending = 0
+    orders_rejected = 0
+    amount_total = 0.0
+    amount_completed = 0.0
+    for order in today_orders:
+        amount = float(order.amount or 0.0)
+        amount_total += amount
+        status = str(order.status or "").strip().lower()
+        if status == "completed":
+            orders_completed += 1
+            amount_completed += amount
+        elif status == "waiting_verification":
+            orders_waiting += 1
+        elif status == "pending":
+            orders_pending += 1
+        elif status in {"rejected", "cancelled"}:
+            orders_rejected += 1
+
+    # Login and operation summary
+    login_success_count = 0
+    admin_login_count = 0
+    unique_login_devices = set()
+    user_op_count = 0
+    for row in _iter_user_operation_logs():
+        dt_sh = _as_shanghai_datetime(row.get("time"), assume_utc_when_naive=False)
+        if not dt_sh:
+            continue
+        if dt_sh < start_sh:
+            break
+        if dt_sh >= end_sh:
+            continue
+
+        user_op_count += 1
+        action = str(row.get("action", "")).strip().lower()
+        status = str(row.get("status", "")).strip().lower()
+        did = str(row.get("device_id", "")).strip()
+
+        if status == "success" and action == "user_login":
+            login_success_count += 1
+            if did:
+                unique_login_devices.add(did)
+        elif status == "success" and action == "admin_login":
+            admin_login_count += 1
+
+    # Referral
+    referrals_today = 0
+    referrals_rewarded_today = 0
+    referral_records = account_store.load_referral_records()
+    order_invites = referral_records.get("order_invites", {}) if isinstance(referral_records, dict) else {}
+    if isinstance(order_invites, dict):
+        for info in order_invites.values():
+            if not isinstance(info, dict):
+                continue
+            created_sh = _as_shanghai_datetime(info.get("created_at"), assume_utc_when_naive=True)
+            if created_sh and start_sh <= created_sh < end_sh:
+                referrals_today += 1
+            rewarded_sh = _as_shanghai_datetime(info.get("rewarded_at"), assume_utc_when_naive=True)
+            if rewarded_sh and start_sh <= rewarded_sh < end_sh:
+                referrals_rewarded_today += 1
+
+    # News / AI
+    news_history = load_news_history()
+    news_today = 0
+    for item in news_history:
+        dt_sh = _as_shanghai_datetime(item.get("timestamp"), assume_utc_when_naive=False)
+        if not dt_sh:
+            continue
+        if dt_sh < start_sh:
+            break
+        if dt_sh >= end_sh:
+            continue
+        news_today += 1
+
+    analysis_records = load_news_analysis_records()
+    ai_analysis_today = 0
+    for row in analysis_records:
+        dt_sh = _as_shanghai_datetime(row.get("analyzed_at"), assume_utc_when_naive=True)
+        if not dt_sh:
+            continue
+        if start_sh <= dt_sh < end_sh:
+            ai_analysis_today += 1
+
+    return {
+        "date": start_sh.strftime("%Y-%m-%d"),
+        "server_time": now_sh.strftime("%Y-%m-%d %H:%M:%S"),
+        "users": {
+            "new_total": total_new_users,
+            "new_registered": new_registered_users,
+            "new_guest": new_guest_users,
+            "registered_accounts": registered_account_today,
+        },
+        "orders": {
+            "total": orders_total,
+            "completed": orders_completed,
+            "waiting_verification": orders_waiting,
+            "pending": orders_pending,
+            "rejected_or_cancelled": orders_rejected,
+            "amount_total": round(amount_total, 2),
+            "amount_completed": round(amount_completed, 2),
+        },
+        "logins": {
+            "user_login_success": login_success_count,
+            "admin_login_success": admin_login_count,
+            "unique_user_devices": len(unique_login_devices),
+        },
+        "operations": {
+            "user_operations": user_op_count,
+        },
+        "referrals": {
+            "created": referrals_today,
+            "rewarded": referrals_rewarded_today,
+        },
+        "news": {
+            "fetched": news_today,
+            "ai_analyzed_batches": ai_analysis_today,
+        },
     }
 
 
@@ -1050,7 +1303,7 @@ async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depe
         SYSTEM_CONFIG["use_smart_schedule"] = config.use_smart_schedule
     if config.fixed_interval_minutes is not None:
         SYSTEM_CONFIG["fixed_interval_minutes"] = config.fixed_interval_minutes
-    if config.schedule_plan:
+    if config.schedule_plan is not None:
         SYSTEM_CONFIG["schedule_plan"] = config.schedule_plan
 
     if config.email_config is not None:
@@ -1212,6 +1465,8 @@ async def restore_data_package(
                 restored_files += 1
 
         lhb_manager.load_config()
+        lhb_manager.load_hot_money_map()
+        lhb_manager.load_vip_seats()
         add_runtime_log(
             f"[ADMIN] Data restore done from {backup_file.filename}, snapshot={snapshot_name}, files={restored_files}"
         )
@@ -1476,6 +1731,65 @@ def _contains_ci(text: str, keyword: str) -> bool:
     return keyword.lower() in str(text or "").lower()
 
 
+def _parse_any_datetime(value: Any) -> Optional[datetime]:
+    if not value:
+        return None
+
+    if isinstance(value, datetime):
+        return value
+
+    text = str(value).strip()
+    if not text:
+        return None
+
+    # Unix timestamp (seconds or milliseconds)
+    if text.isdigit():
+        try:
+            n = int(text)
+            if n > 10**12:
+                n = n / 1000.0
+            return datetime.fromtimestamp(n, tz=timezone.utc)
+        except Exception:
+            return None
+
+    norm = text.replace(" ", "T")
+    if norm.endswith("Z"):
+        norm = norm[:-1] + "+00:00"
+
+    try:
+        return datetime.fromisoformat(norm)
+    except Exception:
+        pass
+
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt)
+        except Exception:
+            continue
+    return None
+
+
+def _as_shanghai_datetime(value: Any, assume_utc_when_naive: bool = True) -> Optional[datetime]:
+    dt = _parse_any_datetime(value)
+    if not dt:
+        return None
+    if dt.tzinfo is None:
+        if assume_utc_when_naive:
+            dt = dt.replace(tzinfo=timezone.utc)
+        else:
+            dt = dt.replace(tzinfo=SHANGHAI_TZ)
+    return dt.astimezone(SHANGHAI_TZ)
+
+
+def _today_range_utc_naive():
+    now_sh = datetime.now(SHANGHAI_TZ)
+    start_sh = now_sh.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_sh = start_sh + timedelta(days=1)
+    start_utc = start_sh.astimezone(timezone.utc).replace(tzinfo=None)
+    end_utc = end_sh.astimezone(timezone.utc).replace(tzinfo=None)
+    return now_sh, start_sh, end_sh, start_utc, end_utc
+
+
 @router.get("/logs/system")
 async def get_system_logs(lines: int = 200, authorized: bool = Depends(verify_admin)):
     safe_lines = max(20, min(int(lines or 200), 2000))
@@ -1641,6 +1955,181 @@ async def get_ai_cache_item(key: str, authorized: bool = Depends(verify_admin)):
     }
 
 
+class AdminNewsDeleteRequest(BaseModel):
+    ids: List[str]
+
+
+def _build_news_analysis_index(records: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    index: Dict[str, Dict[str, Any]] = {}
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        analyzed_at = str(row.get("analyzed_at", "")).strip()
+        mode = str(row.get("mode", "")).strip()
+        summary = str(row.get("result_summary", "")).strip()
+        record_key = str(row.get("record_key", "")).strip()
+        news_ids = row.get("news_ids", [])
+        if not isinstance(news_ids, list):
+            continue
+        for nid in news_ids:
+            key = str(nid or "").strip()
+            if not key:
+                continue
+            old = index.get(key)
+            if old and str(old.get("analyzed_at", "")) >= analyzed_at:
+                continue
+            index[key] = {
+                "record_key": record_key,
+                "analyzed_at": analyzed_at,
+                "mode": mode,
+                "summary": summary,
+            }
+    return index
+
+
+@router.get("/news")
+async def get_news_admin_list(
+    page: int = 1,
+    page_size: int = 50,
+    keyword: str = "",
+    source: str = "",
+    ai_status: str = "all",
+    authorized: bool = Depends(verify_admin),
+):
+    safe_page = max(1, int(page or 1))
+    safe_size = max(10, min(int(page_size or 50), 200))
+    keyword_lc = str(keyword or "").strip().lower()
+    source_lc = str(source or "").strip().lower()
+    ai_status_lc = str(ai_status or "all").strip().lower()
+    if ai_status_lc not in {"all", "analyzed", "unanalyzed"}:
+        raise HTTPException(status_code=400, detail="Invalid ai_status filter")
+
+    news_items = load_news_history()
+    analysis_index = _build_news_analysis_index(load_news_analysis_records())
+
+    filtered: List[Dict[str, Any]] = []
+    for item in news_items:
+        nid = build_news_item_id(item)
+        ai_info = analysis_index.get(nid)
+        analyzed = bool(ai_info)
+        if ai_status_lc == "analyzed" and not analyzed:
+            continue
+        if ai_status_lc == "unanalyzed" and analyzed:
+            continue
+
+        source_text = str(item.get("source", "")).strip()
+        if source_lc and source_lc not in source_text.lower():
+            continue
+
+        row = {
+            "id": nid,
+            "timestamp": int(item.get("timestamp", 0) or 0),
+            "time_str": str(item.get("time_str", "")).strip(),
+            "source": source_text,
+            "text": str(item.get("text", "")).strip(),
+            "ai_analyzed": analyzed,
+            "ai_record_key": ai_info.get("record_key", "") if ai_info else "",
+            "ai_analyzed_at": ai_info.get("analyzed_at", "") if ai_info else "",
+            "ai_mode": ai_info.get("mode", "") if ai_info else "",
+            "ai_summary": ai_info.get("summary", "") if ai_info else "",
+        }
+
+        if keyword_lc:
+            blob = " ".join(
+                [
+                    row.get("source", ""),
+                    row.get("text", ""),
+                    row.get("ai_summary", ""),
+                    row.get("ai_mode", ""),
+                ]
+            ).lower()
+            if keyword_lc not in blob:
+                continue
+
+        filtered.append(row)
+
+    total = len(filtered)
+    start = (safe_page - 1) * safe_size
+    page_items = filtered[start:start + safe_size]
+    source_options = sorted({str(x.get("source", "")).strip() for x in news_items if str(x.get("source", "")).strip()})
+    return {
+        "items": page_items,
+        "total": total,
+        "page": safe_page,
+        "page_size": safe_size,
+        "total_pages": max(1, (total + safe_size - 1) // safe_size),
+        "sources": source_options,
+    }
+
+
+@router.post("/news/delete")
+async def delete_news_items(
+    payload: AdminNewsDeleteRequest,
+    authorized: bool = Depends(verify_admin),
+):
+    ids = [str(x or "").strip() for x in (payload.ids or []) if str(x or "").strip()]
+    ids_set = set(ids)
+    if not ids_set:
+        raise HTTPException(status_code=400, detail="No ids provided")
+
+    news_items = load_news_history()
+    remained = []
+    removed = 0
+    for item in news_items:
+        nid = build_news_item_id(item)
+        if nid in ids_set:
+            removed += 1
+            continue
+        remained.append(item)
+    save_news_history(remained)
+
+    records = load_news_analysis_records()
+    kept_records: List[Dict[str, Any]] = []
+    for row in records:
+        if not isinstance(row, dict):
+            continue
+        news_ids = [str(x or "").strip() for x in (row.get("news_ids") or []) if str(x or "").strip()]
+        if not news_ids:
+            continue
+        news_ids = [x for x in news_ids if x not in ids_set]
+        if not news_ids:
+            continue
+        row["news_ids"] = news_ids
+        news_items_row = row.get("news_items")
+        if isinstance(news_items_row, list):
+            row["news_items"] = [
+                x for x in news_items_row
+                if isinstance(x, dict) and str(x.get("id", "")).strip() not in ids_set
+            ]
+        kept_records.append(row)
+    save_news_analysis_records(kept_records)
+
+    log_user_operation(
+        "delete_news_items",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/news/delete",
+        detail=f"removed={removed}",
+    )
+    return {"status": "success", "removed": removed}
+
+
+@router.post("/news/clear")
+async def clear_news_items(authorized: bool = Depends(verify_admin)):
+    save_news_history([])
+    save_news_analysis_records([])
+    log_user_operation(
+        "clear_news_items",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/news/clear",
+        detail="all_news_cleared",
+    )
+    return {"status": "success", "removed": "all"}
+
+
 # --- LHB Admin ---
 def _normalize_lhb_seat_mappings(raw: Any) -> Dict[str, str]:
     out: Dict[str, str] = {}
@@ -1728,6 +2217,12 @@ class AdminLHBSettingsRequest(BaseModel):
 async def get_lhb_seat_configs(authorized: bool = Depends(verify_admin)):
     mappings = _load_lhb_seat_mappings()
     vip_seats = _load_lhb_vip_seats()
+    lhb_manager.load_hot_money_map()
+    lhb_manager.load_vip_seats()
+    if not mappings and isinstance(lhb_manager.hot_money_map, dict):
+        mappings = _normalize_lhb_seat_mappings(lhb_manager.hot_money_map)
+    if not vip_seats and isinstance(lhb_manager.vip_seats, set):
+        vip_seats = _normalize_lhb_vip_seats(sorted(list(lhb_manager.vip_seats)))
     return {
         "status": "success",
         "seat_mappings": [{"seat_name": k, "hot_money_name": v} for k, v in mappings.items()],
@@ -1755,6 +2250,7 @@ async def update_lhb_seat_configs(
         _save_json(VIP_SEATS_FILE, vip_seats)
 
     lhb_manager.load_hot_money_map()
+    lhb_manager.load_vip_seats()
     add_runtime_log(
         f"[龙虎榜] 席位配置已更新: 映射={len(mappings)} 条, VIP席位={len(vip_seats)} 条"
     )

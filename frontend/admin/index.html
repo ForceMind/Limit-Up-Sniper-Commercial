@@ -23,13 +23,15 @@
             </div>
             
             <nav class="flex-1 p-4 space-y-2">
-                <button @click="currentView='dashboard'" :class="currentView=='dashboard'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">概览 & 配置</button>
-                <button @click="currentView='users'" :class="currentView=='users'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">用户管理</button>
-                <button @click="currentView='watchlist'" :class="currentView=='watchlist'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">自选统计</button>
-                <button @click="currentView='orders'" :class="currentView=='orders'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">订单管理</button>
-                <button @click="currentView='referrals'" :class="currentView=='referrals'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">邀请记录</button>
-                <button @click="currentView='lhb'" :class="currentView=='lhb'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">龙虎榜管理</button>
-                <button @click="currentView='logs'" :class="currentView=='logs'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">系统日志</button>
+                <button @click="switchView('overview')" :class="currentView=='overview'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">今日概览</button>
+                <button @click="switchView('config')" :class="currentView=='config'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">系统配置</button>
+                <button @click="switchView('users')" :class="currentView=='users'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">用户管理</button>
+                <button @click="switchView('watchlist')" :class="currentView=='watchlist'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">自选统计</button>
+                <button @click="switchView('orders')" :class="currentView=='orders'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">订单管理</button>
+                <button @click="switchView('referrals')" :class="currentView=='referrals'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">邀请记录</button>
+                <button @click="switchView('news')" :class="currentView=='news'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">新闻管理</button>
+                <button @click="switchView('lhb')" :class="currentView=='lhb'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">龙虎榜管理</button>
+                <button @click="switchView('logs')" :class="currentView=='logs'?'bg-gray-700':''" class="w-full text-left px-4 py-2 rounded hover:bg-gray-700 transition">系统日志</button>
             </nav>
             
             <div class="p-4 border-t border-gray-700 text-xs text-gray-500">
@@ -52,8 +54,61 @@
             </div>
 
             <div v-else>
-                <!-- Dashboard & Config -->
-                <div v-if="currentView === 'dashboard'" class="max-w-4xl mx-auto space-y-6">
+                <!-- Overview -->
+                <div v-if="currentView === 'overview'" class="max-w-6xl mx-auto space-y-6">
+                    <div class="flex items-center justify-between mb-2">
+                        <h2 class="text-2xl font-bold">今日信息统计</h2>
+                        <button @click="fetchTodayOverview" class="text-blue-500 hover:text-blue-700">刷新</button>
+                    </div>
+                    <div class="text-sm text-gray-500">统计日期：{{ overviewToday.date || '-' }} · 当前时间：{{ overviewToday.server_time || '-' }}</div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-4">
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">今日新用户</div>
+                            <div class="text-2xl font-bold mt-1">{{ (overviewToday.users || {}).new_total || 0 }}</div>
+                            <div class="text-xs text-gray-500 mt-2">注册 {{ (overviewToday.users || {}).new_registered || 0 }} · 游客 {{ (overviewToday.users || {}).new_guest || 0 }}</div>
+                            <div class="text-xs text-gray-500">新注册账号 {{ (overviewToday.users || {}).registered_accounts || 0 }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">今日订单</div>
+                            <div class="text-2xl font-bold mt-1">{{ (overviewToday.orders || {}).total || 0 }}</div>
+                            <div class="text-xs text-gray-500 mt-2">完成 {{ (overviewToday.orders || {}).completed || 0 }} · 待审 {{ (overviewToday.orders || {}).waiting_verification || 0 }}</div>
+                            <div class="text-xs text-gray-500">待支付 {{ (overviewToday.orders || {}).pending || 0 }} · 失败 {{ (overviewToday.orders || {}).rejected_or_cancelled || 0 }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">今日金额</div>
+                            <div class="text-2xl font-bold mt-1 text-red-600">¥{{ Number((overviewToday.orders || {}).amount_total || 0).toFixed(2) }}</div>
+                            <div class="text-xs text-gray-500 mt-2">已完成金额 ¥{{ Number((overviewToday.orders || {}).amount_completed || 0).toFixed(2) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">今日登录</div>
+                            <div class="text-2xl font-bold mt-1">{{ (overviewToday.logins || {}).user_login_success || 0 }}</div>
+                            <div class="text-xs text-gray-500 mt-2">唯一设备 {{ (overviewToday.logins || {}).unique_user_devices || 0 }}</div>
+                            <div class="text-xs text-gray-500">管理员登录 {{ (overviewToday.logins || {}).admin_login_success || 0 }}</div>
+                        </div>
+                    </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">邀请统计</div>
+                            <div class="text-lg font-bold mt-1">创建 {{ (overviewToday.referrals || {}).created || 0 }}</div>
+                            <div class="text-xs text-gray-500">到账 {{ (overviewToday.referrals || {}).rewarded || 0 }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">新闻抓取</div>
+                            <div class="text-lg font-bold mt-1">新闻 {{ (overviewToday.news || {}).fetched || 0 }}</div>
+                            <div class="text-xs text-gray-500">AI批次 {{ (overviewToday.news || {}).ai_analyzed_batches || 0 }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">操作日志</div>
+                            <div class="text-lg font-bold mt-1">{{ (overviewToday.operations || {}).user_operations || 0 }}</div>
+                            <div class="text-xs text-gray-500">今日记录总数</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Config -->
+                <div v-if="currentView === 'config'" class="max-w-4xl mx-auto space-y-6">
                     <h2 class="text-2xl font-bold mb-4">系统设置</h2>
                     
                     <div class="bg-white p-6 rounded shadow space-y-6">
@@ -113,6 +168,12 @@
                                     </div>
                                 </div>
                             </div>
+                            <div class="mt-4 flex justify-end">
+                                <button @click="saveConfigSection('schedule')" class="px-4 py-2 rounded text-sm text-white"
+                                    :class="isConfigDirty('schedule') ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'">
+                                    {{ isConfigDirty('schedule') ? '保存调度设置（未保存）' : '保存调度设置' }}
+                                </button>
+                            </div>
                         </section>
 
                         <section class="mb-8 border-b border-gray-200 pb-8 bg-white p-6 rounded-lg shadow-sm">
@@ -160,6 +221,12 @@
                                     </div>
                                 </transition>
                             </div>
+                            <div class="mt-4 flex justify-end">
+                                <button @click="saveConfigSection('email')" class="px-4 py-2 rounded text-sm text-white"
+                                    :class="isConfigDirty('email') ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'">
+                                    {{ isConfigDirty('email') ? '保存邮件设置（未保存）' : '保存邮件设置' }}
+                                </button>
+                            </div>
                         </section>
 
                         <!-- API Configuration (Cleaned & Separated) -->
@@ -194,6 +261,12 @@
                                     加载 API 配置中...
                                 </div>
                             </div>
+                            <div class="mt-4 flex justify-end">
+                                <button @click="saveConfigSection('api_keys')" class="px-4 py-2 rounded text-sm text-white"
+                                    :class="isConfigDirty('api_keys') ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'">
+                                    {{ isConfigDirty('api_keys') ? '保存 API 配置（未保存）' : '保存 API 配置' }}
+                                </button>
+                            </div>
                         </section>
 
                         <section class="mb-8 border-b border-gray-200 pb-8 bg-white p-6 rounded-lg shadow-sm">
@@ -227,6 +300,12 @@
                                     已接入关联行业概念、实时行情（多股）、5分钟分时与日K历史；1分钟K线仍使用现有数据通道。
                                 </div>
                             </div>
+                            <div class="mt-4 flex justify-end">
+                                <button @click="saveConfigSection('data_provider')" class="px-4 py-2 rounded text-sm text-white"
+                                    :class="isConfigDirty('data_provider') ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'">
+                                    {{ isConfigDirty('data_provider') ? '保存数据源配置（未保存）' : '保存数据源配置' }}
+                                </button>
+                            </div>
                         </section>
 
                         <!-- Pricing Configuration -->
@@ -253,6 +332,12 @@
                                     </div>
                                 </div>
                                 <div v-else class="text-gray-500 text-sm">加载价格配置中...</div>
+                            </div>
+                            <div class="mt-4 flex justify-end">
+                                <button @click="saveConfigSection('pricing')" class="px-4 py-2 rounded text-sm text-white"
+                                    :class="isConfigDirty('pricing') ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'">
+                                    {{ isConfigDirty('pricing') ? '保存价格配置（未保存）' : '保存价格配置' }}
+                                </button>
                             </div>
                         </section>
 
@@ -301,6 +386,12 @@
                                     </div>
                                 </div>
                             </div>
+                            <div class="mt-4 flex justify-end">
+                                <button @click="saveConfigSection('community_referral')" class="px-4 py-2 rounded text-sm text-white"
+                                    :class="isConfigDirty('community_referral') ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'">
+                                    {{ isConfigDirty('community_referral') ? '保存社群与邀请配置（未保存）' : '保存社群与邀请配置' }}
+                                </button>
+                            </div>
                         </section>
 
                         <!-- Admin Panel Path -->
@@ -313,7 +404,10 @@
                                         <label class="block text-sm font-bold text-gray-700 mb-1">后台路径</label>
                                         <input type="text" v-model="adminPanelPath" class="w-full border rounded p-2 text-sm font-mono" placeholder="/admin">
                                     </div>
-                                    <button @click="saveAdminPanelPath" class="bg-indigo-600 text-white px-4 py-2 rounded text-sm hover:bg-indigo-700 whitespace-nowrap">保存路径</button>
+                                    <button @click="saveAdminPanelPath" class="text-white px-4 py-2 rounded text-sm whitespace-nowrap"
+                                        :class="isConfigDirty('admin_path') ? 'bg-amber-600 hover:bg-amber-700' : 'bg-indigo-600 hover:bg-indigo-700'">
+                                        {{ isConfigDirty('admin_path') ? '保存路径（未保存）' : '保存路径' }}
+                                    </button>
                                 </div>
                                 <div class="text-xs text-gray-500 mt-2">当前生效：<span class="font-mono">{{ adminPanelPath || '/admin' }}</span></div>
                             </div>
@@ -389,9 +483,6 @@
                             </div>
                         </section>
 
-                        <div class="flex justify-end pt-4">
-                            <button @click="saveConfig" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700">保存设置</button>
-                        </div>
                     </div>
                 </div>
 
@@ -609,13 +700,69 @@
                         <h2 class="text-2xl font-bold">自选股统计</h2>
                         <button @click="fetchWatchlistStats" class="text-blue-500 hover:text-blue-700">刷新</button>
                     </div>
-                    <div class="bg-white rounded shadow p-4">
-                        <h3 class="text-sm font-bold text-gray-700 mb-3">自选股热度统计（按加入人数）</h3>
+                    <div class="bg-white rounded shadow p-4 space-y-3">
+                        <h3 class="text-sm font-bold text-gray-700">自选股热度统计（按加入人数）</h3>
+                        <div class="text-xs text-gray-500">数据来源：{{ watchlistStatsStorage || 'backend/data/watchlist_stats.json' }}</div>
                         <div v-if="watchlistStats.length === 0" class="text-xs text-gray-400">暂无统计数据</div>
-                        <div v-else class="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
-                            <div v-for="item in watchlistStats" :key="item.code" class="border rounded px-2 py-1 text-xs bg-gray-50 flex justify-between">
-                                <span class="font-mono text-gray-700">{{ item.code }}</span>
-                                <span class="text-red-600 font-bold">{{ item.count }}人</span>
+                        <div v-else class="overflow-x-auto">
+                            <table class="w-full min-w-[720px] text-sm">
+                                <thead class="bg-gray-50 border-b text-gray-600">
+                                    <tr>
+                                        <th class="p-3 text-left">代码</th>
+                                        <th class="p-3 text-left">股票名称</th>
+                                        <th class="p-3 text-left">人数</th>
+                                        <th class="p-3 text-left">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    <tr v-for="item in watchlistStats" :key="item.code" class="hover:bg-gray-50">
+                                        <td class="p-3 font-mono">{{ item.code }}</td>
+                                        <td class="p-3">{{ item.name || '-' }}</td>
+                                        <td class="p-3">
+                                            <button @click="openWatchlistUsers(item)" class="text-red-600 font-bold hover:text-red-700">
+                                                {{ item.count }}人
+                                            </button>
+                                        </td>
+                                        <td class="p-3">
+                                            <button @click="openWatchlistUsers(item)" class="text-xs border rounded px-2 py-1 hover:bg-gray-100">查看用户</button>
+                                        </td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+
+                    <div v-if="watchlistUserModal.show" class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+                        <div class="bg-white w-full max-w-3xl rounded shadow-xl">
+                            <div class="p-4 border-b flex items-center justify-between">
+                                <div>
+                                    <div class="text-lg font-bold">自选用户明细</div>
+                                    <div class="text-xs text-gray-500 mt-1">股票：{{ watchlistUserModal.code }} {{ watchlistUserModal.name ? ('· ' + watchlistUserModal.name) : '' }}</div>
+                                </div>
+                                <button @click="watchlistUserModal.show = false" class="text-gray-500 hover:text-gray-700">关闭</button>
+                            </div>
+                            <div class="p-4 max-h-[60vh] overflow-auto">
+                                <table class="w-full text-sm">
+                                    <thead class="bg-gray-50 border-b text-gray-600">
+                                        <tr>
+                                            <th class="p-2 text-left">用户名</th>
+                                            <th class="p-2 text-left">设备ID</th>
+                                            <th class="p-2 text-left">账号类型</th>
+                                            <th class="p-2 text-left">加入时间</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y">
+                                        <tr v-for="u in watchlistUserModal.users" :key="`${u.user_id}_${u.device_id}_${u.joined_at}`">
+                                            <td class="p-2 font-mono">{{ u.username || '-' }}</td>
+                                            <td class="p-2 font-mono text-xs break-all">{{ u.device_id || '-' }}</td>
+                                            <td class="p-2">{{ u.account_type === 'registered' ? '正式注册' : '游客' }}</td>
+                                            <td class="p-2 text-xs">{{ u.joined_at ? formatShanghaiTime(u.joined_at) : '-' }}</td>
+                                        </tr>
+                                        <tr v-if="watchlistUserModal.users.length === 0">
+                                            <td colspan="4" class="p-4 text-center text-gray-400">暂无用户明细</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
                             </div>
                         </div>
                     </div>
@@ -830,6 +977,78 @@
                                 <button @click="fetchReferrals(referralPagination.page - 1)" :disabled="referralPagination.page <= 1" class="px-3 py-1 border rounded disabled:opacity-40">上一页</button>
                                 <span>第 {{ referralPagination.page }} / {{ Math.max(1, referralPagination.total_pages) }} 页</span>
                                 <button @click="fetchReferrals(referralPagination.page + 1)" :disabled="referralPagination.page >= Math.max(1, referralPagination.total_pages)" class="px-3 py-1 border rounded disabled:opacity-40">下一页</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- News Management -->
+                <div v-if="currentView === 'news'" class="max-w-7xl mx-auto">
+                    <div class="flex justify-between items-center mb-6">
+                        <h2 class="text-2xl font-bold">新闻管理</h2>
+                        <div class="flex items-center gap-2">
+                            <button @click="fetchNews(1)" class="text-blue-500 hover:text-blue-700">刷新</button>
+                            <button @click="clearAllNews" class="text-red-600 hover:text-red-700">清空全部</button>
+                        </div>
+                    </div>
+                    <div class="bg-white rounded shadow overflow-hidden">
+                        <div class="p-4 border-b bg-gray-50 flex flex-wrap items-center gap-2">
+                            <select v-model="newsFilter.source" class="border rounded px-2 py-1 text-sm">
+                                <option value="">全部来源</option>
+                                <option v-for="s in newsSources" :key="s" :value="s">{{ s }}</option>
+                            </select>
+                            <select v-model="newsFilter.ai_status" class="border rounded px-2 py-1 text-sm">
+                                <option value="all">全部分析状态</option>
+                                <option value="analyzed">仅已分析</option>
+                                <option value="unanalyzed">仅未分析</option>
+                            </select>
+                            <input v-model="newsFilter.keyword" @keyup.enter="fetchNews(1)" type="text" class="border rounded px-2 py-1 text-sm w-64" placeholder="关键词（新闻/AI结论）">
+                            <button @click="fetchNews(1)" class="text-sm px-3 py-1.5 border rounded hover:bg-gray-100">筛选</button>
+                            <div class="text-xs text-gray-500 ml-auto">共 {{ newsPagination.total }} 条</div>
+                        </div>
+                        <div class="overflow-x-auto">
+                            <table class="w-full min-w-[1400px] text-left text-sm">
+                                <thead class="bg-gray-50 border-b text-gray-600">
+                                    <tr>
+                                        <th class="p-3">抓取时间</th>
+                                        <th class="p-3">来源</th>
+                                        <th class="p-3">新闻内容</th>
+                                        <th class="p-3">AI状态</th>
+                                        <th class="p-3">AI结论</th>
+                                        <th class="p-3">操作</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    <tr v-for="n in newsItems" :key="n.id" class="hover:bg-gray-50 align-top">
+                                        <td class="p-3 text-xs whitespace-nowrap">{{ n.time_str ? formatShanghaiTime(n.time_str) : '-' }}</td>
+                                        <td class="p-3 text-xs whitespace-nowrap">{{ n.source || '-' }}</td>
+                                        <td class="p-3 text-xs leading-5">
+                                            <div class="max-w-[680px] whitespace-pre-wrap">{{ n.text || '-' }}</div>
+                                        </td>
+                                        <td class="p-3 text-xs whitespace-nowrap">
+                                            <span v-if="n.ai_analyzed" class="bg-emerald-100 text-emerald-700 px-2 py-1 rounded">已分析</span>
+                                            <span v-else class="bg-gray-100 text-gray-600 px-2 py-1 rounded">未分析</span>
+                                            <div v-if="n.ai_analyzed_at" class="text-gray-500 mt-1">{{ formatShanghaiTime(n.ai_analyzed_at) }}</div>
+                                            <div v-if="n.ai_mode" class="text-gray-500">{{ n.ai_mode }}</div>
+                                        </td>
+                                        <td class="p-3 text-xs leading-5">
+                                            <div class="max-w-[360px] whitespace-pre-wrap">{{ n.ai_summary || '-' }}</div>
+                                        </td>
+                                        <td class="p-3">
+                                            <button @click="deleteNewsItem(n)" class="text-xs border rounded px-2 py-1 text-red-600 border-red-200 hover:bg-red-50">删除</button>
+                                        </td>
+                                    </tr>
+                                    <tr v-if="newsItems.length === 0">
+                                        <td colspan="6" class="p-4 text-center text-gray-400">暂无新闻记录</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="p-3 border-t bg-gray-50 flex items-center justify-between text-sm">
+                            <div>第 {{ newsPagination.page }} / {{ Math.max(1, newsPagination.total_pages) }} 页</div>
+                            <div class="flex items-center gap-2">
+                                <button @click="fetchNews(newsPagination.page - 1)" :disabled="newsPagination.page <= 1" class="px-3 py-1 border rounded disabled:opacity-40">上一页</button>
+                                <button @click="fetchNews(newsPagination.page + 1)" :disabled="newsPagination.page >= Math.max(1, newsPagination.total_pages)" class="px-3 py-1 border rounded disabled:opacity-40">下一页</button>
                             </div>
                         </div>
                     </div>
@@ -1119,7 +1338,7 @@
                 return {
                     token: localStorage.getItem('admin_token') || '',
                     loginForm: { username: 'admin', password: '' },
-                    currentView: 'dashboard',
+                    currentView: 'overview',
                     config: {
                         data_provider_config: {
                             biying_enabled: false,
@@ -1166,7 +1385,14 @@
                     userOpsPagination: { page: 1, page_size: 50, total: 0, total_pages: 1 },
                     aiCacheStats: {},
                     aiCacheDetail: null,
+                    overviewToday: {},
                     watchlistStats: [],
+                    watchlistStatsStorage: 'backend/data/watchlist_stats.json',
+                    watchlistUserModal: { show: false, code: '', name: '', users: [] },
+                    newsItems: [],
+                    newsSources: [],
+                    newsFilter: { source: '', ai_status: 'all', keyword: '' },
+                    newsPagination: { page: 1, page_size: 30, total: 0, total_pages: 1 },
                     // LHB Admin
                     lhbRange: {
                         start_date: '',
@@ -1191,7 +1417,17 @@
                     // Admin Account
                     adminPanelPath: '/admin',
                     newAdminPassword: '',
-                    passwordMsg: ''
+                    passwordMsg: '',
+                    configSnapshots: {
+                        schedule: '',
+                        email: '',
+                        api_keys: '',
+                        data_provider: '',
+                        pricing: '',
+                        community_referral: '',
+                        admin_path: ''
+                    },
+                    _beforeUnloadHandler: null
                 }
             },
             mounted() {
@@ -1199,8 +1435,15 @@
                 const start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
                 this.lhbRange.start_date = start.toISOString().slice(0, 10);
                 this.lhbRange.end_date = today.toISOString().slice(0, 10);
+                this._beforeUnloadHandler = (event) => {
+                    if (!this.hasUnsavedConfigChanges()) return;
+                    event.preventDefault();
+                    event.returnValue = '';
+                };
+                window.addEventListener('beforeunload', this._beforeUnloadHandler);
                 if (this.token) {
                     this.fetchConfig();
+                    this.fetchTodayOverview();
                     this.fetchAdminPanelPath();
                     this.fetchDataFiles();
                     // Pre-fetch
@@ -1211,9 +1454,19 @@
                     this.fetchWatchlistStats();
                 }
             },
+            beforeUnmount() {
+                if (this._beforeUnloadHandler) {
+                    window.removeEventListener('beforeunload', this._beforeUnloadHandler);
+                }
+            },
             watch: {
                 currentView(val) {
-                    if (val === 'dashboard') this.fetchDataFiles();
+                    if (val === 'overview') this.fetchTodayOverview();
+                    if (val === 'config') {
+                        this.fetchConfig();
+                        this.fetchAdminPanelPath();
+                        this.fetchDataFiles();
+                    }
                     if (val === 'users') {
                         this.fetchUsers();
                     }
@@ -1224,6 +1477,9 @@
                     }
                     if (val === 'referrals') {
                         this.fetchReferrals(1);
+                    }
+                    if (val === 'news') {
+                        this.fetchNews(1);
                     }
                     if (val === 'logs') this.fetchLogs('system');
                     if (val === 'lhb') {
@@ -1254,6 +1510,69 @@
                     if (this.confirmModal.resolve) {
                         this.confirmModal.resolve(result);
                         this.confirmModal.resolve = null;
+                    }
+                },
+                stableStringify(value) {
+                    try {
+                        return JSON.stringify(value ?? null);
+                    } catch (e) {
+                        return String(value ?? '');
+                    }
+                },
+                getConfigSectionValue(section) {
+                    if (section === 'schedule') {
+                        return {
+                            auto_analysis_enabled: this.config.auto_analysis_enabled,
+                            use_smart_schedule: this.config.use_smart_schedule,
+                            fixed_interval_minutes: this.config.fixed_interval_minutes,
+                            schedule_plan: this.config.schedule_plan || []
+                        };
+                    }
+                    if (section === 'email') return this.config.email_config || {};
+                    if (section === 'api_keys') return this.config.api_keys || {};
+                    if (section === 'data_provider') return this.config.data_provider_config || {};
+                    if (section === 'pricing') return this.config.pricing_config || {};
+                    if (section === 'community_referral') {
+                        return {
+                            community_config: this.config.community_config || {},
+                            referral_config: this.config.referral_config || {}
+                        };
+                    }
+                    if (section === 'admin_path') return this.adminPanelPath || '/admin';
+                    return null;
+                },
+                snapshotConfigSection(section) {
+                    this.configSnapshots[section] = this.stableStringify(this.getConfigSectionValue(section));
+                },
+                snapshotAllConfigSections() {
+                    for (const section of Object.keys(this.configSnapshots || {})) {
+                        this.snapshotConfigSection(section);
+                    }
+                },
+                isConfigDirty(section) {
+                    if (!this.configSnapshots || !(section in this.configSnapshots)) return false;
+                    return this.stableStringify(this.getConfigSectionValue(section)) !== this.configSnapshots[section];
+                },
+                hasUnsavedConfigChanges() {
+                    return Object.keys(this.configSnapshots || {}).some((key) => this.isConfigDirty(key));
+                },
+                async switchView(nextView) {
+                    if (!nextView || this.currentView === nextView) return;
+                    if (this.currentView === 'config' && this.hasUnsavedConfigChanges()) {
+                        const ok = await this.showConfirm('当前配置有未保存修改，确认离开当前页面吗？');
+                        if (!ok) return;
+                    }
+                    this.currentView = nextView;
+                },
+                async fetchTodayOverview() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/overview/today', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '今日统计加载失败');
+                        this.overviewToday = data || {};
+                    } catch (e) {
+                        this.showMsg(e.message || '今日统计加载失败', 'error');
                     }
                 },
                 versionLabel(version) {
@@ -1394,6 +1713,8 @@
                         localStorage.setItem('admin_token', this.token);
                         this.loginForm.password = '';
                         this.showMsg('登录成功', 'success');
+                        this.currentView = 'overview';
+                        this.fetchTodayOverview();
                         this.fetchConfig();
                         this.fetchAdminPanelPath();
                         this.fetchDataFiles();
@@ -1474,6 +1795,7 @@
 
                         this.config = {
                             ...data,
+                            schedule_plan: Array.isArray(data.schedule_plan) ? data.schedule_plan : [],
                             data_provider_config: providerCfg,
                             community_config: {
                                 qq_group_number: '',
@@ -1489,6 +1811,7 @@
                                 ...(data.referral_config || {})
                             }
                         };
+                        this.snapshotAllConfigSections();
                     } catch(e) { 
                         console.error("Fetch Config Error:", e);
                         this.showMsg(e.message, 'error'); 
@@ -1501,6 +1824,7 @@
                         const data = await res.json();
                         if (res.ok) {
                             this.adminPanelPath = data.path || '/admin';
+                            this.snapshotConfigSection('admin_path');
                         }
                     } catch (e) {
                         console.error('Fetch admin panel path failed', e);
@@ -1522,6 +1846,7 @@
                         const data = await res.json();
                         if (!res.ok) throw new Error(data.detail || '保存后台路径失败');
                         this.adminPanelPath = data.path || path;
+                        this.snapshotConfigSection('admin_path');
                         this.showMsg(`后台地址已更新为 ${this.adminPanelPath}`, 'success');
                     } catch (e) {
                         this.showMsg(e.message || '保存后台路径失败', 'error');
@@ -1560,40 +1885,60 @@
                          this.showMsg(e.message, 'error');
                     }
                 },
-                async saveConfig() {
+                async saveConfigSection(section, silent = false) {
                     try {
-                        const providerCfg = {
-                            ...(this.config.data_provider_config || {})
-                        };
-                        const minuteLimit = Number(providerCfg.biying_minute_limit);
-                        providerCfg.biying_minute_limit = Number.isFinite(minuteLimit) && minuteLimit > 0 ? Math.floor(minuteLimit) : 3000;
-                        delete providerCfg.biying_daily_limit;
-
-                        const res = await fetch(API_BASE_URL + '/api/admin/config', {
-                            method: 'POST',
-                            headers: this.getHeaders(),
-                            body: JSON.stringify({
+                        let body = {};
+                        if (section === 'schedule') {
+                            body = {
                                 auto_analysis_enabled: this.config.auto_analysis_enabled,
                                 use_smart_schedule: this.config.use_smart_schedule,
                                 fixed_interval_minutes: this.config.fixed_interval_minutes,
-                                schedule_plan: this.config.schedule_plan,
-                                lhb_enabled: this.config.lhb_enabled,
-                                lhb_days: this.config.lhb_days,
-                                lhb_min_amount: this.config.lhb_min_amount,
-                                email_config: this.config.email_config,
-                                api_keys: this.config.api_keys,
-                                data_provider_config: providerCfg,
+                                schedule_plan: this.config.schedule_plan
+                            };
+                        } else if (section === 'email') {
+                            body = { email_config: this.config.email_config };
+                        } else if (section === 'api_keys') {
+                            body = { api_keys: this.config.api_keys };
+                        } else if (section === 'data_provider') {
+                            const providerCfg = { ...(this.config.data_provider_config || {}) };
+                            const minuteLimit = Number(providerCfg.biying_minute_limit);
+                            providerCfg.biying_minute_limit = Number.isFinite(minuteLimit) && minuteLimit > 0 ? Math.floor(minuteLimit) : 3000;
+                            delete providerCfg.biying_daily_limit;
+                            body = { data_provider_config: providerCfg };
+                        } else if (section === 'pricing') {
+                            body = { pricing_config: this.config.pricing_config };
+                        } else if (section === 'community_referral') {
+                            body = {
                                 community_config: this.config.community_config,
-                                referral_config: this.config.referral_config,
-                                pricing_config: this.config.pricing_config
-                            })
-                        });
-                        if(res.ok) {
-                            this.showMsg('保存成功', 'success');
+                                referral_config: this.config.referral_config
+                            };
                         } else {
-                            throw new Error("Save Status: " + res.status);
+                            throw new Error('未知配置分组');
                         }
-                    } catch(e) { this.showMsg(e.message, 'error'); }
+                        const res = await fetch(API_BASE_URL + '/api/admin/config', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify(body)
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || `保存失败: ${res.status}`);
+                        this.snapshotConfigSection(section);
+                        if (!silent) this.showMsg('保存成功', 'success');
+                        return true;
+                    } catch(e) {
+                        this.showMsg(e.message, 'error');
+                        return false;
+                    }
+                },
+                async saveConfig() {
+                    let allOk = true;
+                    for (const section of ['schedule', 'email', 'api_keys', 'data_provider', 'pricing', 'community_referral']) {
+                        if (this.isConfigDirty(section)) {
+                            const ok = await this.saveConfigSection(section, true);
+                            if (!ok) allOk = false;
+                        }
+                    }
+                    if (allOk) this.showMsg('所有配置已保存', 'success');
                 },
                 
 
@@ -1891,7 +2236,91 @@
                             ? data.stats
                             : (Array.isArray(data.data) ? data.data : []);
                         this.watchlistStats = stats;
+                        this.watchlistStatsStorage = data.storage_file || 'backend/data/watchlist_stats.json';
                     } catch(e) { console.error(e); this.showMsg(e.message, "error"); }
+                },
+                async openWatchlistUsers(item) {
+                    const code = String((item && item.code) || '').trim();
+                    if (!code) return;
+                    this.watchlistUserModal = {
+                        show: true,
+                        code,
+                        name: String((item && item.name) || '').trim(),
+                        users: []
+                    };
+                    try {
+                        const qs = new URLSearchParams({ code }).toString();
+                        const res = await fetch(API_BASE_URL + `/api/admin/watchlist_stats/users?${qs}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '自选用户明细加载失败');
+                        this.watchlistUserModal.users = Array.isArray(data.users) ? data.users : [];
+                    } catch (e) {
+                        this.showMsg(e.message || '自选用户明细加载失败', 'error');
+                    }
+                },
+                async fetchNews(page = 1) {
+                    try {
+                        const nextPage = Math.max(1, Number(page || 1));
+                        const qs = new URLSearchParams({
+                            page: String(nextPage),
+                            page_size: String(this.newsPagination.page_size || 30),
+                            keyword: this.newsFilter.keyword || '',
+                            source: this.newsFilter.source || '',
+                            ai_status: this.newsFilter.ai_status || 'all'
+                        }).toString();
+                        const res = await fetch(API_BASE_URL + `/api/admin/news?${qs}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '新闻列表加载失败');
+                        this.newsItems = Array.isArray(data.items) ? data.items : [];
+                        this.newsSources = Array.isArray(data.sources) ? data.sources : [];
+                        this.newsPagination = {
+                            ...this.newsPagination,
+                            page: Number(data.page || 1),
+                            total: Number(data.total || 0),
+                            total_pages: Number(data.total_pages || 1)
+                        };
+                    } catch (e) {
+                        this.showMsg(e.message || '新闻列表加载失败', 'error');
+                    }
+                },
+                async deleteNewsItem(item) {
+                    const id = String((item && item.id) || '').trim();
+                    if (!id) return;
+                    const confirmed = await this.showConfirm('确认删除这条新闻记录吗？');
+                    if (!confirmed) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/news/delete', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({ ids: [id] })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '删除新闻失败');
+                        this.showMsg('新闻记录已删除', 'success');
+                        this.fetchNews(this.newsPagination.page);
+                    } catch (e) {
+                        this.showMsg(e.message || '删除新闻失败', 'error');
+                    }
+                },
+                async clearAllNews() {
+                    const confirmed = await this.showConfirm('确认清空所有新闻与关联分析记录吗？');
+                    if (!confirmed) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/news/clear', {
+                            method: 'POST',
+                            headers: this.getHeaders()
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '清空新闻失败');
+                        this.showMsg('新闻记录已清空', 'success');
+                        this.fetchNews(1);
+                    } catch (e) {
+                        this.showMsg(e.message || '清空新闻失败', 'error');
+                    }
                 },
                 async resetUserPassword(user) {
                     if (!user || !user.id) return;

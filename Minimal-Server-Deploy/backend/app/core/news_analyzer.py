@@ -9,6 +9,7 @@ from app.core.stock_utils import calculate_metrics
 from app.core.market_scanner import scan_intraday_limit_up, get_market_overview, scan_limit_up_pool, scan_broken_limit_pool
 from app.core.ai_cache import ai_cache
 from app.core.lhb_manager import lhb_manager
+from app.core.news_admin_store import append_news_analysis_record
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -366,6 +367,16 @@ def analyze_news_with_deepseek(news_batch, market_summary="", logger=None, mode=
         msg = f"[*] 使用缓存的AI分析结果 (缓存键: {cache_key[:8]})..."
         print(msg)
         if logger: logger(msg)
+        try:
+            append_news_analysis_record(
+                mode=mode,
+                news_batch=news_batch or [],
+                analysis_result=cached_result,
+                market_summary=market_summary,
+                from_cache=True,
+            )
+        except Exception:
+            pass
         return cached_result
 
     mode_cn = _mode_display_name(mode)
@@ -562,6 +573,16 @@ def analyze_news_with_deepseek(news_batch, market_summary="", logger=None, mode=
         
         # Save to Cache
         ai_cache.set(cache_key, data, meta=_build_usage_meta(result))
+        try:
+            append_news_analysis_record(
+                mode=mode,
+                news_batch=news_batch or [],
+                analysis_result=data,
+                market_summary=market_summary,
+                from_cache=False,
+            )
+        except Exception:
+            pass
         
         return data
     except Exception as e:
