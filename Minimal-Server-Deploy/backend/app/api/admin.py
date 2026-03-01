@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks, UploadFile, File
+﻿from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks, UploadFile, File
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from sqlalchemy.orm import Session, joinedload
@@ -8,6 +8,7 @@ from typing import List, Optional, Dict, Any, Tuple
 import secrets
 import os
 import json
+import time
 import hashlib
 import re
 import shutil
@@ -20,6 +21,7 @@ from app.core.lhb_manager import lhb_manager
 from app.core import user_service, purchase_manager, account_store
 from app.core import watchlist_stats
 from app.core.ai_cache import ai_cache
+from app.core.data_provider import data_provider
 from app.core.runtime_logs import get_runtime_logs, add_runtime_log
 from app.core.ws_hub import ws_hub
 from app.core.operation_log import log_user_operation, get_recent_user_operations
@@ -33,6 +35,7 @@ from app.core.news_admin_store import (
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
+from collections import deque
 
 router = APIRouter()
 
@@ -1197,6 +1200,77 @@ async def get_today_overview(
         if start_sh <= dt_sh < end_sh:
             ai_analysis_today += 1
 
+    # API call stats for today
+    api_calls_today = 0
+    api_failed_today = 0
+    api_unique_devices = set()
+    ai_api_calls_today = 0
+    for row in _iter_user_operation_logs():
+        dt_sh = _as_shanghai_datetime(row.get("time"), assume_utc_when_naive=False)
+        if not dt_sh:
+            continue
+        if dt_sh < start_sh:
+            break
+        if dt_sh >= end_sh:
+            continue
+        action = str(row.get("action", "")).strip().lower()
+        path = str(row.get("path", "")).strip()
+        status = str(row.get("status", "")).strip().lower()
+        device_id = str(row.get("device_id", "")).strip()
+
+        if action == "api_call" and path.startswith("/api/"):
+            api_calls_today += 1
+            if status != "success":
+                api_failed_today += 1
+            if device_id:
+                api_unique_devices.add(device_id)
+
+        if path in {"/api/analyze/stock", "/api/stock/analyze", "/api/pools/analyze"} and status == "success":
+            ai_api_calls_today += 1
+
+    # AI token usage (from cache entries created today)
+    ai_prompt_tokens_today = 0
+    ai_completion_tokens_today = 0
+    ai_total_tokens_today = 0
+    for entry in ai_cache.cache.values():
+        if not isinstance(entry, dict):
+            continue
+        ts = _safe_int(entry.get("timestamp", 0))
+        if ts <= 0:
+            continue
+        dt_sh = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(SHANGHAI_TZ)
+        if not (start_sh <= dt_sh < end_sh):
+            continue
+        usage = _ai_usage_from_entry(entry)
+        ai_prompt_tokens_today += int(usage.get("prompt_tokens", 0) or 0)
+        ai_completion_tokens_today += int(usage.get("completion_tokens", 0) or 0)
+        ai_total_tokens_today += int(usage.get("total_tokens", 0) or 0)
+
+    ai_cost_today = (ai_prompt_tokens_today / 1_000_000.0) * 2.0 + (ai_completion_tokens_today / 1_000_000.0) * 3.0
+
+    # Current quota consumption snapshot from users table
+    users_all = db.query(models.User).all()
+    ai_quota_used_total = 0
+    for u in users_all:
+        ai_quota_used_total += max(0, int(u.daily_ai_count or 0))
+
+    # Realtime system metrics
+    runtime_metrics = _collect_system_runtime_metrics(start_sh.strftime("%Y-%m-%d"))
+    ws_stats = await ws_hub.snapshot_stats()
+
+    # Online by recent activity in last 5 minutes (best-effort)
+    online_recent_devices = set()
+    now_ts = now_sh.timestamp()
+    for row in _iter_user_operation_logs()[:2000]:
+        dt_sh = _as_shanghai_datetime(row.get("time"), assume_utc_when_naive=False)
+        if not dt_sh:
+            continue
+        if now_ts - dt_sh.timestamp() > 300:
+            break
+        did = str(row.get("device_id", "")).strip()
+        if did:
+            online_recent_devices.add(did)
+
     return {
         "date": start_sh.strftime("%Y-%m-%d"),
         "server_time": now_sh.strftime("%Y-%m-%d %H:%M:%S"),
@@ -1230,6 +1304,24 @@ async def get_today_overview(
         "news": {
             "fetched": news_today,
             "ai_analyzed_batches": ai_analysis_today,
+        },
+        "runtime": {
+            "ws": ws_stats,
+            "online_recent_devices_5m": len(online_recent_devices),
+            **runtime_metrics,
+        },
+        "api_usage": {
+            "api_calls_today": api_calls_today,
+            "api_failed_today": api_failed_today,
+            "api_unique_devices_today": len(api_unique_devices),
+            "ai_calls_today": ai_api_calls_today,
+        },
+        "ai_usage": {
+            "daily_ai_quota_used_total": int(ai_quota_used_total),
+            "prompt_tokens_today": int(ai_prompt_tokens_today),
+            "completion_tokens_today": int(ai_completion_tokens_today),
+            "total_tokens_today": int(ai_total_tokens_today),
+            "estimated_cost_cny_today": round(ai_cost_today, 6),
         },
     }
 
@@ -1655,6 +1747,15 @@ def _safe_int(v: Any) -> int:
         return 0
 
 
+def _safe_text(value: Any, max_len: int = 300) -> str:
+    if value is None:
+        return ""
+    text = str(value)
+    if len(text) <= max_len:
+        return text
+    return text[:max_len] + "..."
+
+
 def _ai_usage_from_entry(entry: Dict[str, Any]) -> Dict[str, int]:
     meta = entry.get("meta") or {}
     usage = meta.get("usage") if isinstance(meta, dict) else {}
@@ -1731,6 +1832,42 @@ def _contains_ci(text: str, keyword: str) -> bool:
     return keyword.lower() in str(text or "").lower()
 
 
+PROVIDER_TEST_LOG_FILE = DATA_DIR / "provider_test_logs.jsonl"
+
+
+def _append_provider_test_log(entry: Dict[str, Any]):
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(PROVIDER_TEST_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _read_provider_test_logs(limit: int = 50) -> List[Dict[str, Any]]:
+    safe_limit = max(1, min(int(limit or 50), 500))
+    if not PROVIDER_TEST_LOG_FILE.exists():
+        return []
+    lines = deque(maxlen=safe_limit)
+    try:
+        with open(PROVIDER_TEST_LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                text = line.strip()
+                if text:
+                    lines.append(text)
+    except Exception:
+        return []
+    out: List[Dict[str, Any]] = []
+    for raw in reversed(lines):
+        try:
+            obj = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(obj, dict):
+            out.append(obj)
+    return out
+
+
 def _parse_any_datetime(value: Any) -> Optional[datetime]:
     if not value:
         return None
@@ -1788,6 +1925,158 @@ def _today_range_utc_naive():
     start_utc = start_sh.astimezone(timezone.utc).replace(tzinfo=None)
     end_utc = end_sh.astimezone(timezone.utc).replace(tzinfo=None)
     return now_sh, start_sh, end_sh, start_utc, end_utc
+
+
+def _read_proc_stat_cpu_snapshot() -> Optional[Dict[str, int]]:
+    try:
+        with open("/proc/stat", "r", encoding="utf-8", errors="ignore") as f:
+            line = f.readline().strip()
+        if not line.startswith("cpu "):
+            return None
+        parts = line.split()
+        nums = [int(x) for x in parts[1:]]
+        total = sum(nums)
+        idle = nums[3] + (nums[4] if len(nums) > 4 else 0)  # idle + iowait
+        return {"total": int(total), "idle": int(idle)}
+    except Exception:
+        return None
+
+
+def _read_proc_meminfo() -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    try:
+        with open("/proc/meminfo", "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                if ":" not in line:
+                    continue
+                key, val = line.split(":", 1)
+                first = val.strip().split(" ")[0].strip()
+                if first.isdigit():
+                    out[key.strip()] = int(first) * 1024  # kB -> bytes
+    except Exception:
+        return {}
+    return out
+
+
+def _read_proc_net_dev_bytes() -> Dict[str, int]:
+    rx_total = 0
+    tx_total = 0
+    try:
+        with open("/proc/net/dev", "r", encoding="utf-8", errors="ignore") as f:
+            lines = f.readlines()[2:]
+        for line in lines:
+            if ":" not in line:
+                continue
+            iface, payload = line.split(":", 1)
+            iface = iface.strip()
+            if iface == "lo":
+                continue
+            cols = payload.split()
+            if len(cols) < 16:
+                continue
+            rx_total += int(float(cols[0] or 0))
+            tx_total += int(float(cols[8] or 0))
+    except Exception:
+        return {"rx_bytes": 0, "tx_bytes": 0, "total_bytes": 0}
+    return {
+        "rx_bytes": int(rx_total),
+        "tx_bytes": int(tx_total),
+        "total_bytes": int(rx_total + tx_total),
+    }
+
+
+def _safe_percent(part: float, whole: float) -> float:
+    if whole <= 0:
+        return 0.0
+    try:
+        return round((float(part) / float(whole)) * 100.0, 2)
+    except Exception:
+        return 0.0
+
+
+SYSTEM_METRICS_BASELINE_FILE = DATA_DIR / "system_metrics_baseline.json"
+
+
+def _load_metrics_baseline() -> Dict[str, Any]:
+    data = _load_json(SYSTEM_METRICS_BASELINE_FILE, {})
+    if isinstance(data, dict):
+        return data
+    return {}
+
+
+def _save_metrics_baseline(data: Dict[str, Any]):
+    _save_json(SYSTEM_METRICS_BASELINE_FILE, data if isinstance(data, dict) else {})
+
+
+def _ensure_today_network_baseline(date_text: str, current_net: Dict[str, int]) -> Dict[str, Any]:
+    baseline = _load_metrics_baseline()
+    if str(baseline.get("date", "")).strip() != date_text:
+        baseline = {
+            "date": date_text,
+            "rx_bytes": int(current_net.get("rx_bytes", 0) or 0),
+            "tx_bytes": int(current_net.get("tx_bytes", 0) or 0),
+            "updated_at": datetime.utcnow().replace(microsecond=0).isoformat(),
+        }
+        _save_metrics_baseline(baseline)
+    return baseline
+
+
+def _collect_system_runtime_metrics(date_text: str) -> Dict[str, Any]:
+    # CPU
+    cpu_before = _read_proc_stat_cpu_snapshot()
+    time.sleep(0.15)
+    cpu_after = _read_proc_stat_cpu_snapshot()
+    cpu_usage_percent = 0.0
+    if cpu_before and cpu_after:
+        delta_total = max(1, int(cpu_after["total"] - cpu_before["total"]))
+        delta_idle = max(0, int(cpu_after["idle"] - cpu_before["idle"]))
+        busy = max(0, delta_total - delta_idle)
+        cpu_usage_percent = _safe_percent(busy, delta_total)
+
+    # Memory
+    mem = _read_proc_meminfo()
+    mem_total = int(mem.get("MemTotal", 0) or 0)
+    mem_available = int(mem.get("MemAvailable", 0) or 0)
+    mem_used = max(0, mem_total - mem_available) if mem_total > 0 else 0
+
+    # Network
+    net = _read_proc_net_dev_bytes()
+    baseline = _ensure_today_network_baseline(date_text, net)
+    rx_today = max(0, int(net.get("rx_bytes", 0)) - int(baseline.get("rx_bytes", 0) or 0))
+    tx_today = max(0, int(net.get("tx_bytes", 0)) - int(baseline.get("tx_bytes", 0) or 0))
+
+    # Load average
+    load1 = 0.0
+    load5 = 0.0
+    load15 = 0.0
+    try:
+        la = os.getloadavg()
+        load1, load5, load15 = float(la[0]), float(la[1]), float(la[2])
+    except Exception:
+        pass
+
+    return {
+        "cpu": {
+            "usage_percent": cpu_usage_percent,
+            "load_1m": round(load1, 2),
+            "load_5m": round(load5, 2),
+            "load_15m": round(load15, 2),
+        },
+        "memory": {
+            "total_bytes": mem_total,
+            "available_bytes": mem_available,
+            "used_bytes": mem_used,
+            "usage_percent": _safe_percent(mem_used, mem_total),
+        },
+        "network": {
+            "rx_bytes_total": int(net.get("rx_bytes", 0)),
+            "tx_bytes_total": int(net.get("tx_bytes", 0)),
+            "total_bytes_total": int(net.get("total_bytes", 0)),
+            "rx_bytes_today": int(rx_today),
+            "tx_bytes_today": int(tx_today),
+            "total_bytes_today": int(rx_today + tx_today),
+        },
+    }
 
 
 @router.get("/logs/system")
@@ -1953,6 +2242,126 @@ async def get_ai_cache_item(key: str, authorized: bool = Depends(verify_admin)):
         "cost_cny": round(total_cost, 6),
         "data": entry.get("data"),
     }
+
+
+@router.post("/monitor/provider_test/run")
+async def run_provider_self_test(authorized: bool = Depends(verify_admin)):
+    started = time.time()
+    now_iso = datetime.now(SHANGHAI_TZ).isoformat(timespec="seconds")
+    test_id = secrets.token_hex(6)
+
+    results: List[Dict[str, Any]] = []
+
+    def run_step(name: str, fn):
+        t0 = time.time()
+        ok = False
+        detail = ""
+        sample: Any = ""
+        try:
+            data = fn()
+            ok = True
+            if isinstance(data, (list, tuple)):
+                detail = f"成功，返回 {len(data)} 条"
+                if len(data) > 0:
+                    sample = _preview_data(data[0], 200)
+            elif isinstance(data, dict):
+                detail = f"成功，返回 {len(data.keys())} 个字段"
+                sample = _preview_data(data, 200)
+            elif data is None:
+                detail = "成功，返回空(None)"
+                sample = ""
+            else:
+                detail = f"成功，返回类型 {type(data).__name__}"
+                sample = _preview_data(data, 200)
+        except Exception as e:
+            ok = False
+            detail = f"失败：{e}"
+        elapsed_ms = int((time.time() - t0) * 1000)
+        results.append(
+            {
+                "name": name,
+                "ok": bool(ok),
+                "elapsed_ms": elapsed_ms,
+                "detail": _safe_text(detail, 400),
+                "sample": _safe_text(sample, 300),
+            }
+        )
+
+    # 核心外网数据源
+    run_step("新浪指数(fetch_indices)", lambda: data_provider.fetch_indices())
+    run_step("新浪分时(fetch_intraday_data)", lambda: data_provider.fetch_intraday_data("sh600519"))
+    run_step("新浪历史K(fetch_history_data)", lambda: data_provider.fetch_history_data("sh600519", days=30))
+    run_step("个股信息(fetch_stock_info)", lambda: data_provider.fetch_stock_info("sh600519"))
+    run_step("涨停池(fetch_limit_up_pool)", lambda: data_provider.fetch_limit_up_pool())
+    run_step("炸板池(fetch_broken_limit_pool)", lambda: data_provider.fetch_broken_limit_pool())
+
+    # 必盈通道（可选）
+    biying_cfg = data_provider._get_biying_config()
+    if data_provider._biying_enabled(biying_cfg):
+        run_step("必盈股票列表(_fetch_stock_list_biying)", lambda: data_provider._fetch_stock_list_biying())
+        run_step("必盈个股概念(_fetch_stock_info_biying)", lambda: data_provider._fetch_stock_info_biying("000001"))
+        run_step("必盈多股实时(_fetch_realtime_quotes_biying)", lambda: data_provider._fetch_realtime_quotes_biying(["000001", "600519"]))
+        run_step("必盈最新分时(_fetch_intraday_kline_biying)", lambda: data_provider._fetch_intraday_kline_biying("000001", period="5", lt=60))
+        run_step("必盈日K(fetch_day_kline_history)", lambda: data_provider.fetch_day_kline_history("000001", days=90))
+    else:
+        results.append(
+            {
+                "name": "必盈通道",
+                "ok": True,
+                "elapsed_ms": 0,
+                "detail": "未启用，已跳过",
+                "sample": "",
+            }
+        )
+
+    # 新闻通道
+    try:
+        from app.core.news_analyzer import get_cls_news, get_eastmoney_news
+
+        run_step("财联社新闻(get_cls_news)", lambda: get_cls_news(hours=1))
+        run_step("东方财富新闻(get_eastmoney_news)", lambda: get_eastmoney_news(hours=1))
+    except Exception as e:
+        results.append(
+            {
+                "name": "新闻接口导入",
+                "ok": False,
+                "elapsed_ms": 0,
+                "detail": _safe_text(str(e), 300),
+                "sample": "",
+            }
+        )
+
+    total_ms = int((time.time() - started) * 1000)
+    success_count = len([x for x in results if x.get("ok")])
+    fail_count = len(results) - success_count
+
+    record = {
+        "test_id": test_id,
+        "time": now_iso,
+        "duration_ms": total_ms,
+        "success_count": int(success_count),
+        "fail_count": int(fail_count),
+        "items": results,
+    }
+    _append_provider_test_log(record)
+
+    add_runtime_log(
+        f"[接口体检] 完成 test_id={test_id}, 成功={success_count}, 失败={fail_count}, 耗时={total_ms}ms"
+    )
+    log_user_operation(
+        "provider_self_test_run",
+        status="success" if fail_count == 0 else "failed",
+        actor="admin",
+        method="POST",
+        path="/api/admin/monitor/provider_test/run",
+        detail=f"test_id={test_id}, success={success_count}, fail={fail_count}, duration_ms={total_ms}",
+    )
+    return {"status": "success", "record": record}
+
+@router.get("/monitor/provider_test/logs")
+async def get_provider_self_test_logs(limit: int = 30, authorized: bool = Depends(verify_admin)):
+    logs = _read_provider_test_logs(limit=limit)
+    return {"status": "success", "items": logs}
 
 
 class AdminNewsDeleteRequest(BaseModel):
@@ -2359,3 +2768,4 @@ async def sync_lhb_missing(
         "message": "龙虎榜缺失交易日补数已启动。",
         "missing_dates": missing_dates,
     }
+

@@ -105,6 +105,99 @@
                             <div class="text-xs text-gray-500">今日记录总数</div>
                         </div>
                     </div>
+
+                    <div class="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">实时连接</div>
+                            <div class="text-2xl font-bold mt-1">{{ (((overviewToday.runtime || {}).ws || {}).total_connections || 0) }}</div>
+                            <div class="text-xs text-gray-500 mt-2">日志连接 {{ (((overviewToday.runtime || {}).ws || {}).log_connections || 0) }} · 通知连接 {{ (((overviewToday.runtime || {}).ws || {}).notify_connections || 0) }}</div>
+                            <div class="text-xs text-gray-500">在线设备(5分钟) {{ ((overviewToday.runtime || {}).online_recent_devices_5m || 0) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">服务器资源</div>
+                            <div class="text-sm mt-2">CPU 使用率 <span class="font-bold">{{ formatPercent((((overviewToday.runtime || {}).cpu || {}).usage_percent || 0), 2) }}</span></div>
+                            <div class="text-xs text-gray-500">Load {{ (((overviewToday.runtime || {}).cpu || {}).load_1m || 0) }} / {{ (((overviewToday.runtime || {}).cpu || {}).load_5m || 0) }} / {{ (((overviewToday.runtime || {}).cpu || {}).load_15m || 0) }}</div>
+                            <div class="text-sm mt-2">内存占用 <span class="font-bold">{{ formatPercent((((overviewToday.runtime || {}).memory || {}).usage_percent || 0), 2) }}</span></div>
+                            <div class="text-xs text-gray-500">已用 {{ formatBytes((((overviewToday.runtime || {}).memory || {}).used_bytes || 0)) }} / 总计 {{ formatBytes((((overviewToday.runtime || {}).memory || {}).total_bytes || 0)) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">带宽与流量</div>
+                            <div class="text-sm mt-2">今日总流量 <span class="font-bold">{{ formatBytes((((overviewToday.runtime || {}).network || {}).total_bytes_today || 0)) }}</span></div>
+                            <div class="text-xs text-gray-500">下行 {{ formatBytes((((overviewToday.runtime || {}).network || {}).rx_bytes_today || 0)) }} · 上行 {{ formatBytes((((overviewToday.runtime || {}).network || {}).tx_bytes_today || 0)) }}</div>
+                            <div class="text-xs text-gray-500 mt-2">累计总流量 {{ formatBytes((((overviewToday.runtime || {}).network || {}).total_bytes_total || 0)) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">接口调用统计</div>
+                            <div class="text-2xl font-bold mt-1">{{ ((overviewToday.api_usage || {}).api_calls_today || 0) }}</div>
+                            <div class="text-xs text-gray-500 mt-2">失败 {{ ((overviewToday.api_usage || {}).api_failed_today || 0) }} · 设备 {{ ((overviewToday.api_usage || {}).api_unique_devices_today || 0) }}</div>
+                            <div class="text-xs text-gray-500">AI调用 {{ ((overviewToday.api_usage || {}).ai_calls_today || 0) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">AI 使用量</div>
+                            <div class="text-2xl font-bold mt-1">{{ ((overviewToday.ai_usage || {}).daily_ai_quota_used_total || 0) }}</div>
+                            <div class="text-xs text-gray-500 mt-2">用户AI计数累计</div>
+                            <div class="text-xs text-gray-500">今日AI接口调用 {{ ((overviewToday.api_usage || {}).ai_calls_today || 0) }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-4">
+                            <div class="text-xs text-gray-500">Token 与成本</div>
+                            <div class="text-sm mt-2">总Token <span class="font-bold">{{ (((overviewToday.ai_usage || {}).total_tokens_today || 0)) }}</span></div>
+                            <div class="text-xs text-gray-500">Prompt {{ ((overviewToday.ai_usage || {}).prompt_tokens_today || 0) }} · Completion {{ ((overviewToday.ai_usage || {}).completion_tokens_today || 0) }}</div>
+                            <div class="text-xs text-gray-500 mt-2">估算成本 ¥{{ Number(((overviewToday.ai_usage || {}).estimated_cost_cny_today || 0)).toFixed(6) }}</div>
+                        </div>
+                    </div>
+
+                    <div class="bg-white border rounded p-4">
+                        <div class="flex flex-wrap items-center justify-between gap-3 mb-3">
+                            <div>
+                                <div class="text-lg font-bold">外网接口体检</div>
+                                <div class="text-xs text-gray-500">点击后顺序测试各数据源接口，并记录结果日志</div>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button @click="runProviderSelfTest" :disabled="providerTestRunning" class="px-3 py-1.5 rounded text-sm text-white disabled:opacity-60"
+                                    :class="providerTestRunning ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'">
+                                    {{ providerTestRunning ? '体检中...' : '测试一次所有接口' }}
+                                </button>
+                                <button @click="fetchProviderTestLogs()" class="px-3 py-1.5 rounded text-sm border hover:bg-gray-50">刷新日志</button>
+                            </div>
+                        </div>
+                        <div v-if="providerTestLogs.length === 0" class="text-sm text-gray-500 py-4 text-center border rounded">暂无体检日志</div>
+                        <div v-else class="space-y-3 max-h-96 overflow-auto pr-1">
+                            <div v-for="item in providerTestLogs" :key="item.test_id + '_' + item.time" class="border rounded p-3">
+                                <div class="flex flex-wrap items-center justify-between gap-2">
+                                    <div class="text-sm font-semibold">批次 {{ item.test_id || '-' }}</div>
+                                    <div class="text-xs text-gray-500">{{ formatShanghaiTime(item.time) }} · 耗时 {{ Number(item.duration_ms || 0) }} ms</div>
+                                </div>
+                                <div class="text-xs mt-1" :class="Number(item.fail_count || 0) > 0 ? 'text-amber-600' : 'text-emerald-600'">
+                                    成功 {{ Number(item.success_count || 0) }} · 失败 {{ Number(item.fail_count || 0) }}
+                                </div>
+                                <div class="overflow-x-auto mt-2">
+                                    <table class="w-full min-w-[760px] text-xs">
+                                        <thead>
+                                            <tr class="text-gray-500 border-b">
+                                                <th class="p-2 text-left">接口</th>
+                                                <th class="p-2 text-left">结果</th>
+                                                <th class="p-2 text-left">耗时</th>
+                                                <th class="p-2 text-left">详情</th>
+                                            </tr>
+                                        </thead>
+                                        <tbody>
+                                            <tr v-for="step in (item.items || [])" :key="step.name + '_' + step.elapsed_ms" class="border-b last:border-b-0">
+                                                <td class="p-2 font-mono text-[11px]">{{ step.name || '-' }}</td>
+                                                <td class="p-2">
+                                                    <span class="px-1.5 py-0.5 rounded"
+                                                        :class="step.ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-700'">
+                                                        {{ step.ok ? '成功' : '失败' }}
+                                                    </span>
+                                                </td>
+                                                <td class="p-2">{{ Number(step.elapsed_ms || 0) }} ms</td>
+                                                <td class="p-2 text-gray-600">{{ step.detail || '-' }}</td>
+                                            </tr>
+                                        </tbody>
+                                    </table>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
                 </div>
 
                 <!-- Config -->
@@ -1386,6 +1479,9 @@
                     aiCacheStats: {},
                     aiCacheDetail: null,
                     overviewToday: {},
+                    providerTestRunning: false,
+                    providerTestLogs: [],
+                    overviewAutoRefreshTimer: null,
                     watchlistStats: [],
                     watchlistStatsStorage: 'backend/data/watchlist_stats.json',
                     watchlistUserModal: { show: false, code: '', name: '', users: [] },
@@ -1444,6 +1540,8 @@
                 if (this.token) {
                     this.fetchConfig();
                     this.fetchTodayOverview();
+                    this.fetchProviderTestLogs();
+                    this.startOverviewAutoRefresh();
                     this.fetchAdminPanelPath();
                     this.fetchDataFiles();
                     // Pre-fetch
@@ -1458,10 +1556,17 @@
                 if (this._beforeUnloadHandler) {
                     window.removeEventListener('beforeunload', this._beforeUnloadHandler);
                 }
+                this.stopOverviewAutoRefresh();
             },
             watch: {
                 currentView(val) {
-                    if (val === 'overview') this.fetchTodayOverview();
+                    if (val === 'overview') {
+                        this.fetchTodayOverview();
+                        this.fetchProviderTestLogs();
+                        this.startOverviewAutoRefresh();
+                    } else {
+                        this.stopOverviewAutoRefresh();
+                    }
                     if (val === 'config') {
                         this.fetchConfig();
                         this.fetchAdminPanelPath();
@@ -1564,6 +1669,19 @@
                     }
                     this.currentView = nextView;
                 },
+                startOverviewAutoRefresh() {
+                    this.stopOverviewAutoRefresh();
+                    if (!this.token) return;
+                    this.overviewAutoRefreshTimer = setInterval(() => {
+                        if (!this.token || this.currentView !== 'overview') return;
+                        this.fetchTodayOverview();
+                    }, 15000);
+                },
+                stopOverviewAutoRefresh() {
+                    if (!this.overviewAutoRefreshTimer) return;
+                    clearInterval(this.overviewAutoRefreshTimer);
+                    this.overviewAutoRefreshTimer = null;
+                },
                 async fetchTodayOverview() {
                     try {
                         const res = await fetch(API_BASE_URL + '/api/admin/overview/today', { headers: this.getHeaders() });
@@ -1573,6 +1691,37 @@
                         this.overviewToday = data || {};
                     } catch (e) {
                         this.showMsg(e.message || '今日统计加载失败', 'error');
+                    }
+                },
+                async fetchProviderTestLogs(limit = 20) {
+                    try {
+                        const safeLimit = Math.max(1, Math.min(Number(limit || 20), 100));
+                        const res = await fetch(API_BASE_URL + `/api/admin/monitor/provider_test/logs?limit=${safeLimit}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '接口体检日志加载失败');
+                        this.providerTestLogs = Array.isArray(data.items) ? data.items : [];
+                    } catch (e) {
+                        this.showMsg(e.message || '接口体检日志加载失败', 'error');
+                    }
+                },
+                async runProviderSelfTest() {
+                    if (this.providerTestRunning) return;
+                    this.providerTestRunning = true;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/monitor/provider_test/run', {
+                            method: 'POST',
+                            headers: this.getHeaders()
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '接口体检失败');
+                        this.showMsg('接口体检已完成', 'success');
+                        await this.fetchProviderTestLogs();
+                    } catch (e) {
+                        this.showMsg(e.message || '接口体检失败', 'error');
+                    } finally {
+                        this.providerTestRunning = false;
                     }
                 },
                 versionLabel(version) {
@@ -1645,6 +1794,14 @@
                     if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`;
                     return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`;
                 },
+                formatBytes(size) {
+                    return this.formatFileSize(size);
+                },
+                formatPercent(value, digits = 2) {
+                    const n = Number(value || 0);
+                    if (!Number.isFinite(n)) return '0%';
+                    return `${n.toFixed(Math.max(0, Number(digits || 0)))}%`;
+                },
                 async fetchDataFiles() {
                     try {
                         const res = await fetch(API_BASE_URL + '/api/admin/data/files', { headers: this.getHeaders() });
@@ -1689,6 +1846,7 @@
                 },
                 clearAuth(showTip = false) {
                     this.token = '';
+                    this.stopOverviewAutoRefresh();
                     localStorage.removeItem('admin_token');
                     if (showTip) this.showMsg('登录已失效，请重新登录', 'error');
                 },
@@ -1715,6 +1873,8 @@
                         this.showMsg('登录成功', 'success');
                         this.currentView = 'overview';
                         this.fetchTodayOverview();
+                        this.fetchProviderTestLogs();
+                        this.startOverviewAutoRefresh();
                         this.fetchConfig();
                         this.fetchAdminPanelPath();
                         this.fetchDataFiles();

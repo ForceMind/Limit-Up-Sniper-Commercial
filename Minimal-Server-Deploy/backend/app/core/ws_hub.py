@@ -75,6 +75,18 @@ class WSHub:
                     self._notify_connections.pop(device_id, None)
         return sent
 
+    async def snapshot_stats(self) -> Dict[str, int]:
+        async with self._lock:
+            log_count = len(self._log_connections)
+            notify_count = sum(len(v) for v in self._notify_connections.values())
+            active_devices = len([k for k, v in self._notify_connections.items() if v])
+        return {
+            "log_connections": int(log_count),
+            "notify_connections": int(notify_count),
+            "active_devices": int(active_devices),
+            "total_connections": int(log_count + notify_count),
+        }
+
 
 ws_hub = WSHub()
 
