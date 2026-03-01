@@ -3,6 +3,7 @@ from sqlalchemy.orm import Session
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Optional
+import base64
 import json
 import os
 
@@ -62,6 +63,26 @@ def _save_trial_fingerprints(data):
 
 def _hash_password(password: str, salt: str) -> str:
     return account_store.hash_password(password, salt)
+
+
+def _decode_b64_text(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        return base64.b64decode(padded.encode("utf-8"), validate=False).decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _read_auth_field(payload: dict, plain_key: str, encoded_key: str) -> str:
+    if not isinstance(payload, dict):
+        return ""
+    encoded = _decode_b64_text(payload.get(encoded_key))
+    if encoded:
+        return encoded.strip()
+    return str(payload.get(plain_key) or "").strip()
 
 
 def _make_device_id(username: str) -> str:
@@ -179,8 +200,8 @@ async def login(data: schemas.UserCreate, db: Session = Depends(get_db)):
 
 @router.post("/register")
 async def register(data: dict = Body(...), db: Session = Depends(get_db)):
-    username = (data.get("username") or "").strip()
-    password = (data.get("password") or "").strip()
+    username = _read_auth_field(data, "username", "username_b64")
+    password = _read_auth_field(data, "password", "password_b64")
     if not username or not password:
         raise HTTPException(status_code=400, detail="请输入用户名和密码")
     if len(username) < 3 or len(password) < 6:
@@ -240,8 +261,8 @@ async def register(data: dict = Body(...), db: Session = Depends(get_db)):
 
 @router.post("/login_user")
 async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
-    username = (data.get("username") or "").strip()
-    password = (data.get("password") or "").strip()
+    username = _read_auth_field(data, "username", "username_b64")
+    password = _read_auth_field(data, "password", "password_b64")
     if not username or not password:
         raise HTTPException(status_code=400, detail="请输入用户名和密码")
 

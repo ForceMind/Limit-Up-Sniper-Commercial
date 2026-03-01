@@ -458,13 +458,19 @@
                         <section class="mb-8 border-b pb-8">
                             <h3 class="text-xl font-semibold mb-4 text-gray-700">管理员账户</h3>
                             <div class="bg-gray-50 border border-gray-200 rounded p-4">
-                                <p class="text-sm text-gray-500 mb-4">修改管理员登录密码</p>
-                                <div class="flex items-end gap-4 max-w-md">
-                                    <div class="flex-1">
+                                <p class="text-sm text-gray-500 mb-4">可修改管理员登录用户名与密码（至少修改一项）</p>
+                                <div class="grid grid-cols-1 md:grid-cols-2 gap-4 max-w-3xl">
+                                    <div>
+                                        <label class="block text-sm font-bold text-gray-700 mb-1">新用户名</label>
+                                        <input type="text" v-model="newAdminUsername" class="w-full border rounded p-2 text-sm" placeholder="3-32位，仅字母数字._-">
+                                    </div>
+                                    <div>
                                         <label class="block text-sm font-bold text-gray-700 mb-1">新密码</label>
                                         <input type="password" v-model="newAdminPassword" class="w-full border rounded p-2 text-sm" placeholder="至少6位">
                                     </div>
-                                    <button @click="updateAdminPassword" class="bg-red-600 text-white px-4 py-2 rounded text-sm hover:bg-red-700 whitespace-nowrap">修改密码</button>
+                                </div>
+                                <div class="mt-4">
+                                    <button @click="updateAdminAccount" class="bg-red-600 text-white px-4 py-2 rounded text-sm hover:bg-red-700 whitespace-nowrap">保存管理员账号</button>
                                 </div>
                                 <p class="text-xs text-red-500 mt-2" v-if="passwordMsg">{{ passwordMsg }}</p>
                             </div>
@@ -1514,6 +1520,7 @@
                     dataFileMeta: {},
                     // Admin Account
                     adminPanelPath: '/admin',
+                    newAdminUsername: '',
                     newAdminPassword: '',
                     passwordMsg: '',
                     configSnapshots: {
@@ -1847,6 +1854,13 @@
                         'X-Admin-Token': this.token
                     };
                 },
+                encodeAuthText(value) {
+                    try {
+                        return btoa(unescape(encodeURIComponent(String(value || ''))));
+                    } catch (e) {
+                        return '';
+                    }
+                },
                 clearAuth(showTip = false) {
                     this.token = '';
                     this.stopOverviewAutoRefresh();
@@ -1865,7 +1879,10 @@
                         const res = await fetch(API_BASE_URL + '/api/admin/login', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({ username, password })
+                            body: JSON.stringify({
+                                username_b64: this.encodeAuthText(username),
+                                password_b64: this.encodeAuthText(password)
+                            })
                         });
                         const data = await res.json();
                         if (!res.ok) throw new Error(data.detail || '登录失败');
@@ -2015,37 +2032,53 @@
                         this.showMsg(e.message || '保存后台路径失败', 'error');
                     }
                 },
-                async updateAdminPassword() {
-                    const pwd = this.newAdminPassword;
-                    if (!pwd || pwd.length < 6) {
+                async updateAdminAccount() {
+                    const newUsername = (this.newAdminUsername || '').trim();
+                    const newPassword = this.newAdminPassword || '';
+                    if (!newUsername && !newPassword) {
+                        this.passwordMsg = "请至少填写新用户名或新密码";
+                        setTimeout(() => this.passwordMsg = '', 3000);
+                        return;
+                    }
+                    if (newUsername) {
+                        const valid = /^[A-Za-z0-9._-]{3,32}$/.test(newUsername);
+                        if (!valid) {
+                            this.passwordMsg = "用户名仅支持3-32位字母数字._-";
+                            setTimeout(() => this.passwordMsg = '', 3000);
+                            return;
+                        }
+                    }
+                    if (newPassword && newPassword.length < 6) {
                         this.passwordMsg = "密码至少6位";
                         setTimeout(() => this.passwordMsg = '', 3000);
                         return;
                     }
-                    if (!await this.showConfirm("确定要修改管理员密码吗？修改后需要重新登录。")) return;
-                    
+                    if (!await this.showConfirm("确定要更新管理员账号吗？更新后需要重新登录。")) return;
+
                     try {
-                        const res = await fetch(API_BASE_URL + '/api/admin/update_password', {
+                        const res = await fetch(API_BASE_URL + '/api/admin/update_account', {
                             method: 'POST',
                             headers: this.getHeaders(),
                             body: JSON.stringify({
-                                old_password: "",
-                                new_password: pwd
+                                old_password_b64: this.encodeAuthText(''),
+                                new_username_b64: this.encodeAuthText(newUsername),
+                                new_password_b64: this.encodeAuthText(newPassword)
                             })
                         });
                         const data = await res.json();
-                        if (res.ok) {
-                            this.showMsg("密码修改成功，请重新登录", "success");
-                            this.newAdminPassword = '';
-                            setTimeout(() => {
-                                this.clearAuth(false);
-                                location.reload();
-                            }, 1500);
-                        } else {
+                        if (!res.ok) {
                             this.passwordMsg = data.detail || "修改失败";
+                            return;
                         }
+                        this.showMsg("管理员账号已更新，请重新登录", "success");
+                        this.newAdminUsername = '';
+                        this.newAdminPassword = '';
+                        setTimeout(() => {
+                            this.clearAuth(false);
+                            location.reload();
+                        }, 1500);
                     } catch (e) {
-                         this.showMsg(e.message, 'error');
+                        this.showMsg(e.message || '修改失败', 'error');
                     }
                 },
                 async saveConfigSection(section, silent = false) {

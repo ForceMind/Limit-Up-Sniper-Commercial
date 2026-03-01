@@ -10,6 +10,7 @@ import os
 import json
 import time
 import hashlib
+import base64
 import re
 import shutil
 import tempfile
@@ -128,6 +129,24 @@ def _hash_password(password: str, salt: str) -> str:
     return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
 
 
+def _decode_transport_text(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    try:
+        padded = raw + "=" * (-len(raw) % 4)
+        return base64.b64decode(padded.encode("utf-8"), validate=False).decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _read_transport_field(plain: Optional[str], encoded: Optional[str]) -> str:
+    decoded = _decode_transport_text(encoded)
+    if decoded:
+        return decoded
+    return str(plain or "")
+
+
 def _default_admin_password() -> str:
     # Migrate from legacy token file if available
     if ADMIN_SECRET_FILE.exists():
@@ -203,13 +222,26 @@ def get_db():
 
 # --- Auth / Account ---
 class AdminLoginSchema(BaseModel):
-    username: str
-    password: str
+    username: Optional[str] = ""
+    password: Optional[str] = ""
+    username_b64: Optional[str] = ""
+    password_b64: Optional[str] = ""
 
 
 class UpdatePasswordSchema(BaseModel):
-    old_password: str
-    new_password: str
+    old_password: Optional[str] = ""
+    new_password: Optional[str] = ""
+    old_password_b64: Optional[str] = ""
+    new_password_b64: Optional[str] = ""
+
+
+class UpdateAdminAccountSchema(BaseModel):
+    old_password: Optional[str] = ""
+    new_password: Optional[str] = ""
+    new_username: Optional[str] = ""
+    old_password_b64: Optional[str] = ""
+    new_password_b64: Optional[str] = ""
+    new_username_b64: Optional[str] = ""
 
 
 class UpdateAdminPanelPathSchema(BaseModel):
@@ -228,8 +260,8 @@ async def admin_login(data: AdminLoginSchema, request_ip: str = Header(None, ali
         raise HTTPException(status_code=429, detail="Too many failed attempts, try later")
 
     cred = _load_admin_credentials()
-    username = (data.username or "").strip()
-    password = (data.password or "").strip()
+    username = _read_transport_field(data.username, data.username_b64).strip()
+    password = _read_transport_field(data.password, data.password_b64).strip()
 
     if username != cred.get("username") or not _verify_admin_password(password, cred):
         attempts.append(now_ts)
@@ -306,17 +338,18 @@ async def update_admin_password(
     data: UpdatePasswordSchema,
     authorized: bool = Depends(verify_admin),
 ):
-    if len((data.new_password or "").strip()) < 6:
+    new_password = _read_transport_field(data.new_password, data.new_password_b64).strip()
+    if len(new_password) < 6:
         raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
 
     cred = _load_admin_credentials()
-    old_password = (data.old_password or "").strip()
+    old_password = _read_transport_field(data.old_password, data.old_password_b64).strip()
     if old_password and not _verify_admin_password(old_password, cred):
         raise HTTPException(status_code=403, detail="Old password is incorrect")
 
     salt = os.urandom(8).hex()
     cred["salt"] = salt
-    cred["password_hash"] = _hash_password(data.new_password.strip(), salt)
+    cred["password_hash"] = _hash_password(new_password, salt)
     cred["updated_at"] = datetime.utcnow().isoformat()
     _save_json(ADMIN_CREDENTIALS_FILE, cred)
 
@@ -332,6 +365,54 @@ async def update_admin_password(
         detail="admin_password_updated",
     )
     return {"status": "success", "message": "Admin password updated successfully"}
+
+
+@router.post("/update_account")
+async def update_admin_account(
+    data: UpdateAdminAccountSchema,
+    authorized: bool = Depends(verify_admin),
+):
+    cred = _load_admin_credentials()
+
+    old_password = _read_transport_field(data.old_password, data.old_password_b64).strip()
+    if old_password and not _verify_admin_password(old_password, cred):
+        raise HTTPException(status_code=403, detail="Old password is incorrect")
+
+    new_username = _read_transport_field(data.new_username, data.new_username_b64).strip()
+    new_password = _read_transport_field(data.new_password, data.new_password_b64).strip()
+
+    if not new_username and not new_password:
+        raise HTTPException(status_code=400, detail="Please provide new_username or new_password")
+
+    if new_username:
+        if len(new_username) < 3 or len(new_username) > 32:
+            raise HTTPException(status_code=400, detail="Username must be 3-32 characters")
+        if not re.fullmatch(r"[A-Za-z0-9._-]+", new_username):
+            raise HTTPException(status_code=400, detail="Username allows letters, digits, ., _, -")
+        cred["username"] = new_username
+
+    if new_password:
+        if len(new_password) < 6:
+            raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
+        salt = os.urandom(8).hex()
+        cred["salt"] = salt
+        cred["password_hash"] = _hash_password(new_password, salt)
+
+    cred["updated_at"] = datetime.utcnow().isoformat()
+    _save_json(ADMIN_CREDENTIALS_FILE, cred)
+
+    # Force all sessions to re-login after account change.
+    _save_sessions({})
+    log_user_operation(
+        "update_admin_account",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/update_account",
+        username=cred.get("username", ""),
+        detail="admin_account_updated",
+    )
+    return {"status": "success", "message": "Admin account updated", "username": cred.get("username", "")}
 
 
 @router.get("/panel_path")

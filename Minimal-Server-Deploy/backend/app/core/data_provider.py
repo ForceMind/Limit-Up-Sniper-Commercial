@@ -60,6 +60,12 @@ class DataProvider:
         self._biying_stock_list_file = DATA_DIR / "biying_stock_list.json"
         self._biying_stock_list_map = {}
         self._biying_stock_list_last_refresh = ""
+        self._biying_all_market_cache_df = None
+        self._biying_all_market_cache_ts = 0.0
+        self._biying_all_market_min_interval_sec = 60
+        self._biying_all_market_next_retry_ts = 0.0
+        self._biying_all_market_fail_cooldown_sec = 3600
+        self._biying_all_market_last_error_log_ts = 0.0
         self._market_cache_ttl_sec = 900
         self._provider_throttle_lock = threading.Lock()
         self._provider_last_request_ts = {}
@@ -771,6 +777,98 @@ class DataProvider:
         self._biying_intraday_cache[cache_key] = {"ts": now_ts, "data": out_df.copy()}
         return out_df
 
+    def _fetch_all_market_data_biying_all(self):
+        cfg = self._get_biying_config()
+        if not self._biying_enabled(cfg):
+            return None
+
+        now_ts = time.time()
+        if now_ts < self._biying_all_market_next_retry_ts:
+            if self._biying_all_market_cache_df is not None:
+                return self._biying_all_market_cache_df.copy()
+            return None
+
+        if (
+            self._biying_all_market_cache_df is not None
+            and now_ts - self._biying_all_market_cache_ts < self._biying_all_market_min_interval_sec
+        ):
+            return self._biying_all_market_cache_df.copy()
+
+        if not self._reserve_biying_quota(cfg, 1):
+            if self._biying_all_market_cache_df is not None:
+                return self._biying_all_market_cache_df.copy()
+            return None
+
+        url = f"https://all.biyingapi.com/hsrl/ssjy/all/{cfg['license_key']}"
+        try:
+            with requests.Session() as session:
+                session.trust_env = False
+                resp = self._call_provider("biying", lambda: session.get(url, timeout=8))
+            if resp.status_code != 200:
+                raise RuntimeError(f"status={resp.status_code}")
+            payload = resp.json()
+        except Exception as e:
+            self._biying_all_market_next_retry_ts = now_ts + self._biying_all_market_fail_cooldown_sec
+            if now_ts - self._biying_all_market_last_error_log_ts >= 60:
+                self.log(f"[!] 必盈全市场接口抓取失败: {e}")
+                self._biying_all_market_last_error_log_ts = now_ts
+            if self._biying_all_market_cache_df is not None:
+                return self._biying_all_market_cache_df.copy()
+            return None
+
+        rows = self._extract_biying_rows(payload)
+        if not rows and isinstance(payload, dict):
+            rows = [payload]
+        if not rows:
+            self._biying_all_market_next_retry_ts = now_ts + self._biying_all_market_fail_cooldown_sec
+            if self._biying_all_market_cache_df is not None:
+                return self._biying_all_market_cache_df.copy()
+            return None
+
+        records = []
+        for row in rows:
+            parsed = self._parse_biying_quote_row(row)
+            if not parsed:
+                continue
+            clean_code = "".join(filter(str.isdigit, self._strip_code(parsed.get("code", ""))))
+            if len(clean_code) >= 6:
+                clean_code = clean_code[-6:]
+            if len(clean_code) != 6:
+                continue
+
+            current = self._safe_float(parsed.get("current"), 0)
+            prev_close = self._safe_float(parsed.get("prev_close"), 0)
+            change_percent = self._safe_float(parsed.get("change_percent"), 0)
+            if prev_close <= 0 and current > 0:
+                prev_close = current / (1 + (change_percent / 100.0)) if abs(change_percent) < 99 else current
+
+            records.append({
+                "code": clean_code,
+                "name": str(parsed.get("name") or clean_code),
+                "current": current,
+                "change_percent": change_percent,
+                "speed": 0.0,
+                "turnover": self._safe_float(parsed.get("turnover"), 0),
+                "circ_mv": self._safe_float(parsed.get("circulation_value"), 0),
+                "prev_close": prev_close,
+                "high": self._safe_float(parsed.get("high"), current),
+                "low": self._safe_float(parsed.get("low"), current),
+                "open": self._safe_float(parsed.get("open"), current),
+                "amount": self._safe_float(self._first_value(row, ["amount", "turnover_amount", "a", "成交额"], 0), 0),
+            })
+
+        if not records:
+            self._biying_all_market_next_retry_ts = now_ts + self._biying_all_market_fail_cooldown_sec
+            if self._biying_all_market_cache_df is not None:
+                return self._biying_all_market_cache_df.copy()
+            return None
+
+        out_df = pd.DataFrame(records)
+        self._biying_all_market_cache_df = out_df.copy()
+        self._biying_all_market_cache_ts = now_ts
+        self._biying_all_market_next_retry_ts = 0.0
+        return out_df
+
     def fetch_day_kline_history(self, code, days=365):
         cfg = self._get_biying_config()
         if not self._biying_enabled(cfg):
@@ -1086,7 +1184,19 @@ class DataProvider:
                 os.environ.pop("HTTPS_PROXY", None)
 
             try:
-                # 1. Sina paged (primary)
+                # 1. Biying all-market realtime
+                try:
+                    self.log("[*] 正在抓取全市场数据（必盈全市场）...")
+                    df = self._fetch_all_market_data_biying_all()
+                    if df is not None and not df.empty:
+                        self._last_market_df = df.copy()
+                        self._last_market_ts = time.time()
+                        self._mark_market_success()
+                        return df
+                except Exception as e:
+                    self.log(f"[!] 必盈全市场抓取失败: {e}")
+
+                # 2. Sina paged (primary)
                 try:
                     self.log("[*] 正在抓取全市场数据（新浪分页）...")
                     df = self._fetch_sina_market_paged()
@@ -1098,7 +1208,7 @@ class DataProvider:
                 except Exception as e:
                     self.log(f"[!] 新浪分页抓取失败: {e}")
 
-                # 2-3. EastMoney channel (AKShare + manual paged) with cooldown
+                # 3-4. EastMoney channel (AKShare + manual paged) with cooldown
                 eastmoney_ready = True
                 now_ts = time.time()
                 if now_ts < self._eastmoney_next_retry_ts:
@@ -1150,7 +1260,7 @@ class DataProvider:
                             self.log(f"[!] 东财手工分页抓取失败: {e}（进入通道冷却，{wait_s}s 后重试）")
                             self._eastmoney_last_error_log_ts = now_ts
 
-                # 4. Tushare fallback
+                # 5. Tushare fallback
                 try:
                     self.log("[*] 正在抓取全市场数据（Tushare）...")
                     df = self._fetch_tushare_spot()

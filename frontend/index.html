@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>涨停狙击手 (Limit-Up Sniper) v2.5.4</title>
+    <title>涨停狙击手 (Limit-Up Sniper) v2.5.5</title>
     <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <link rel="manifest" href="static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -1395,30 +1395,61 @@
         
         const { createApp } = Vue
 
+        const resolveRequestUrl = (resource) => {
+            if (typeof resource === 'string') return resource;
+            if (resource && typeof resource.url === 'string') return resource.url;
+            return '';
+        };
+        const getOrCreateDeviceId = () => {
+            let deviceId = localStorage.getItem('sniper_device_id') || localStorage.getItem('sniper_token');
+            if (deviceId) return deviceId;
+            if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+                deviceId = `guestv2_${window.crypto.randomUUID().replace(/-/g, '').slice(0, 24)}`;
+            } else {
+                const fallback = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 10)}`;
+                deviceId = `guestv2_${fallback.slice(0, 24)}`;
+            }
+            localStorage.setItem('sniper_device_id', deviceId);
+            localStorage.setItem('sniper_guest_token', deviceId);
+            return deviceId;
+        };
+        const shouldSkipAuthEvent = (requestUrl) => {
+            return (
+                requestUrl.includes('/api/auth/login_user') ||
+                requestUrl.includes('/api/auth/register') ||
+                requestUrl.includes('/api/auth/login') ||
+                requestUrl.includes('/api/admin/')
+            );
+        };
+
         // Add global fetch interceptor
         const originalFetch = window.fetch;
         window.fetch = async (...args) => {
             let [resource, config] = args;
             config = config || {};
-            config.headers = config.headers || {};
-            
-            // Add Device ID
-            const deviceId = localStorage.getItem('sniper_device_id');
-            if (deviceId) {
-                config.headers['X-Device-ID'] = deviceId;
+            const requestUrl = resolveRequestUrl(resource);
+            const headers = new Headers(config.headers || {});
+
+            if (requestUrl.includes('/api/') && !requestUrl.includes('/api/admin/')) {
+                headers.set('X-Device-ID', getOrCreateDeviceId());
             }
-            
+            config.headers = headers;
+
             const response = await originalFetch(resource, config);
-            
-            // Handle Auth Errors
-            if (response.status === 401 || response.status === 403) {
-                // Trigger global event or modify Vue app state if reachable
-                // Since we are outside Vue, we can dispatch a custom event
-                window.dispatchEvent(new CustomEvent('auth-error'));
-                
-                // Optional: Don't throw if you want to handle it in UI, but usually we throw or return response
-                // Returning response so UI can see 403 and handle specific logic if needed, 
-                // but the event will open the modal.
+
+            if ((response.status === 401 || response.status === 403) && requestUrl.includes('/api/') && !shouldSkipAuthEvent(requestUrl)) {
+                let detail = '';
+                try {
+                    const payload = await response.clone().json();
+                    detail = String((payload && (payload.detail || payload.message)) || '').trim();
+                } catch (_) {}
+                window.dispatchEvent(new CustomEvent('auth-error', {
+                    detail: {
+                        status: response.status,
+                        detail,
+                        url: requestUrl
+                    }
+                }));
             }
             return response;
         };
@@ -1451,6 +1482,7 @@
                     wsConnected: false,
                     notifyWsConnected: false,
                     notifySocket: null,
+                    globalAuthErrorHandler: null,
                     currentTime: new Date(),
                     searchQuery: '',
                     searchResults: [],
@@ -1531,7 +1563,7 @@
                     isRegisteredAccount: false,
                     accountCanApplyTrial: false,
                     fingerprintId: '',
-                    frontendVersion: 'v2.5.4',
+                    frontendVersion: 'v2.5.5',
                     serverVersion: '获取中...',
                     loginLoading: false,
                     loadingChart: false,
@@ -1755,6 +1787,10 @@
                     try { this.notifySocket.close(); } catch (e) {}
                     this.notifySocket = null;
                 }
+                if (this.globalAuthErrorHandler) {
+                    window.removeEventListener('auth-error', this.globalAuthErrorHandler);
+                    this.globalAuthErrorHandler = null;
+                }
             },
             methods: {
                 membershipName(version) {
@@ -1764,6 +1800,38 @@
                     if (v === 'advanced') return '高级版';
                     if (v === 'flagship') return '旗舰版';
                     return String(version || '-');
+                },
+                encodeAuthText(value) {
+                    try {
+                        return btoa(unescape(encodeURIComponent(String(value || ''))));
+                    } catch (e) {
+                        return '';
+                    }
+                },
+                handleGlobalAuthError(event) {
+                    const payload = (event && event.detail) ? event.detail : {};
+                    const status = Number(payload.status || 0);
+                    const detail = String(payload.detail || '').toLowerCase();
+                    const isPermissionIssue = (
+                        detail.includes('upgrade') ||
+                        detail.includes('license expired') ||
+                        detail.includes('requires') ||
+                        detail.includes('quota') ||
+                        detail.includes('会员') ||
+                        detail.includes('次数') ||
+                        status === 403
+                    );
+
+                    if (isPermissionIssue) {
+                        this.showMsg('当前功能需要会员权限，请开通或续费后使用', 'info');
+                        this.openSubscription();
+                        return;
+                    }
+
+                    if (status === 401) {
+                        this.showMsg('登录状态失效，请重新登录', 'error');
+                        this.showLoginModal = true;
+                    }
                 },
                 startUserTimers() {
                     // Check every 10 seconds for expiry
@@ -2148,10 +2216,15 @@
                     this.loginLoading = true;
                     try {
                         const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login_user';
+                        const username = (this.loginForm.username || '').trim();
+                        const password = this.loginForm.password || '';
                         const res = await fetch(`${API_BASE_URL}${endpoint}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify(this.loginForm)
+                            body: JSON.stringify({
+                                username_b64: this.encodeAuthText(username),
+                                password_b64: this.encodeAuthText(password)
+                            })
                         });
                         
                         const data = await res.json();
@@ -2160,11 +2233,11 @@
                         this.userInfo = data.user;
                         localStorage.setItem('sniper_token', data.token);
                         localStorage.setItem('sniper_device_id', data.token);
-                        localStorage.setItem('sniper_username', data.username || this.loginForm.username);
+                        localStorage.setItem('sniper_username', data.username || username);
                         this.deviceId = data.token;
                         this.isRegisteredAccount = true;
                         this.connectNotifyWebSocket();
-                        this.displayUsername = data.username || this.loginForm.username;
+                        this.displayUsername = data.username || username;
                         this.accountCanApplyTrial = !!data.can_apply_trial;
                         this.loadLocalFavorites();
                         await this.fetchLocalFavoriteQuotes();
@@ -3976,19 +4049,15 @@
                         this.fetchIndices();
                         this.connectWebSocket();
                     }
+                    if (localStorage.getItem('sniper_open_subscription') === '1') {
+                        localStorage.removeItem('sniper_open_subscription');
+                        this.openSubscription();
+                    }
                 });
                 this.startUserTimers();
                 
-                // Event listener for auth errors
-                window.addEventListener('auth-error', () => {
-                    this.openSubscription();
-                });
-                // this.initFingerprint(); // Removed: Handled in initUser
-                
-                // Listen for global auth error event
-                window.addEventListener('auth-error', () => {
-                    this.showActivationModal = true;
-                });
+                this.globalAuthErrorHandler = (event) => this.handleGlobalAuthError(event);
+                window.addEventListener('auth-error', this.globalAuthErrorHandler);
 
                 // --- Existing Logic ---
                 this.fetchConfig();
@@ -4041,7 +4110,7 @@
                 fetch(API_BASE_URL + '/api/status')
                     .then(res => res.json())
                     .then(data => {
-                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.5.4';
+                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.5.5';
                         if (data.status === 'success') {
                             const isMarketOpenDay = data.is_market_open_day;
                             

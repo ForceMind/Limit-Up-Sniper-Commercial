@@ -31,7 +31,7 @@ from app.api import auth, admin, payment
 from app.db import database, models
 from app.dependencies import get_current_user, check_ai_permission, check_raid_permission, check_review_permission, check_data_permission, QuotaLimitExceeded, UpgradeRequired
 from app.core import user_service
-from app.core import watchlist_stats
+from app.core import watchlist_stats, account_store
 
 # Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -59,7 +59,7 @@ KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
-SERVER_VERSION = "v2.5.4"
+SERVER_VERSION = "v2.5.5"
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
@@ -92,6 +92,7 @@ USER_OP_LOG_SKIP_PREFIXES = (
     "/api/admin/login",
     "/api/admin/logout",
     "/api/admin/update_password",
+    "/api/admin/update_account",
     "/api/admin/panel_path",
     "/api/admin/users/reset_password",
     "/api/admin/users/add_time",
@@ -107,6 +108,13 @@ USER_OP_LOG_SKIP_PREFIXES = (
     "/api/auth/apply_trial",
     "/api/auth/invite_info",
 )
+
+API_DEVICE_AUTH_EXEMPT_PATHS = {
+    "/api/auth/login",
+    "/api/auth/register",
+    "/api/auth/login_user",
+    "/api/admin/login",
+}
 
 
 def _client_ip_from_request(request: Request) -> str:
@@ -226,6 +234,26 @@ async def admin_panel_custom_path_guard(request: Request, call_next):
         if normalized == admin_path or normalized.startswith(admin_path + "/"):
             return FileResponse(str(ADMIN_INDEX_FILE))
 
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def api_device_auth_guard(request: Request, call_next):
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return await call_next(request)
+    if path.startswith("/api/admin/"):
+        return await call_next(request)
+    if path in API_DEVICE_AUTH_EXEMPT_PATHS:
+        return await call_next(request)
+
+    device_id = (request.headers.get("X-Device-ID") or "").strip()
+    if not device_id:
+        return JSONResponse(status_code=401, content={"detail": "Missing Device ID"})
+    try:
+        account_store.ensure_device_not_banned(device_id)
+    except Exception as e:
+        return JSONResponse(status_code=403, content={"detail": str(e) or "Device is banned"})
     return await call_next(request)
 
 
@@ -2087,8 +2115,10 @@ class LHBAnalyzeRequest(BaseModel):
 @app.post("/api/lhb/analyze_daily")
 async def analyze_lhb_daily_api(req: LHBAnalyzeRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
     # Run in thread pool
-    await check_review_permission(user)
-    user_service.consume_quota(db, user, 'review')
+    # 深度复盘仍需高级权限，但消耗 AI 次数
+    await check_review_permission(user, skip_quota=True)
+    await check_ai_permission(user)
+    user_service.consume_quota(db, user, 'ai')
     
     loop = asyncio.get_event_loop()
     # Fetch data first

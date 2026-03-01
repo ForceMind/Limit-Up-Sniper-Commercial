@@ -183,16 +183,35 @@
     <script>
         const { createApp } = Vue
 
+        const resolveRequestUrl = (resource) => {
+            if (typeof resource === 'string') return resource;
+            if (resource && typeof resource.url === 'string') return resource.url;
+            return '';
+        };
         const originalFetch = window.fetch;
         window.fetch = async (...args) => {
             let [resource, config] = args;
             config = config || {};
-            config.headers = config.headers || {};
-            const deviceId = localStorage.getItem('sniper_device_id') || localStorage.getItem('sniper_token');
+            const headers = new Headers(config.headers || {});
+            const deviceId = localStorage.getItem('sniper_device_id') || localStorage.getItem('sniper_token') || ensureDeviceId();
             if (deviceId) {
-                config.headers['X-Device-ID'] = deviceId;
+                headers.set('X-Device-ID', deviceId);
             }
-            return originalFetch(resource, config);
+            config.headers = headers;
+
+            const requestUrl = resolveRequestUrl(resource);
+            const response = await originalFetch(resource, config);
+            if ((response.status === 401 || response.status === 403) && requestUrl.includes('/api/')) {
+                let detail = '';
+                try {
+                    const payload = await response.clone().json();
+                    detail = String((payload && (payload.detail || payload.message)) || '').trim();
+                } catch (_) {}
+                window.dispatchEvent(new CustomEvent('auth-error', {
+                    detail: { status: response.status, detail, url: requestUrl }
+                }));
+            }
+            return response;
         };
 
         function ensureDeviceId() {
@@ -219,6 +238,7 @@
                     showLogPanel: false,
                     wsConnected: false,
                     logs: [],
+                    authErrorHandler: null,
                     isDark: false,
                     isMobile: window.innerWidth < 768,
                     sortOrder: 'desc' // 'desc' or 'asc'
@@ -248,6 +268,18 @@
                     } catch (e) {
                         console.error('Ensure session failed:', e);
                     }
+                },
+                handleAuthError(event) {
+                    const payload = (event && event.detail) ? event.detail : {};
+                    const status = Number(payload.status || 0);
+                    const detail = String(payload.detail || '');
+                    if (status === 403) {
+                        alert(detail || '当前功能需要会员权限，请先开通或续费会员。');
+                    } else {
+                        alert(detail || '登录状态失效，请先登录。');
+                    }
+                    localStorage.setItem('sniper_open_subscription', '1');
+                    window.location.href = 'index.html';
                 },
                 toggleSort() {
                     this.sortOrder = this.sortOrder === 'desc' ? 'asc' : 'desc';
@@ -387,11 +419,19 @@
                 window.addEventListener('resize', () => {
                     this.isMobile = window.innerWidth < 768;
                 });
+                this.authErrorHandler = (event) => this.handleAuthError(event);
+                window.addEventListener('auth-error', this.authErrorHandler);
 
                 this.ensureSession().finally(() => {
                     this.fetchDates();
                     this.connectWebSocket();
                 });
+            },
+            beforeUnmount() {
+                if (this.authErrorHandler) {
+                    window.removeEventListener('auth-error', this.authErrorHandler);
+                    this.authErrorHandler = null;
+                }
             }
         }).mount('#app')
     </script>
