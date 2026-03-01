@@ -796,6 +796,7 @@ async def order_stats(db: Session = Depends(get_db), authorized: bool = Depends(
     waiting_amount = float(stats_by_status.get("waiting_verification", {}).get("amount", 0.0))
     pending_amount = float(stats_by_status.get("pending", {}).get("amount", 0.0))
     rejected_amount = float(stats_by_status.get("rejected", {}).get("amount", 0.0))
+    cancelled_amount = float(stats_by_status.get("cancelled", {}).get("amount", 0.0))
 
     return {
         "total_orders": total_orders,
@@ -804,6 +805,7 @@ async def order_stats(db: Session = Depends(get_db), authorized: bool = Depends(
         "waiting_amount": round(waiting_amount, 2),
         "pending_amount": round(pending_amount, 2),
         "rejected_amount": round(rejected_amount, 2),
+        "cancelled_amount": round(cancelled_amount, 2),
         "by_status": stats_by_status,
     }
 

@@ -876,7 +876,7 @@
                         <button @click="fetchOrders(); fetchOrderStats()" class="text-blue-500 hover:text-blue-700">刷新</button>
                     </div>
 
-                    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+                    <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
                         <div class="bg-white border rounded p-3">
                             <div class="text-xs text-gray-500">总金额</div>
                             <div class="text-lg font-bold text-red-600">¥{{ Number(orderStats.total_amount || 0).toFixed(2) }}</div>
@@ -896,6 +896,10 @@
                         <div class="bg-white border rounded p-3">
                             <div class="text-xs text-gray-500">订单总数</div>
                             <div class="text-lg font-bold text-gray-700">{{ orderStats.total_orders || 0 }}</div>
+                        </div>
+                        <div class="bg-white border rounded p-3">
+                            <div class="text-xs text-gray-500">已取消金额</div>
+                            <div class="text-lg font-bold text-gray-500">¥{{ Number(orderStats.cancelled_amount || 0).toFixed(2) }}</div>
                         </div>
                     </div>
 
@@ -928,7 +932,8 @@
                                             'bg-gray-100': o.status==='pending',
                                             'bg-blue-100 text-blue-800 animate-pulse': o.status==='waiting_verification',
                                             'bg-green-100 text-green-800': o.status==='completed',
-                                            'bg-red-100 text-red-800': o.status==='rejected'
+                                            'bg-red-100 text-red-800': o.status==='rejected',
+                                            'bg-slate-100 text-slate-700': o.status==='cancelled'
                                         }" class="px-2 py-1 rounded-full text-xs uppercase">
                                             {{ orderStatusLabel(o.status) }}
                                         </span>

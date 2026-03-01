@@ -124,6 +124,22 @@ def _referral_reward_days() -> int:
     return max(1, min(days, 365))
 
 
+def _serialize_order(order: models.PurchaseOrder) -> dict:
+    if not order:
+        return {}
+    return {
+        "id": int(order.id),
+        "order_code": str(order.order_code),
+        "amount": float(order.amount or 0.0),
+        "target_version": str(order.target_version or ""),
+        "duration_days": int(order.duration_days or 0),
+        "status": str(order.status or ""),
+        "created_at": order.created_at,
+        "updated_at": order.updated_at,
+        "can_cancel": str(order.status or "") in {"pending", "waiting_verification"},
+    }
+
+
 @router.get("/pricing")
 async def get_pricing(
     x_device_id: str = Header(None, alias="X-Device-ID"),
@@ -335,8 +351,48 @@ async def cancel_order(
     if not order.user or order.user.device_id != x_device_id:
         raise HTTPException(status_code=403, detail="Order access denied")
 
+    current_status = str(order.status or "").strip().lower()
+    if current_status not in {"pending", "waiting_verification"}:
+        if current_status == "completed":
+            raise HTTPException(status_code=400, detail="Order already completed and cannot be cancelled")
+        if current_status == "cancelled":
+            return {"status": "success", "message": "Order already cancelled"}
+        raise HTTPException(status_code=400, detail=f"Order in status '{current_status}' cannot be cancelled")
+
     order.status = "cancelled"
     db.commit()
     account_store.update_order_invite_status(order.order_code, "cancelled", reason="order_cancelled")
     add_runtime_log(f"[支付] 订单已取消: {order.order_code}")
     return {"status": "success"}
+
+@router.get("/orders")
+async def list_my_orders(
+    x_device_id: str = Header(None, alias="X-Device-ID"),
+    limit: int = 20,
+    db: Session = Depends(get_db),
+):
+    if not x_device_id:
+        raise HTTPException(status_code=401, detail="Missing Device ID")
+    account_store.ensure_device_not_banned(x_device_id)
+
+    user = db.query(models.User).filter(models.User.device_id == x_device_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid Device ID")
+
+    safe_limit = max(1, min(int(limit or 20), 100))
+    orders = (
+        db.query(models.PurchaseOrder)
+        .filter(models.PurchaseOrder.user_id == user.id)
+        .order_by(models.PurchaseOrder.created_at.desc())
+        .limit(safe_limit)
+        .all()
+    )
+    current_open = next(
+        (o for o in orders if str(o.status or "").strip().lower() in {"pending", "waiting_verification"}),
+        None,
+    )
+
+    return {
+        "current_order": _serialize_order(current_open) if current_open else None,
+        "history": [_serialize_order(o) for o in orders],
+    }

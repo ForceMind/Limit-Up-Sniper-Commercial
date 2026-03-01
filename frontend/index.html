@@ -1238,6 +1238,36 @@
 
                 <!-- Step 1: Selection -->
                 <div v-if="purchaseStep === 1" class="p-4 overflow-y-auto">
+                    <div v-if="currentOpenOrder" class="mb-4 rounded border border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 p-3">
+                        <div class="flex items-center justify-between gap-2 mb-2">
+                            <div class="text-xs font-bold text-amber-700 dark:text-amber-300">你有一笔进行中的订单</div>
+                            <span class="px-2 py-1 rounded-full text-[11px] bg-white/70 dark:bg-gray-900/60 border border-amber-300 dark:border-amber-700">
+                                {{ userOrderStatusLabel(currentOpenOrder.status) }}
+                            </span>
+                        </div>
+                        <div class="text-xs text-gray-700 dark:text-gray-300 space-y-1">
+                            <div>订单口令：<span class="font-mono font-bold">{{ currentOpenOrder.order_code }}</span></div>
+                            <div>金额：<span class="font-bold text-red-600">¥{{ Number(currentOpenOrder.amount || 0).toFixed(2) }}</span></div>
+                            <div>版本：{{ membershipName(currentOpenOrder.target_version) }} · {{ currentOpenOrder.duration_days || 0 }} 天</div>
+                            <div>创建时间：{{ formatShanghaiDateTime(currentOpenOrder.created_at) }}</div>
+                        </div>
+                        <div class="flex gap-2 mt-3">
+                            <button
+                                @click="currentOrder = { ...currentOpenOrder }; purchaseStep = (currentOpenOrder.status === 'waiting_verification' ? 3 : 2)"
+                                class="flex-1 py-2 rounded bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold"
+                            >
+                                查看当前订单
+                            </button>
+                            <button
+                                v-if="currentOpenOrder.can_cancel"
+                                @click="cancelCurrentOrder(currentOpenOrder.order_code)"
+                                class="flex-1 py-2 rounded border border-red-300 text-red-600 text-sm font-bold hover:bg-red-50"
+                            >
+                                取消订单
+                            </button>
+                        </div>
+                    </div>
+
                     <div v-if="canShowTenMinuteTrialOption || showTenMinuteTrialUsedHint" class="mb-4 rounded border border-orange-200 bg-orange-50 dark:bg-orange-900/20 dark:border-orange-800 p-3">
                         <div class="text-xs text-orange-700 dark:text-orange-300 mb-2">
                             注册账号专属10分钟体验，仅可申请一次。
@@ -1336,6 +1366,13 @@
                     
                     <div class="flex gap-3 w-full">
                          <button @click="purchaseStep = 1" class="flex-1 py-3 text-gray-500 border border-gray-200 rounded">重新填写</button>
+                         <button
+                            v-if="currentOrder?.can_cancel"
+                            @click="cancelCurrentOrder(currentOrder.order_code)"
+                            class="flex-1 py-3 text-red-600 border border-red-200 rounded hover:bg-red-50"
+                         >
+                            取消订单
+                         </button>
                          <button @click="confirmPaid" :disabled="purchaseLoading" class="flex-1 bg-red-600 text-white py-3 rounded font-bold">
                             {{ purchaseLoading ? '提交中...' : '我已正确支付' }}
                          </button>
@@ -1347,7 +1384,41 @@
                     <div class="w-16 h-16 bg-blue-100 text-blue-500 rounded-full flex items-center justify-center mb-4 text-3xl">⏳</div>
                     <h4 class="text-lg font-bold mb-2">等待验证中...</h4>
                     <p class="text-sm text-gray-500 mb-6">工作人员将在 1-10 分钟内完成验证 (8:00-22:00)。<br>验证通过后您的权益将自动激活。</p>
+                    <button
+                        v-if="currentOrder?.can_cancel"
+                        @click="cancelCurrentOrder(currentOrder.order_code)"
+                        class="mb-3 px-4 py-2 text-sm border border-red-300 rounded text-red-600 hover:bg-red-50"
+                    >
+                        取消当前订单
+                    </button>
                     <button @click="showSubscriptionModal = false" class="text-blue-500 text-sm">先逛逛列表 (部分功能受限)</button>
+                </div>
+
+                <div v-if="orderHistory.length > 0" class="border-t border-gray-100 dark:border-gray-700 p-4 overflow-y-auto">
+                    <div class="flex items-center justify-between mb-2">
+                        <div class="text-sm font-bold text-gray-800 dark:text-gray-100">订单历史</div>
+                        <button @click="fetchPaymentOrders(true)" class="text-xs text-blue-500 hover:text-blue-700">刷新</button>
+                    </div>
+                    <div class="max-h-40 overflow-y-auto border rounded">
+                        <table class="w-full text-xs">
+                            <thead class="bg-gray-50 dark:bg-gray-900/60">
+                                <tr class="text-gray-500">
+                                    <th class="text-left px-2 py-1">订单口令</th>
+                                    <th class="text-left px-2 py-1">金额</th>
+                                    <th class="text-left px-2 py-1">状态</th>
+                                    <th class="text-left px-2 py-1">时间</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <tr v-for="o in orderHistory" :key="o.id" class="border-t border-gray-100 dark:border-gray-700">
+                                    <td class="px-2 py-1 font-mono">{{ o.order_code }}</td>
+                                    <td class="px-2 py-1">¥{{ Number(o.amount || 0).toFixed(2) }}</td>
+                                    <td class="px-2 py-1">{{ userOrderStatusLabel(o.status) }}</td>
+                                    <td class="px-2 py-1 text-gray-500">{{ formatShanghaiDateTime(o.created_at) }}</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -1591,6 +1662,9 @@
                     selectedVersion: 'basic',
                     selectedDuration: '1m',
                     currentOrder: null,
+                    currentOpenOrder: null,
+                    orderHistory: [],
+                    orderQueryLoading: false,
                     purchaseLoading: false,
                     inviteLoading: false,
                     inviteInputCode: '',
@@ -2422,6 +2496,70 @@
                     }
                     return true;
                 },
+                userOrderStatusLabel(status) {
+                    const s = String(status || '').toLowerCase();
+                    if (s === 'pending') return '待支付';
+                    if (s === 'waiting_verification') return '待审核';
+                    if (s === 'completed') return '已完成';
+                    if (s === 'rejected') return '已拒绝';
+                    if (s === 'cancelled') return '已取消';
+                    return status || '-';
+                },
+                async fetchPaymentOrders(silent = false) {
+                    if (!this.isRegisteredAccount) {
+                        this.currentOpenOrder = null;
+                        this.orderHistory = [];
+                        return;
+                    }
+                    const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
+                    if (!deviceId) return;
+                    this.orderQueryLoading = true;
+                    try {
+                        const res = await fetch(`${API_BASE_URL}/api/payment/orders?limit=30`, {
+                            headers: { 'X-Device-ID': deviceId }
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '订单信息获取失败');
+                        this.currentOpenOrder = data.current_order || null;
+                        this.orderHistory = Array.isArray(data.history) ? data.history : [];
+                        if (!this.currentOrder && this.currentOpenOrder) {
+                            this.currentOrder = { ...this.currentOpenOrder };
+                        }
+                    } catch (e) {
+                        if (!silent) this.showMsg(e.message || '订单信息获取失败', 'error');
+                    } finally {
+                        this.orderQueryLoading = false;
+                    }
+                },
+                async cancelCurrentOrder(orderCode) {
+                    const code = String(orderCode || '').trim();
+                    if (!code) return;
+                    const confirmed = await this.showConfirm(`确认取消订单 ${code} 吗？`);
+                    if (!confirmed) return;
+                    const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
+                    if (!deviceId) return;
+                    try {
+                        this.purchaseLoading = true;
+                        const res = await fetch(`${API_BASE_URL}/api/payment/cancel_order`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Device-ID': deviceId
+                            },
+                            body: JSON.stringify({ order_code: code })
+                        });
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '取消订单失败');
+                        this.showMsg('订单已取消', 'success');
+                        this.purchaseStep = 1;
+                        this.currentOrder = null;
+                        await this.fetchPaymentOrders(true);
+                    } catch (e) {
+                        this.showMsg(e.message || '取消订单失败', 'error');
+                    } finally {
+                        this.purchaseLoading = false;
+                    }
+                },
 
                 async openSubscription(targetVer) {
                     if (!this.isRegisteredAccount) {
@@ -2433,6 +2571,8 @@
                     this.showSubscriptionModal = true;
                     this.purchaseStep = 1;
                     this.currentOrder = null;
+                    this.currentOpenOrder = null;
+                    this.orderHistory = [];
                     const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
                     if (!this.inviteInputCode) {
                         const pendingInvite = (localStorage.getItem('sniper_pending_invite_code') || '').trim().toUpperCase();
@@ -2441,6 +2581,11 @@
                     
                     try {
                         await this.fetchInviteInfo();
+                        await this.fetchPaymentOrders(true);
+                        if (this.currentOpenOrder) {
+                            this.currentOrder = { ...this.currentOpenOrder };
+                            this.purchaseStep = this.currentOpenOrder.status === 'waiting_verification' ? 3 : 2;
+                        }
                         const res = await fetch(`${API_BASE_URL}/api/payment/pricing`, {
                             headers: deviceId ? { 'X-Device-ID': deviceId } : {}
                         });
@@ -2518,6 +2663,7 @@
                         const data = await res.json();
                         if (data.order_code) {
                             this.currentOrder = data;
+                            this.currentOpenOrder = data;
                             this.purchaseStep = 2;
                             if ((this.inviteInputCode || '').trim()) {
                                 localStorage.removeItem('sniper_pending_invite_code');
@@ -2525,8 +2671,19 @@
                             if (data.invite_bonus_message) {
                                 this.showMsg(data.invite_bonus_message, 'info');
                             }
+                            await this.fetchPaymentOrders(true);
+                            if (this.currentOpenOrder) {
+                                this.currentOrder = { ...this.currentOpenOrder };
+                            }
                         } else {
                             this.showMsg(data.detail || '创建订单失败', 'error');
+                            if (String(data.detail || '').includes('未完成订单')) {
+                                await this.fetchPaymentOrders(true);
+                                if (this.currentOpenOrder) {
+                                    this.currentOrder = { ...this.currentOpenOrder };
+                                    this.purchaseStep = this.currentOpenOrder.status === 'waiting_verification' ? 3 : 2;
+                                }
+                            }
                         }
                     } catch(e) {
                         this.showMsg('创建订单失败: ' + e, 'error');
@@ -2552,6 +2709,10 @@
                         const data = await res.json();
                         if (!res.ok) {
                             throw new Error(data.detail || '提交失败');
+                        }
+                        await this.fetchPaymentOrders(true);
+                        if (this.currentOpenOrder) {
+                            this.currentOrder = { ...this.currentOpenOrder };
                         }
                         this.purchaseStep = 3;
                         this.showMsg('已提交审核，审批通过后会实时弹窗通知', 'info');
