@@ -2703,6 +2703,7 @@ class AdminLHBSettingsRequest(BaseModel):
     enabled: bool
     days: int
     min_amount: int
+    sync_time: Optional[str] = None
 
 
 @router.get("/lhb/seat_configs")
@@ -2786,9 +2787,9 @@ async def update_lhb_settings(
     payload: AdminLHBSettingsRequest,
     authorized: bool = Depends(verify_admin),
 ):
-    lhb_manager.update_settings(payload.enabled, payload.days, payload.min_amount)
+    lhb_manager.update_settings(payload.enabled, payload.days, payload.min_amount, payload.sync_time)
     add_runtime_log(
-        f"[龙虎榜] 已更新配置: 启用={payload.enabled}, 天数={payload.days}, 最小金额={payload.min_amount}"
+        f"[龙虎榜] 已更新配置: 启用={payload.enabled}, 天数={payload.days}, 最小金额={payload.min_amount}, 同步时间={lhb_manager.config.get('sync_time', '18:00')}"
     )
     return {"status": "success", "config": lhb_manager.config}
 
@@ -2841,7 +2842,7 @@ async def sync_lhb_missing(
         f"[龙虎榜] 启动缺失交易日补数: {start_date} ~ {end_date}, 共{len(missing_dates)}天"
     )
     background_tasks.add_task(
-        lhb_manager.fetch_and_update_data,
+        lhb_manager.sync_and_preanalyze,
         add_runtime_log,
         None,
         missing_dates,

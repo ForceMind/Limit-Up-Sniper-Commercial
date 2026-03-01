@@ -27,7 +27,9 @@ class LHBManager:
             "enabled": False,
             "days": 2,
             "min_amount": 10000000, # 1000万
-            "last_update": None
+            "last_update": None,
+            "sync_time": "18:00",
+            "last_ai_cache_update": None,
         }
         self.is_syncing = False
         self.hot_money_map = {}
@@ -56,6 +58,48 @@ class LHBManager:
         self.load_config()
         self.load_hot_money_map()
         self.load_vip_seats()
+
+    def _normalize_sync_time(self, value) -> str:
+        text = str(value or "").strip()
+        if not text:
+            return "18:00"
+        try:
+            parsed = datetime.strptime(text, "%H:%M")
+            return parsed.strftime("%H:%M")
+        except Exception:
+            return "18:00"
+
+    def _get_sync_time(self) -> str:
+        return self._normalize_sync_time(self.config.get("sync_time"))
+
+    def _get_sync_datetime_for_date(self, date_obj):
+        sync_text = self._get_sync_time()
+        hour = 18
+        minute = 0
+        try:
+            parts = sync_text.split(":")
+            hour = int(parts[0])
+            minute = int(parts[1])
+        except Exception:
+            pass
+        return datetime.combine(date_obj, datetime.min.time()).replace(hour=hour, minute=minute, second=0, microsecond=0)
+
+    def get_today_sync_status(self):
+        self.load_config()
+        now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        sync_time = self._get_sync_time()
+        sync_dt = self._get_sync_datetime_for_date(now.date())
+        before_sync_time = now < sync_dt
+        today_has_data = self.has_data_for_today()
+        return {
+            "today": today,
+            "sync_time": sync_time,
+            "sync_datetime": sync_dt.strftime("%Y-%m-%d %H:%M:%S"),
+            "before_sync_time": bool(before_sync_time),
+            "today_has_data": bool(today_has_data),
+            "message": f"今日龙虎榜数据预计 {sync_time} 后同步，请稍后查看。" if (before_sync_time and not today_has_data) else "",
+        }
 
     def _throttle_akshare_request(self, min_interval_sec=None):
         interval = self._akshare_min_interval_sec if min_interval_sec is None else max(0.0, float(min_interval_sec))
@@ -123,20 +167,29 @@ class LHBManager:
                 with open(config_path, 'r', encoding='utf-8') as f:
                     saved = json.load(f)
                     self.config.update(saved)
+                    self.config["sync_time"] = self._normalize_sync_time(self.config.get("sync_time"))
                     print(f"[龙虎榜] 配置已加载: {self.config}")
             except Exception as e:
                 print(f"[龙虎榜] 加载配置失败: {e}")
+        else:
+            self.config["sync_time"] = self._normalize_sync_time(self.config.get("sync_time"))
 
     def save_config(self):
+        self.config["sync_time"] = self._normalize_sync_time(self.config.get("sync_time"))
         config_path = DATA_DIR / "lhb_config.json"
         with open(config_path, 'w', encoding='utf-8') as f:
-            json.dump(self.config, f, indent=2)
+            json.dump(self.config, f, indent=2, ensure_ascii=False)
 
-    def update_settings(self, enabled, days, min_amount):
-        print(f"[龙虎榜] 正在更新设置: enabled={enabled}, days={days}, min_amount={min_amount}")
+    def update_settings(self, enabled, days, min_amount, sync_time=None):
+        if sync_time is not None:
+            sync_time = self._normalize_sync_time(sync_time)
+        else:
+            sync_time = self._get_sync_time()
+        print(f"[龙虎榜] 正在更新设置: enabled={enabled}, days={days}, min_amount={min_amount}, sync_time={sync_time}")
         self.config['enabled'] = enabled
         self.config['days'] = days
         self.config['min_amount'] = min_amount
+        self.config['sync_time'] = sync_time
         self.save_config()
         
         if enabled:
@@ -211,7 +264,9 @@ class LHBManager:
             "enabled": bool(self.config.get("enabled")),
             "days": int(self.config.get("days", 0) or 0),
             "min_amount": int(self.config.get("min_amount", 0) or 0),
+            "sync_time": self._get_sync_time(),
             "last_update": self.config.get("last_update"),
+            "last_ai_cache_update": self.config.get("last_ai_cache_update"),
             "total_records": total_records,
             "available_dates": existing_dates,
             "available_date_count": len(existing_dates),
@@ -292,14 +347,16 @@ class LHBManager:
                 date_str = date_obj.strftime('%Y%m%d')
                 date_iso = date_obj.strftime('%Y-%m-%d')
                 
-                # Check if it is today and before 16:00 (LHB usually starts after 16:00)
+                # Check if it is today and before configured sync time.
                 now = datetime.now()
                 # date_obj is likely datetime.date, so compare directly or use date_obj if it is date
                 check_date = date_obj.date() if hasattr(date_obj, 'date') else date_obj
                 
-                if check_date == now.date() and now.hour < 16:
-                     log(f"[龙虎榜] 今日({date_iso})数据尚未公布(16:00后)，跳过。")
-                     continue
+                if check_date == now.date():
+                    sync_dt = self._get_sync_datetime_for_date(check_date)
+                    if now < sync_dt:
+                        log(f"[龙虎榜] 今日({date_iso})数据尚未到同步时间（{self._get_sync_time()}后），跳过。")
+                        continue
                 
                 # Check if we already have data for this date (Optimization)
                 # But user said "if manual range covers missing data, fetch it"
@@ -477,8 +534,58 @@ class LHBManager:
                 
             else:
                 if logger: logger("[龙虎榜] 无数据。")
+            self.config["last_update"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.save_config()
         finally:
             self.is_syncing = False
+
+    def sync_and_preanalyze(self, logger=None, force_days=None, force_dates=None):
+        def log(msg):
+            if logger:
+                logger(msg)
+            print(msg)
+
+        before_last_update = str(self.config.get("last_update") or "")
+        self.fetch_and_update_data(logger=logger, force_days=force_days, force_dates=force_dates)
+        after_last_update = str(self.config.get("last_update") or "")
+        if before_last_update == after_last_update:
+            return
+
+        try:
+            target_date = ""
+            if force_dates:
+                valid = []
+                for d in force_dates:
+                    s = str(d or "").strip()
+                    if s:
+                        valid.append(s)
+                valid = sorted(set(valid), reverse=True)
+                for d in valid:
+                    if self.get_daily_data(d):
+                        target_date = d
+                        break
+            if not target_date:
+                dates = self.get_available_dates()
+                target_date = dates[0] if dates else ""
+
+            if not target_date:
+                return
+
+            day_data = self.get_daily_data(target_date)
+            if not day_data:
+                return
+
+            from app.core.news_analyzer import analyze_daily_lhb
+            result = analyze_daily_lhb(target_date, day_data, logger=logger, force_update=False)
+            result_text = str(result or "").strip()
+            if result_text.startswith("分析失败") or result_text.startswith("分析异常"):
+                log(f"[龙虎榜] AI 预分析失败: {result_text}")
+                return
+            self.config["last_ai_cache_update"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.save_config()
+            log(f"[龙虎榜] 已完成 {target_date} AI 预分析并写入缓存。")
+        except Exception as e:
+            log(f"[龙虎榜] AI 预分析失败: {e}")
 
     def update_vip_seats(self, df):
         # Count appearances in recent data, but keep manually maintained base seats.

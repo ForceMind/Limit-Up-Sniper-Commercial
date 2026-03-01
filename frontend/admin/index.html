@@ -1193,6 +1193,10 @@
                             <div class="text-xs text-gray-500 mb-1">最小上榜金额</div>
                             <input type="number" v-model.number="lhbSettings.min_amount" class="border rounded px-2 py-1 w-40 text-sm">
                         </div>
+                        <div>
+                            <div class="text-xs text-gray-500 mb-1">每日自动同步时间</div>
+                            <input type="time" v-model="lhbSettings.sync_time" class="border rounded px-2 py-1 w-36 text-sm">
+                        </div>
                         <button @click="saveLHBSettings" class="bg-gray-900 hover:bg-black text-white px-4 py-2 rounded text-sm">保存设置</button>
                     </div>
 
@@ -1514,7 +1518,8 @@
                     lhbSettings: {
                         enabled: false,
                         days: 30,
-                        min_amount: 10000000
+                        min_amount: 10000000,
+                        sync_time: '18:00'
                     },
                     lhbSeatMappings: [],
                     lhbVipSeats: [],
@@ -2355,6 +2360,7 @@
                         this.lhbSettings.enabled = !!overview.enabled;
                         this.lhbSettings.days = Number(overview.days || 0);
                         this.lhbSettings.min_amount = Number(overview.min_amount || 0);
+                        this.lhbSettings.sync_time = String(overview.sync_time || '18:00');
                         if (!this.lhbDate && overview.available_dates && overview.available_dates.length > 0) {
                             this.selectLHBDate(overview.available_dates[0]);
                         }
@@ -2370,7 +2376,8 @@
                             body: JSON.stringify({
                                 enabled: !!this.lhbSettings.enabled,
                                 days: Number(this.lhbSettings.days || 0),
-                                min_amount: Number(this.lhbSettings.min_amount || 0)
+                                min_amount: Number(this.lhbSettings.min_amount || 0),
+                                sync_time: String(this.lhbSettings.sync_time || '18:00')
                             })
                         });
                         if (res.status === 403) { this.clearAuth(true); return; }

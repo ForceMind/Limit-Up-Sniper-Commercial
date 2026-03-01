@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends
+﻿from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,7 +59,7 @@ KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
-SERVER_VERSION = "v2.5.5"
+SERVER_VERSION = "v2.5.6"
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
@@ -1663,17 +1663,20 @@ async def scheduler_loop():
             #         await asyncio.to_thread(update_limit_up_pool_task)
             #         last_pool_update_time = current_timestamp
 
-            # Task 4: LHB Sync (Daily at 18:00)
-            if is_market_open_day() and now.hour == 18 and now.minute == 0 and now.second < 10:
-                if lhb_manager.config['enabled'] and not lhb_manager.is_syncing:
-                    # [Modified] Only run if today's data is missing
+            # Task 4: LHB Sync (Daily at configured time)
+            sync_time = str((lhb_manager.config or {}).get("sync_time") or "18:00").strip()
+            try:
+                sync_hour, sync_min = [int(x) for x in sync_time.split(":")]
+            except Exception:
+                sync_hour, sync_min = 18, 0
+            if is_market_open_day() and now.hour == sync_hour and now.minute == sync_min and now.second < 10:
+                if lhb_manager.config.get('enabled') and not lhb_manager.is_syncing:
                     if not lhb_manager.has_data_for_today():
-                        thread_logger("[龙虎榜] 启动定时同步任务 (18:00)...")
+                        thread_logger(f"[龙虎榜] 启动定时同步任务 ({sync_hour:02d}:{sync_min:02d})...")
                         loop = asyncio.get_event_loop()
-                        loop.run_in_executor(None, lhb_manager.fetch_and_update_data, thread_logger)
+                        loop.run_in_executor(None, lhb_manager.sync_and_preanalyze, thread_logger)
                     else:
                         thread_logger("[龙虎榜] 今日数据已存在，跳过定时任务。")
-                    # Sleep to avoid multiple triggers
                     await asyncio.sleep(60)
 
             await asyncio.sleep(5) # Check every 5 seconds
@@ -2067,6 +2070,7 @@ class LHBConfigRequest(BaseModel):
     enabled: bool
     days: int
     min_amount: int
+    sync_time: Optional[str] = None
 
 @app.get("/api/lhb/config")
 async def get_lhb_config(user: models.User = Depends(check_data_permission)):
@@ -2078,11 +2082,13 @@ async def get_lhb_config(user: models.User = Depends(check_data_permission)):
     except Exception:
         payload["latest_trade_date"] = ""
     payload["last_update_time"] = str(payload.get("last_update", "") or "")
+    status = lhb_manager.get_today_sync_status()
+    payload["today_sync_status"] = status
     return payload
 
 @app.post("/api/lhb/config")
 async def update_lhb_config(config: LHBConfigRequest, user: models.User = Depends(check_data_permission)):
-    lhb_manager.update_settings(config.enabled, config.days, config.min_amount)
+    lhb_manager.update_settings(config.enabled, config.days, config.min_amount, config.sync_time)
     payload = await get_lhb_config(user)
     return {"status": "ok", "config": payload}
 
@@ -2092,20 +2098,44 @@ async def sync_lhb_data(background_tasks: BackgroundTasks, days: Optional[int] =
     if lhb_manager.is_syncing:
         return {"status": "error", "message": "同步任务正在进行中"}
         
-    background_tasks.add_task(lhb_manager.fetch_and_update_data, logger=thread_logger, force_days=days)
+    background_tasks.add_task(lhb_manager.sync_and_preanalyze, logger=thread_logger, force_days=days)
     return {"status": "ok", "message": "龙虎榜同步已启动"}
 
 @app.get("/api/lhb/status")
 async def get_lhb_status(user: models.User = Depends(check_data_permission)):
-    return {"is_syncing": lhb_manager.is_syncing}
+    today_status = lhb_manager.get_today_sync_status()
+    return {
+        "is_syncing": lhb_manager.is_syncing,
+        "sync_time": today_status.get("sync_time", "18:00"),
+        "today": today_status.get("today"),
+        "today_has_data": bool(today_status.get("today_has_data")),
+        "before_sync_time": bool(today_status.get("before_sync_time")),
+        "message": today_status.get("message", ""),
+    }
 
 @app.get("/api/lhb/dates")
 async def get_lhb_dates(user: models.User = Depends(check_data_permission)):
-    return lhb_manager.get_available_dates()
+    dates = lhb_manager.get_available_dates() or []
+    status = lhb_manager.get_today_sync_status()
+    today = str(status.get("today") or "")
+    now = datetime.now()
+    if is_market_open_day() and now.hour >= 15 and today and today not in dates:
+        dates = [today] + dates
+    return dates
 
 @app.get("/api/lhb/history")
 async def get_lhb_history(date: str, user: models.User = Depends(check_data_permission)):
-    return lhb_manager.get_daily_data(date)
+    date_str = str(date or "").strip()
+    data = lhb_manager.get_daily_data(date_str)
+    status = lhb_manager.get_today_sync_status()
+    if (
+        date_str
+        and date_str == str(status.get("today") or "")
+        and not data
+        and bool(status.get("before_sync_time"))
+    ):
+        raise HTTPException(status_code=425, detail=status.get("message") or "今日龙虎榜尚未同步完成，请稍后再来查看。")
+    return data
 
 class LHBAnalyzeRequest(BaseModel):
     date: str
@@ -2189,7 +2219,7 @@ async def fetch_lhb_data(background_tasks: BackgroundTasks, user: models.User = 
     
     # [Modified] Use thread_logger to broadcast logs to WebSocket
     # Force sync only 1 day (Today/Latest) for manual trigger
-    background_tasks.add_task(lhb_manager.fetch_and_update_data, logger=thread_logger, force_days=1)
+    background_tasks.add_task(lhb_manager.sync_and_preanalyze, logger=thread_logger, force_days=1)
     return {"status": "success"}
 
 @app.post("/api/analyze/stock")
@@ -2311,4 +2341,5 @@ async def get_ai_markers(code: str, type: str = None, user: models.User = Depend
 # Must be last to not override API routes
 if FRONTEND_DIR.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
+
 

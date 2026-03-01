@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>涨停狙击手 (Limit-Up Sniper) v2.5.5</title>
+    <title>涨停狙击手 (Limit-Up Sniper) v2.5.6</title>
     <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <link rel="manifest" href="static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -1238,111 +1238,186 @@
 
                 <!-- Step 1: Selection -->
                 <div v-if="purchaseStep === 1" class="p-4 overflow-y-auto">
-                    <div v-if="currentOpenOrder" class="mb-4 rounded border border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 p-3">
-                        <div class="flex items-center justify-between gap-2 mb-2">
-                            <div class="text-xs font-bold text-amber-700 dark:text-amber-300">你有一笔进行中的订单</div>
-                            <span class="px-2 py-1 rounded-full text-[11px] bg-white/70 dark:bg-gray-900/60 border border-amber-300 dark:border-amber-700">
-                                {{ userOrderStatusLabel(currentOpenOrder.status) }}
-                            </span>
-                        </div>
-                        <div class="text-xs text-gray-700 dark:text-gray-300 space-y-1">
-                            <div>订单口令：<span class="font-mono font-bold">{{ currentOpenOrder.order_code }}</span></div>
-                            <div>金额：<span class="font-bold text-red-600">¥{{ Number(currentOpenOrder.amount || 0).toFixed(2) }}</span></div>
-                            <div>版本：{{ membershipName(currentOpenOrder.target_version) }} · {{ currentOpenOrder.duration_days || 0 }} 天</div>
-                            <div>创建时间：{{ formatShanghaiDateTime(currentOpenOrder.created_at) }}</div>
-                        </div>
-                        <div class="flex gap-2 mt-3">
-                            <button
-                                @click="currentOrder = { ...currentOpenOrder }; purchaseStep = (currentOpenOrder.status === 'waiting_verification' ? 3 : 2)"
-                                class="flex-1 py-2 rounded bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold"
-                            >
-                                查看当前订单
-                            </button>
-                            <button
-                                v-if="currentOpenOrder.can_cancel"
-                                @click="cancelCurrentOrder(currentOpenOrder.order_code)"
-                                class="flex-1 py-2 rounded border border-red-300 text-red-600 text-sm font-bold hover:bg-red-50"
-                            >
-                                取消订单
-                            </button>
-                        </div>
-                    </div>
-
-                    <div v-if="canShowTenMinuteTrialOption || showTenMinuteTrialUsedHint" class="mb-4 rounded border border-orange-200 bg-orange-50 dark:bg-orange-900/20 dark:border-orange-800 p-3">
-                        <div class="text-xs text-orange-700 dark:text-orange-300 mb-2">
-                            注册账号专属10分钟体验，仅可申请一次。
-                        </div>
-                        <button v-if="canShowTenMinuteTrialOption" @click="applyTrialExperience" :disabled="loginLoading" class="w-full py-2 rounded bg-orange-500 text-white text-sm font-bold disabled:opacity-50">
-                            {{ loginLoading ? '处理中...' : '立即申请10分钟体验' }}
+                    <div class="grid grid-cols-4 gap-2 mb-4">
+                        <button @click="subscriptionTab = 'plans'" class="py-2 rounded text-xs border" :class="subscriptionTab === 'plans' ? 'bg-red-50 border-red-400 text-red-600 dark:bg-red-900/20' : 'border-gray-200 dark:border-gray-700 text-gray-500'">会员方案</button>
+                        <button @click="subscriptionTab = 'orders'" class="py-2 rounded text-xs border relative" :class="subscriptionTab === 'orders' ? 'bg-amber-50 border-amber-400 text-amber-700 dark:bg-amber-900/20' : 'border-gray-200 dark:border-gray-700 text-gray-500'">
+                            当前订单
+                            <span v-if="currentOpenOrder" class="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-amber-500"></span>
                         </button>
-                        <div v-else class="text-[11px] text-orange-700 dark:text-orange-300">10分钟体验资格已使用，可直接购买3天体验或正式会员。</div>
+                        <button @click="subscriptionTab = 'invite'" class="py-2 rounded text-xs border" :class="subscriptionTab === 'invite' ? 'bg-blue-50 border-blue-400 text-blue-700 dark:bg-blue-900/20' : 'border-gray-200 dark:border-gray-700 text-gray-500'">邀请码</button>
+                        <button @click="subscriptionTab = 'history'" class="py-2 rounded text-xs border" :class="subscriptionTab === 'history' ? 'bg-gray-100 border-gray-400 text-gray-700 dark:bg-gray-900/40' : 'border-gray-200 dark:border-gray-700 text-gray-500'">订单历史</button>
                     </div>
 
-                    <div v-if="inviteInfo.enabled !== false" class="mb-4 rounded border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 p-3">
-                        <div class="flex items-center justify-between gap-2 mb-2">
-                            <div class="text-xs text-blue-700 dark:text-blue-300">我的邀请码</div>
-                            <button @click="copyInviteShare" class="text-xs text-blue-600 font-bold">复制分享文案</button>
+                    <div v-if="subscriptionTab === 'orders'">
+                        <div v-if="currentOpenOrder" class="rounded border border-amber-200 bg-amber-50 dark:bg-amber-900/20 dark:border-amber-800 p-3">
+                            <div class="flex items-center justify-between gap-2 mb-2">
+                                <div class="text-xs font-bold text-amber-700 dark:text-amber-300">你有一笔进行中的订单</div>
+                                <span class="px-2 py-1 rounded-full text-[11px] bg-white/70 dark:bg-gray-900/60 border border-amber-300 dark:border-amber-700">
+                                    {{ userOrderStatusLabel(currentOpenOrder.status) }}
+                                </span>
+                            </div>
+                            <div class="text-xs text-gray-700 dark:text-gray-300 space-y-1">
+                                <div>订单口令：<span class="font-mono font-bold">{{ currentOpenOrder.order_code }}</span></div>
+                                <div>金额：<span class="font-bold text-red-600">¥{{ Number(currentOpenOrder.amount || 0).toFixed(2) }}</span></div>
+                                <div>版本：{{ membershipName(currentOpenOrder.target_version) }} · {{ currentOpenOrder.duration_days || 0 }} 天</div>
+                                <div>创建时间：{{ formatShanghaiDateTime(currentOpenOrder.created_at) }}</div>
+                            </div>
+                            <div class="flex gap-2 mt-3">
+                                <button
+                                    @click="currentOrder = { ...currentOpenOrder }; purchaseStep = (currentOpenOrder.status === 'waiting_verification' ? 3 : 2)"
+                                    class="flex-1 py-2 rounded bg-amber-600 hover:bg-amber-700 text-white text-sm font-bold"
+                                >
+                                    查看当前订单
+                                </button>
+                                <button
+                                    v-if="currentOpenOrder.can_cancel"
+                                    @click="cancelCurrentOrder(currentOpenOrder.order_code)"
+                                    class="flex-1 py-2 rounded border border-red-300 text-red-600 text-sm font-bold hover:bg-red-50"
+                                >
+                                    取消订单
+                                </button>
+                            </div>
                         </div>
-                        <div class="w-full bg-white/70 dark:bg-gray-900/60 rounded border border-dashed border-blue-300 dark:border-blue-700 px-3 py-2 text-sm font-mono tracking-wider">
-                            {{ inviteLoading ? '加载中...' : (inviteInfo.invite_code || '暂不可用') }}
-                        </div>
-                        <div class="text-[11px] text-blue-700/80 dark:text-blue-300/80 mt-2">
-                            分享后，对方在充值页填写你的邀请码，订单通过后可获赠 {{ inviteInfo.reward_days || 30 }} 天权益。
-                        </div>
-                        <div class="mt-3">
-                            <label class="block text-xs text-gray-500 mb-1">填写邀请码（可选）</label>
-                            <input type="text" v-model="inviteInputCode" @input="inviteInputCode = (inviteInputCode || '').toUpperCase()" maxlength="20" placeholder="输入好友邀请码" class="w-full border rounded px-3 py-2 text-sm dark:bg-gray-900 dark:border-gray-600 dark:text-gray-100">
+                        <div v-else class="rounded border border-gray-200 dark:border-gray-700 p-4 text-sm text-gray-500 text-center">
+                            当前没有进行中的订单
+                            <div class="mt-3">
+                                <button @click="subscriptionTab = 'plans'" class="px-4 py-2 rounded bg-red-600 text-white text-xs font-bold">去开通/续费</button>
+                            </div>
                         </div>
                     </div>
 
-                    <div v-if="isRenewOnlyMode" class="mb-4 rounded border border-emerald-200 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-800 p-3 text-xs text-emerald-700 dark:text-emerald-300">
-                        <div class="font-bold mb-1">
-                            当前会员版本：{{ selectedVersion === 'basic' ? '初级版' : (selectedVersion === 'advanced' ? '高级版' : '旗舰版') }}
+                    <div v-else-if="subscriptionTab === 'invite'">
+                        <div v-if="inviteInfo.enabled !== false" class="rounded border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 p-3">
+                            <div class="flex items-center justify-between gap-2 mb-2">
+                                <div class="text-xs text-blue-700 dark:text-blue-300">我的邀请码</div>
+                                <button @click="copyInviteShare" class="text-xs text-blue-600 font-bold">复制分享文案</button>
+                            </div>
+                            <div class="w-full bg-white/70 dark:bg-gray-900/60 rounded border border-dashed border-blue-300 dark:border-blue-700 px-3 py-2 text-sm font-mono tracking-wider">
+                                {{ inviteLoading ? '加载中...' : (inviteInfo.invite_code || '暂不可用') }}
+                            </div>
+                            <div class="text-[11px] text-blue-700/80 dark:text-blue-300/80 mt-2">
+                                分享后，对方在充值页填写你的邀请码，订单通过后可获赠 {{ inviteInfo.reward_days || 30 }} 天权益。
+                            </div>
+                            <div class="mt-3">
+                                <label class="block text-xs text-gray-500 mb-1">填写邀请码（可选）</label>
+                                <input type="text" v-model="inviteInputCode" @input="onInviteInputChanged" maxlength="20" placeholder="输入好友邀请码" class="w-full border rounded px-3 py-2 text-sm dark:bg-gray-900 dark:border-gray-600 dark:text-gray-100">
+                            </div>
+                            <div class="mt-3" v-if="inviteCodeHistory.length > 0">
+                                <label class="block text-xs text-gray-500 mb-1">历史邀请码</label>
+                                <select v-model="selectedInviteHistoryCode" @change="applyInviteFromHistory" class="w-full border rounded px-3 py-2 text-sm dark:bg-gray-900 dark:border-gray-600 dark:text-gray-100">
+                                    <option value="">请选择历史邀请码</option>
+                                    <option v-for="code in inviteCodeHistory" :key="code" :value="code">{{ code }}</option>
+                                </select>
+                                <div class="mt-2 space-y-1">
+                                    <div v-for="code in inviteCodeHistory.slice(0, 5)" :key="`hist-${code}`" class="flex items-center justify-between text-xs bg-white/80 dark:bg-gray-900/60 border border-gray-200 dark:border-gray-700 rounded px-2 py-1">
+                                        <span class="font-mono">{{ code }}</span>
+                                        <div class="flex items-center gap-2">
+                                            <button @click="useInviteCode(code)" class="text-blue-600 hover:text-blue-700">使用</button>
+                                            <button @click="deleteInviteCodeHistory(code)" class="text-red-600 hover:text-red-700">删除</button>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
                         </div>
-                        <div class="mb-1">会员到期时间：{{ membershipExpiryText.replace('到期时间：', '') }}</div>
-                        <div>当前页面仅支持同版本续费。如需降级，请等待当前会员到期后再选择其他版本。</div>
+                        <div v-else class="rounded border border-gray-200 dark:border-gray-700 p-4 text-sm text-gray-500 text-center">
+                            当前未开启邀请码活动
+                        </div>
                     </div>
 
-                    <!-- Version Tabs -->
-                    <div class="flex gap-2 mb-4 overflow-x-auto pb-2" v-else-if="purchaseableVersions.length > 0">
-                        <button v-for="ver in purchaseableVersions" :key="ver" 
-                            @click="selectedVersion = ver"
-                            class="flex-1 min-w-[80px] py-2 px-1 rounded border-2 text-center transition-all"
-                            :class="selectedVersion === ver ? 'border-red-500 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400' : 'border-gray-200 dark:border-gray-700 text-gray-500'">
-                            <div class="text-xs font-bold">{{ ver === 'basic' ? '初级版' : (ver === 'advanced' ? '高级版' : '旗舰版') }}</div>
-                            <div class="text-[10px] scale-90">{{ features[ver]?.desc || '' }}</div>
-                        </button>
+                    <div v-else-if="subscriptionTab === 'history'">
+                        <div class="flex items-center justify-between mb-2">
+                            <div class="text-sm font-bold text-gray-800 dark:text-gray-100">订单历史</div>
+                            <button @click="fetchPaymentOrders(true)" class="text-xs text-blue-500 hover:text-blue-700">刷新</button>
+                        </div>
+                        <div class="max-h-72 overflow-y-auto border rounded">
+                            <table class="w-full text-xs">
+                                <thead class="bg-gray-50 dark:bg-gray-900/60">
+                                    <tr class="text-gray-500">
+                                        <th class="text-left px-2 py-1">订单口令</th>
+                                        <th class="text-left px-2 py-1">金额</th>
+                                        <th class="text-left px-2 py-1">状态</th>
+                                        <th class="text-left px-2 py-1">时间</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="o in orderHistory" :key="o.id" class="border-t border-gray-100 dark:border-gray-700">
+                                        <td class="px-2 py-1 font-mono">{{ o.order_code }}</td>
+                                        <td class="px-2 py-1">¥{{ Number(o.amount || 0).toFixed(2) }}</td>
+                                        <td class="px-2 py-1">{{ userOrderStatusLabel(o.status) }}</td>
+                                        <td class="px-2 py-1 text-gray-500">{{ formatShanghaiDateTime(o.created_at) }}</td>
+                                    </tr>
+                                    <tr v-if="orderHistory.length === 0">
+                                        <td colspan="4" class="px-2 py-4 text-center text-gray-400">暂无订单记录</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
                     </div>
-                    <div v-else class="mb-4 text-xs text-red-500">当前账号暂无可购买版本，请稍后重试。</div>
 
-                    <!-- Features List -->
-                    <div class="bg-gray-50 dark:bg-gray-900 rounded p-3 mb-4 text-xs space-y-2 border border-gray-100 dark:border-gray-700">
-                        <div class="flex justify-between"><span>🤖 AI分析:</span> <span class="font-bold">{{ features[selectedVersion]?.ai }}</span></div>
-                        <div class="flex justify-between"><span>⚡ 盘中突击:</span> <span class="font-bold">{{ features[selectedVersion]?.raid }}</span></div>
-                        <div class="flex justify-between"><span>📊 盘后复盘:</span> <span class="font-bold">{{ features[selectedVersion]?.review }}</span></div>
-                    </div>
+                    <div v-else>
+                        <div v-if="canShowTenMinuteTrialOption || showTenMinuteTrialUsedHint" class="mb-4 rounded border border-orange-200 bg-orange-50 dark:bg-orange-900/20 dark:border-orange-800 p-3">
+                            <div class="text-xs text-orange-700 dark:text-orange-300 mb-2">
+                                注册账号专属10分钟体验，仅可申请一次。
+                            </div>
+                            <button v-if="canShowTenMinuteTrialOption" @click="applyTrialExperience" :disabled="loginLoading" class="w-full py-2 rounded bg-orange-500 text-white text-sm font-bold disabled:opacity-50">
+                                {{ loginLoading ? '处理中...' : '立即申请10分钟体验' }}
+                            </button>
+                            <div v-else class="text-[11px] text-orange-700 dark:text-orange-300">10分钟体验资格已使用，可直接购买3天体验或正式会员。</div>
+                        </div>
 
-                    <!-- Duration Selection -->
-                    <div class="mb-4" v-if="pricingOptions[selectedVersion]">
-                        <label class="block text-xs text-gray-500 mb-2">选择时长</label>
-                        <div class="grid grid-cols-3 gap-2">
-                            <button v-for="(opt, key) in pricingOptions[selectedVersion]" :key="key"
-                                @click="selectedDuration = key"
-                                class="p-2 rounded border text-center relative"
-                                :class="selectedDuration === key ? 'border-red-500 bg-red-50 dark:bg-red-900/10' : 'border-gray-200 dark:border-gray-700'">
-                                <div class="text-xs">{{ opt.label }}</div>
-                                <div class="text-red-600 font-bold">¥{{ opt.price }}</div>
-                                <div v-if="opt.bonus_days" class="text-[10px] text-emerald-600">续费加赠{{ opt.bonus_days }}天</div>
+                        <div v-if="inviteInfo.enabled !== false" class="mb-4 rounded border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 p-3 text-xs">
+                            <div class="flex items-center justify-between">
+                                <div>当前已填写邀请码：<span class="font-mono font-bold">{{ inviteInputCode || '未填写' }}</span></div>
+                                <button @click="subscriptionTab = 'invite'" class="text-blue-600 font-bold">去修改</button>
+                            </div>
+                        </div>
+
+                        <div v-if="isRenewOnlyMode" class="mb-4 rounded border border-emerald-200 bg-emerald-50 dark:bg-emerald-900/20 dark:border-emerald-800 p-3 text-xs text-emerald-700 dark:text-emerald-300">
+                            <div class="font-bold mb-1">
+                                当前会员版本：{{ selectedVersion === 'basic' ? '初级版' : (selectedVersion === 'advanced' ? '高级版' : '旗舰版') }}
+                            </div>
+                            <div class="mb-1">会员到期时间：{{ membershipExpiryText.replace('到期时间：', '') }}</div>
+                            <div>当前页面仅支持同版本续费。如需降级，请等待当前会员到期后再选择其他版本。</div>
+                        </div>
+
+                        <div class="flex gap-2 mb-4 overflow-x-auto pb-2" v-else-if="purchaseableVersions.length > 0">
+                            <button v-for="ver in purchaseableVersions" :key="ver" 
+                                @click="selectedVersion = ver"
+                                class="flex-1 min-w-[80px] py-2 px-1 rounded border-2 text-center transition-all"
+                                :class="selectedVersion === ver ? 'border-red-500 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400' : 'border-gray-200 dark:border-gray-700 text-gray-500'">
+                                <div class="text-xs font-bold">{{ ver === 'basic' ? '初级版' : (ver === 'advanced' ? '高级版' : '旗舰版') }}</div>
+                                <div class="text-[10px] scale-90">{{ features[ver]?.desc || '' }}</div>
                             </button>
                         </div>
-                    </div>
-                    <div class="mb-4 text-[11px] text-emerald-600 dark:text-emerald-400">
-                        续费加赠：1个月送3天，3个月送10天，6个月送20天，12个月送30天。
-                    </div>
+                        <div v-else class="mb-4 text-xs text-red-500">当前账号暂无可购买版本，请稍后重试。</div>
 
-                    <button @click="createOrder" :disabled="purchaseLoading" class="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded font-bold shadow-lg disabled:opacity-50">
-                        {{ purchaseLoading ? '处理中...' : ((isRenewOnlyMode ? '立即续费 ¥' : '立即购买 ¥') + (pricingOptions[selectedVersion]?.[selectedDuration]?.price || '...')) }}
-                    </button>
+                        <div class="bg-gray-50 dark:bg-gray-900 rounded p-3 mb-4 text-xs space-y-2 border border-gray-100 dark:border-gray-700">
+                            <div class="flex justify-between"><span>🤖 AI分析:</span> <span class="font-bold">{{ features[selectedVersion]?.ai }}</span></div>
+                            <div class="flex justify-between"><span>⚡ 盘中突击:</span> <span class="font-bold">{{ features[selectedVersion]?.raid }}</span></div>
+                            <div class="flex justify-between"><span>📊 盘后复盘:</span> <span class="font-bold">{{ features[selectedVersion]?.review }}</span></div>
+                        </div>
+
+                        <div class="mb-4" v-if="pricingOptions[selectedVersion]">
+                            <label class="block text-xs text-gray-500 mb-2">选择时长</label>
+                            <div class="grid grid-cols-3 gap-2">
+                                <button v-for="(opt, key) in pricingOptions[selectedVersion]" :key="key"
+                                    @click="selectedDuration = key"
+                                    class="p-2 rounded border text-center relative"
+                                    :class="selectedDuration === key ? 'border-red-500 bg-red-50 dark:bg-red-900/10' : 'border-gray-200 dark:border-gray-700'">
+                                    <div class="text-xs">{{ opt.label }}</div>
+                                    <div class="text-red-600 font-bold">¥{{ opt.price }}</div>
+                                    <div v-if="opt.bonus_days" class="text-[10px] text-emerald-600">续费加赠{{ opt.bonus_days }}天</div>
+                                </button>
+                            </div>
+                        </div>
+                        <div class="mb-4 text-[11px] text-emerald-600 dark:text-emerald-400">
+                            续费加赠：1个月送3天，3个月送10天，6个月送20天，12个月送30天。
+                        </div>
+
+                        <button @click="createOrder" :disabled="purchaseLoading" class="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded font-bold shadow-lg disabled:opacity-50">
+                            {{ purchaseLoading ? '处理中...' : ((isRenewOnlyMode ? '立即续费 ¥' : '立即购买 ¥') + (pricingOptions[selectedVersion]?.[selectedDuration]?.price || '...')) }}
+                        </button>
+                    </div>
                 </div>
 
                 <!-- Step 2: Payment -->
@@ -1394,32 +1469,6 @@
                     <button @click="showSubscriptionModal = false" class="text-blue-500 text-sm">先逛逛列表 (部分功能受限)</button>
                 </div>
 
-                <div v-if="orderHistory.length > 0" class="border-t border-gray-100 dark:border-gray-700 p-4 overflow-y-auto">
-                    <div class="flex items-center justify-between mb-2">
-                        <div class="text-sm font-bold text-gray-800 dark:text-gray-100">订单历史</div>
-                        <button @click="fetchPaymentOrders(true)" class="text-xs text-blue-500 hover:text-blue-700">刷新</button>
-                    </div>
-                    <div class="max-h-40 overflow-y-auto border rounded">
-                        <table class="w-full text-xs">
-                            <thead class="bg-gray-50 dark:bg-gray-900/60">
-                                <tr class="text-gray-500">
-                                    <th class="text-left px-2 py-1">订单口令</th>
-                                    <th class="text-left px-2 py-1">金额</th>
-                                    <th class="text-left px-2 py-1">状态</th>
-                                    <th class="text-left px-2 py-1">时间</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                <tr v-for="o in orderHistory" :key="o.id" class="border-t border-gray-100 dark:border-gray-700">
-                                    <td class="px-2 py-1 font-mono">{{ o.order_code }}</td>
-                                    <td class="px-2 py-1">¥{{ Number(o.amount || 0).toFixed(2) }}</td>
-                                    <td class="px-2 py-1">{{ userOrderStatusLabel(o.status) }}</td>
-                                    <td class="px-2 py-1 text-gray-500">{{ formatShanghaiDateTime(o.created_at) }}</td>
-                                </tr>
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
             </div>
         </div>
 
@@ -1634,7 +1683,7 @@
                     isRegisteredAccount: false,
                     accountCanApplyTrial: false,
                     fingerprintId: '',
-                    frontendVersion: 'v2.5.5',
+                    frontendVersion: 'v2.5.6',
                     serverVersion: '获取中...',
                     loginLoading: false,
                     loadingChart: false,
@@ -1658,6 +1707,7 @@
                     localFavoriteQuotes: [],
                     showSubscriptionModal: false,
                     purchaseStep: 1, // 1: Pricing, 2: Payment, 3: Completed/Waiting
+                    subscriptionTab: 'plans',
                     pricingOptions: {},
                     selectedVersion: 'basic',
                     selectedDuration: '1m',
@@ -1668,6 +1718,9 @@
                     purchaseLoading: false,
                     inviteLoading: false,
                     inviteInputCode: '',
+                    inviteCodeHistory: [],
+                    inviteCodeDeleted: [],
+                    selectedInviteHistoryCode: '',
                     inviteInfo: {
                         enabled: true,
                         invite_code: '',
@@ -1984,6 +2037,101 @@
                     if (key) localStorage.setItem(key, '1');
                     this.showOnboardingModal = false;
                 },
+                normalizeInviteCode(code) {
+                    return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20);
+                },
+                getInviteStorageKey(type) {
+                    const t = String(type || 'history').trim() || 'history';
+                    const identity = this.isRegisteredAccount
+                        ? (this.displayUsername || localStorage.getItem('sniper_username') || this.deviceId || 'guest')
+                        : (this.deviceId || localStorage.getItem('sniper_device_id') || localStorage.getItem('sniper_guest_token') || 'guest');
+                    return `sniper_invite_${t}_${String(identity).trim()}`;
+                },
+                loadInviteCodeStore() {
+                    const parseList = (raw) => {
+                        try {
+                            const arr = JSON.parse(raw || '[]');
+                            if (!Array.isArray(arr)) return [];
+                            return arr
+                                .map((x) => this.normalizeInviteCode(x))
+                                .filter((x) => x && /^[A-Z0-9]{6,20}$/.test(x));
+                        } catch (e) {
+                            return [];
+                        }
+                    };
+                    const history = parseList(localStorage.getItem(this.getInviteStorageKey('history')));
+                    const deleted = parseList(localStorage.getItem(this.getInviteStorageKey('deleted')));
+                    const deletedSet = new Set(deleted);
+                    this.inviteCodeDeleted = Array.from(deletedSet);
+                    this.inviteCodeHistory = history.filter((x) => !deletedSet.has(x));
+                    if (this.selectedInviteHistoryCode && !this.inviteCodeHistory.includes(this.selectedInviteHistoryCode)) {
+                        this.selectedInviteHistoryCode = '';
+                    }
+                },
+                saveInviteCodeStore() {
+                    const dedupe = (arr) => Array.from(new Set((arr || []).map((x) => this.normalizeInviteCode(x)).filter((x) => x)));
+                    localStorage.setItem(this.getInviteStorageKey('history'), JSON.stringify(dedupe(this.inviteCodeHistory)));
+                    localStorage.setItem(this.getInviteStorageKey('deleted'), JSON.stringify(dedupe(this.inviteCodeDeleted)));
+                },
+                isInviteCodeDeleted(code) {
+                    const c = this.normalizeInviteCode(code);
+                    return !!c && (this.inviteCodeDeleted || []).includes(c);
+                },
+                rememberInviteCode(code) {
+                    const c = this.normalizeInviteCode(code);
+                    if (!c || this.isInviteCodeDeleted(c)) return;
+                    if (this.normalizeInviteCode(this.inviteInfo?.invite_code) === c) return;
+                    this.inviteCodeHistory = [c, ...(this.inviteCodeHistory || []).filter((x) => x !== c)].slice(0, 20);
+                    this.saveInviteCodeStore();
+                },
+                deleteInviteCodeHistory(code) {
+                    const c = this.normalizeInviteCode(code);
+                    if (!c) return;
+                    this.inviteCodeHistory = (this.inviteCodeHistory || []).filter((x) => x !== c);
+                    if (!(this.inviteCodeDeleted || []).includes(c)) {
+                        this.inviteCodeDeleted.push(c);
+                    }
+                    if (this.normalizeInviteCode(this.inviteInputCode) === c) {
+                        this.inviteInputCode = '';
+                    }
+                    if (this.selectedInviteHistoryCode === c) {
+                        this.selectedInviteHistoryCode = '';
+                    }
+                    const pending = this.normalizeInviteCode(localStorage.getItem('sniper_pending_invite_code'));
+                    if (pending && pending === c) {
+                        localStorage.removeItem('sniper_pending_invite_code');
+                    }
+                    this.saveInviteCodeStore();
+                },
+                useInviteCode(code) {
+                    const c = this.normalizeInviteCode(code);
+                    if (!c || this.isInviteCodeDeleted(c)) return;
+                    this.inviteInputCode = c;
+                    this.selectedInviteHistoryCode = c;
+                },
+                applyInviteFromHistory() {
+                    if (!this.selectedInviteHistoryCode) return;
+                    this.useInviteCode(this.selectedInviteHistoryCode);
+                },
+                onInviteInputChanged() {
+                    this.inviteInputCode = this.normalizeInviteCode(this.inviteInputCode);
+                },
+                applyPendingInviteCode() {
+                    const pending = this.normalizeInviteCode(localStorage.getItem('sniper_pending_invite_code'));
+                    if (!pending) return;
+                    if (this.isInviteCodeDeleted(pending)) {
+                        localStorage.removeItem('sniper_pending_invite_code');
+                        return;
+                    }
+                    const myInvite = this.normalizeInviteCode(this.inviteInfo?.invite_code);
+                    if (myInvite && pending === myInvite) {
+                        localStorage.removeItem('sniper_pending_invite_code');
+                        return;
+                    }
+                    if (!this.normalizeInviteCode(this.inviteInputCode)) {
+                        this.inviteInputCode = pending;
+                    }
+                },
                 captureInviteCodeFromUrl() {
                     try {
                         const q = new URLSearchParams(window.location.search || '');
@@ -2040,8 +2188,10 @@
                             share_text: '',
                             reward_days: 30
                         };
+                        this.loadInviteCodeStore();
                         return;
                     }
+                    this.loadInviteCodeStore();
                     this.inviteLoading = true;
                     try {
                         const res = await fetch(`${API_BASE_URL}/api/auth/invite_info`);
@@ -2061,13 +2211,7 @@
                             const fallbackLink = inviteLink || `${window.location.origin}${window.location.pathname}?invite=${inviteCode}`;
                             this.inviteInfo.share_text = `我在用涨停狙击手，注册链接：${fallbackLink}，邀请码：${inviteCode}。注册后在充值页填写邀请码，可获得赠送权益。`;
                         }
-
-                        if (!this.inviteInputCode) {
-                            const pendingInvite = (localStorage.getItem('sniper_pending_invite_code') || '').trim().toUpperCase();
-                            if (pendingInvite && pendingInvite !== inviteCode) {
-                                this.inviteInputCode = pendingInvite;
-                            }
-                        }
+                        this.applyPendingInviteCode();
                     } catch (e) {
                         this.inviteInfo = {
                             enabled: true,
@@ -2407,6 +2551,9 @@
                     this.deviceId = '';
                     this.accountCanApplyTrial = false;
                     this.inviteInputCode = '';
+                    this.inviteCodeHistory = [];
+                    this.inviteCodeDeleted = [];
+                    this.selectedInviteHistoryCode = '';
                     this.inviteInfo = { enabled: true, invite_code: '', invite_link: '', share_text: '', reward_days: 30 };
                     this.showOnboardingModal = false;
                     this.showMsg('已退出登录', 'info');
@@ -2552,6 +2699,7 @@
                         if (!res.ok) throw new Error(data.detail || '取消订单失败');
                         this.showMsg('订单已取消', 'success');
                         this.purchaseStep = 1;
+                        this.subscriptionTab = 'orders';
                         this.currentOrder = null;
                         await this.fetchPaymentOrders(true);
                     } catch (e) {
@@ -2570,21 +2718,21 @@
 
                     this.showSubscriptionModal = true;
                     this.purchaseStep = 1;
+                    this.subscriptionTab = 'plans';
+                    this.inviteInputCode = '';
+                    this.selectedInviteHistoryCode = '';
                     this.currentOrder = null;
                     this.currentOpenOrder = null;
                     this.orderHistory = [];
                     const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
-                    if (!this.inviteInputCode) {
-                        const pendingInvite = (localStorage.getItem('sniper_pending_invite_code') || '').trim().toUpperCase();
-                        if (pendingInvite) this.inviteInputCode = pendingInvite;
-                    }
                     
                     try {
                         await this.fetchInviteInfo();
                         await this.fetchPaymentOrders(true);
                         if (this.currentOpenOrder) {
                             this.currentOrder = { ...this.currentOpenOrder };
-                            this.purchaseStep = this.currentOpenOrder.status === 'waiting_verification' ? 3 : 2;
+                            this.purchaseStep = 1;
+                            this.subscriptionTab = 'orders';
                         }
                         const res = await fetch(`${API_BASE_URL}/api/payment/pricing`, {
                             headers: deviceId ? { 'X-Device-ID': deviceId } : {}
@@ -2647,6 +2795,7 @@
 
                     try {
                         const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
+                        const appliedInviteCode = this.normalizeInviteCode(this.inviteInputCode);
                         const res = await fetch(`${API_BASE_URL}/api/payment/create_order`, {
                             method: 'POST',
                             headers: {
@@ -2657,7 +2806,7 @@
                                 target_version: this.selectedVersion,
                                 duration_months: dm,
                                 x_device_id: deviceId,
-                                invite_code: (this.inviteInputCode || '').trim().toUpperCase()
+                                invite_code: appliedInviteCode
                             })
                         });
                         const data = await res.json();
@@ -2665,7 +2814,8 @@
                             this.currentOrder = data;
                             this.currentOpenOrder = data;
                             this.purchaseStep = 2;
-                            if ((this.inviteInputCode || '').trim()) {
+                            if (appliedInviteCode) {
+                                this.rememberInviteCode(appliedInviteCode);
                                 localStorage.removeItem('sniper_pending_invite_code');
                             }
                             if (data.invite_bonus_message) {
@@ -2681,7 +2831,8 @@
                                 await this.fetchPaymentOrders(true);
                                 if (this.currentOpenOrder) {
                                     this.currentOrder = { ...this.currentOpenOrder };
-                                    this.purchaseStep = this.currentOpenOrder.status === 'waiting_verification' ? 3 : 2;
+                                    this.purchaseStep = 1;
+                                    this.subscriptionTab = 'orders';
                                 }
                             }
                         }
@@ -4271,7 +4422,7 @@
                 fetch(API_BASE_URL + '/api/status')
                     .then(res => res.json())
                     .then(data => {
-                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.5.5';
+                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.5.6';
                         if (data.status === 'success') {
                             const isMarketOpenDay = data.is_market_open_day;
                             
@@ -4430,6 +4581,7 @@
     </style>
 </body>
 </html>
+
 
 
 

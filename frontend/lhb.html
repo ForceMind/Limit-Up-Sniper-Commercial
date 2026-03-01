@@ -63,6 +63,10 @@
             </div>
         </header>
 
+        <div v-if="lhbStatus.message && selectedDate === lhbStatus.today && !lhbStatus.today_has_data" class="mx-3 mt-2 rounded border border-amber-200 bg-amber-50 text-amber-700 text-xs px-3 py-2">
+            {{ lhbStatus.message }}
+        </div>
+
         <!-- Main Content -->
         <div class="flex-1 flex flex-col md:flex-row overflow-hidden relative">
             <!-- Floating Log Panel -->
@@ -241,7 +245,14 @@
                     authErrorHandler: null,
                     isDark: false,
                     isMobile: window.innerWidth < 768,
-                    sortOrder: 'desc' // 'desc' or 'asc'
+                    sortOrder: 'desc', // 'desc' or 'asc'
+                    lhbStatus: {
+                        today: '',
+                        sync_time: '18:00',
+                        today_has_data: false,
+                        before_sync_time: false,
+                        message: ''
+                    }
                 }
             },
             computed: {
@@ -284,8 +295,23 @@
                 toggleSort() {
                     this.sortOrder = this.sortOrder === 'desc' ? 'asc' : 'desc';
                 },
+                async fetchStatus() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/lhb/status');
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) return;
+                        this.lhbStatus = {
+                            today: String(data.today || ''),
+                            sync_time: String(data.sync_time || '18:00'),
+                            today_has_data: !!data.today_has_data,
+                            before_sync_time: !!data.before_sync_time,
+                            message: String(data.message || '')
+                        };
+                    } catch (e) {}
+                },
                 async fetchDates() {
                     try {
+                        await this.fetchStatus();
                         const res = await fetch(API_BASE_URL + '/api/lhb/dates');
                         if (!res.ok) {
                             const err = await res.json().catch(() => ({}));
@@ -293,7 +319,9 @@
                         }
                         this.availableDates = await res.json();
                         if (this.availableDates.length > 0) {
-                            this.selectedDate = this.availableDates[0];
+                            if (!this.availableDates.includes(this.selectedDate)) {
+                                this.selectedDate = this.availableDates[0];
+                            }
                             this.fetchData();
                         }
                     } catch (e) {
@@ -312,7 +340,8 @@
                         ]);
 
                         if (!lhbRes.ok) {
-                            throw new Error(`Server Error: ${lhbRes.status} ${lhbRes.statusText}`);
+                            const payload = await lhbRes.json().catch(() => ({}));
+                            throw new Error(payload.detail || `Server Error: ${lhbRes.status} ${lhbRes.statusText}`);
                         }
                         this.lhbData = await lhbRes.json();
 
@@ -326,6 +355,9 @@
                     } catch (e) {
                         console.error(e);
                         this.lhbData = [];
+                        if (String(e.message || '').trim()) {
+                            this.analysisResult = `提示：${String(e.message || '').trim()}`;
+                        }
                     } finally {
                         this.loading = false;
                     }
