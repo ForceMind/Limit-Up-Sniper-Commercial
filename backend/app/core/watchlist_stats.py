@@ -234,3 +234,7 @@ def list_favorite_users(code: str) -> List[Dict[str, str]]:
 
     items.sort(key=lambda x: x.get("joined_at", ""), reverse=True)
     return items
+
+
+def clear_all_stats():
+    _save_stats(_empty_stats())

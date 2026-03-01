@@ -59,7 +59,7 @@ KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
-SERVER_VERSION = "v2.5.6"
+SERVER_VERSION = "v2.5.8"
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
@@ -2341,5 +2341,6 @@ async def get_ai_markers(code: str, type: str = None, user: models.User = Depend
 # Must be last to not override API routes
 if FRONTEND_DIR.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
+
 
 

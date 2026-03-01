@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>涨停狙击手 (Limit-Up Sniper) v2.5.6</title>
+    <title>涨停狙击手 (Limit-Up Sniper) v2.5.8</title>
     <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <link rel="manifest" href="static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -1683,7 +1683,7 @@
                     isRegisteredAccount: false,
                     accountCanApplyTrial: false,
                     fingerprintId: '',
-                    frontendVersion: 'v2.5.6',
+                    frontendVersion: 'v2.5.8',
                     serverVersion: '获取中...',
                     loginLoading: false,
                     loadingChart: false,
@@ -4422,7 +4422,7 @@
                 fetch(API_BASE_URL + '/api/status')
                     .then(res => res.json())
                     .then(data => {
-                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.5.6';
+                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.5.8';
                         if (data.status === 'success') {
                             const isMarketOpenDay = data.is_market_open_day;
                             
@@ -4581,6 +4581,7 @@
     </style>
 </body>
 </html>
+
 
 
 

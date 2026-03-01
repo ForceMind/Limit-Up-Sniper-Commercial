@@ -37,6 +37,7 @@ from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
 from collections import deque
+import statistics
 
 router = APIRouter()
 
@@ -1163,6 +1164,145 @@ async def get_watchlist_stat_users(
     return {"status": "success", "code": code_norm, "users": users}
 
 
+@router.post("/watchlist_stats/clear")
+async def clear_watchlist_stats(authorized: bool = Depends(verify_admin)):
+    watchlist_stats.clear_all_stats()
+    add_runtime_log("[自选统计] 管理员已清空自选统计数据")
+    log_user_operation(
+        "clear_watchlist_stats",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/watchlist_stats/clear",
+        detail="watchlist_stats_cleared",
+    )
+    return {"status": "success", "storage_file": "backend/data/watchlist_stats.json"}
+
+
+@router.get("/watchlist_stats/volatility")
+async def get_watchlist_stat_volatility(
+    code: str,
+    days: int = 60,
+    authorized: bool = Depends(verify_admin),
+):
+    raw_code = str(code or "").strip()
+    code_norm = _normalize_stock_code_for_provider(raw_code)
+    if not code_norm:
+        raise HTTPException(status_code=400, detail="Missing code")
+
+    safe_days = max(20, min(int(days or 60), 365))
+    rows: List[Dict[str, Any]] = []
+
+    biying_rows = data_provider.fetch_day_kline_history(code_norm, days=safe_days)
+    if isinstance(biying_rows, list) and biying_rows:
+        for row in biying_rows:
+            if not isinstance(row, dict):
+                continue
+            dt = str(row.get("date", "")).strip()
+            if not dt:
+                continue
+            rows.append(
+                {
+                    "date": dt,
+                    "open": _safe_float(row.get("open"), 0),
+                    "high": _safe_float(row.get("high"), 0),
+                    "low": _safe_float(row.get("low"), 0),
+                    "close": _safe_float(row.get("close"), 0),
+                    "volume": _safe_float(row.get("volume"), 0),
+                }
+            )
+
+    if not rows:
+        fallback_rows = data_provider.fetch_history_data(code_norm, days=safe_days)
+        if isinstance(fallback_rows, list):
+            for row in fallback_rows:
+                if not isinstance(row, dict):
+                    continue
+                dt = str(row.get("date") or row.get("day") or "").strip()
+                if not dt:
+                    continue
+                rows.append(
+                    {
+                        "date": dt,
+                        "open": _safe_float(row.get("open"), 0),
+                        "high": _safe_float(row.get("high"), 0),
+                        "low": _safe_float(row.get("low"), 0),
+                        "close": _safe_float(row.get("close"), 0),
+                        "volume": _safe_float(row.get("volume"), 0),
+                    }
+                )
+
+    if not rows:
+        return {
+            "status": "success",
+            "code": code_norm,
+            "summary": {},
+            "rows": [],
+            "message": "暂无可用K线数据",
+        }
+
+    rows.sort(key=lambda x: str(x.get("date", "")))
+
+    enriched: List[Dict[str, Any]] = []
+    prev_close = 0.0
+    for row in rows:
+        close_price = _safe_float(row.get("close"), 0)
+        high_price = _safe_float(row.get("high"), close_price)
+        low_price = _safe_float(row.get("low"), close_price)
+        if prev_close > 0:
+            pct = ((close_price - prev_close) / prev_close) * 100
+        else:
+            pct = 0.0
+        amp = ((high_price - low_price) / low_price) * 100 if low_price > 0 else 0.0
+        out = dict(row)
+        out["pct_change"] = round(pct, 4)
+        out["amplitude"] = round(amp, 4)
+        enriched.append(out)
+        if close_price > 0:
+            prev_close = close_price
+
+    closes = [_safe_float(x.get("close"), 0) for x in enriched]
+    highs = [_safe_float(x.get("high"), 0) for x in enriched]
+    lows = [_safe_float(x.get("low"), 0) for x in enriched]
+
+    def _change_pct(period: int) -> float:
+        if len(closes) <= period:
+            return 0.0
+        base = closes[-1 - period]
+        if base <= 0:
+            return 0.0
+        return round(((closes[-1] - base) / base) * 100, 4)
+
+    last20 = enriched[-20:] if len(enriched) >= 20 else enriched
+    daily_pct = [float(x.get("pct_change", 0.0) or 0.0) for x in last20 if x.get("close")]
+    amp20 = [float(x.get("amplitude", 0.0) or 0.0) for x in last20 if x.get("close")]
+    high_20d = max([_safe_float(x.get("high"), 0) for x in last20], default=0.0)
+    low_20d = min([_safe_float(x.get("low"), 0) for x in last20 if _safe_float(x.get("low"), 0) > 0], default=0.0)
+    range_20d_pct = round(((high_20d - low_20d) / low_20d) * 100, 4) if low_20d > 0 else 0.0
+    volatility_20d = round(statistics.pstdev(daily_pct), 4) if len(daily_pct) >= 2 else 0.0
+    avg_amp_20d = round(sum(amp20) / len(amp20), 4) if amp20 else 0.0
+
+    summary = {
+        "latest_close": round(closes[-1], 4) if closes else 0.0,
+        "change_1d_pct": _change_pct(1),
+        "change_5d_pct": _change_pct(5),
+        "change_20d_pct": _change_pct(20),
+        "high_20d": round(high_20d, 4),
+        "low_20d": round(low_20d, 4),
+        "range_20d_pct": range_20d_pct,
+        "avg_amplitude_20d_pct": avg_amp_20d,
+        "volatility_20d_pct": volatility_20d,
+        "sample_days": len(enriched),
+    }
+
+    return {
+        "status": "success",
+        "code": code_norm,
+        "summary": summary,
+        "rows": enriched[-max(1, min(120, safe_days)):],
+    }
+
+
 @router.get("/overview/today")
 async def get_today_overview(
     db: Session = Depends(get_db),
@@ -2001,6 +2141,38 @@ def _as_shanghai_datetime(value: Any, assume_utc_when_naive: bool = True) -> Opt
     return dt.astimezone(SHANGHAI_TZ)
 
 
+def _format_shanghai_datetime(value: Any, assume_utc_when_naive: bool = True) -> str:
+    dt = _as_shanghai_datetime(value, assume_utc_when_naive=assume_utc_when_naive)
+    if not dt:
+        return ""
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _normalize_stock_code_for_provider(code: str) -> str:
+    raw = str(code or "").strip().lower()
+    if not raw:
+        return ""
+    if raw.startswith(("sh", "sz", "bj")):
+        return raw
+    digits = "".join(filter(str.isdigit, raw))
+    if len(digits) != 6:
+        return raw
+    if digits.startswith("6"):
+        return f"sh{digits}"
+    if digits.startswith(("0", "3")):
+        return f"sz{digits}"
+    if digits.startswith(("8", "4", "9")):
+        return f"bj{digits}"
+    return raw
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value or 0)
+    except Exception:
+        return float(default)
+
+
 def _today_range_utc_naive():
     now_sh = datetime.now(SHANGHAI_TZ)
     start_sh = now_sh.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -2513,15 +2685,25 @@ async def get_news_admin_list(
         if source_lc and source_lc not in source_text.lower():
             continue
 
+        fetched_at = _format_shanghai_datetime(item.get("timestamp"), assume_utc_when_naive=False)
+        if not fetched_at:
+            fetched_at = _format_shanghai_datetime(item.get("time_str"), assume_utc_when_naive=False)
+        ai_analyzed_at_sh = _format_shanghai_datetime(
+            ai_info.get("analyzed_at") if ai_info else "",
+            assume_utc_when_naive=True,
+        )
+
         row = {
             "id": nid,
             "timestamp": int(item.get("timestamp", 0) or 0),
             "time_str": str(item.get("time_str", "")).strip(),
+            "fetched_at": fetched_at,
             "source": source_text,
             "text": str(item.get("text", "")).strip(),
             "ai_analyzed": analyzed,
             "ai_record_key": ai_info.get("record_key", "") if ai_info else "",
             "ai_analyzed_at": ai_info.get("analyzed_at", "") if ai_info else "",
+            "ai_analyzed_at_sh": ai_analyzed_at_sh,
             "ai_mode": ai_info.get("mode", "") if ai_info else "",
             "ai_summary": ai_info.get("summary", "") if ai_info else "",
         }
