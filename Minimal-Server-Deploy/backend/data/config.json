@@ -1,1 +1,56 @@
-﻿{}
+﻿{
+  "auto_analysis_enabled": false,
+  "use_smart_schedule": true,
+  "fixed_interval_minutes": 60,
+  "schedule_plan": [
+    {
+      "start": "09:30",
+      "end": "15:00",
+      "interval": 15,
+      "mode": "intraday",
+      "desc": "盘中交易"
+    },
+    {
+      "start": "15:00",
+      "end": "15:15",
+      "interval": 15,
+      "mode": "none",
+      "desc": "收盘等待"
+    },
+    {
+      "start": "15:15",
+      "end": "18:00",
+      "interval": 60,
+      "mode": "after_hours",
+      "desc": "盘后复盘"
+    },
+    {
+      "start": "18:00",
+      "end": "23:00",
+      "interval": 180,
+      "mode": "after_hours",
+      "desc": "晚间复盘"
+    },
+    {
+      "start": "23:00",
+      "end": "06:00",
+      "interval": 360,
+      "mode": "after_hours",
+      "desc": "夜间休眠"
+    },
+    {
+      "start": "06:00",
+      "end": "08:30",
+      "interval": 60,
+      "mode": "after_hours",
+      "desc": "早间复盘"
+    },
+    {
+      "start": "08:30",
+      "end": "09:30",
+      "interval": 15,
+      "mode": "after_hours",
+      "desc": "盘前准备"
+    }
+  ]
+}
