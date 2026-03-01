@@ -464,27 +464,17 @@ EOF
 }
 
 show_result() {
-    ADMIN_TOKEN_FILE="$APP_DIR/backend/data/admin_token.txt"
-    ADMIN_TOKEN="请稍后手动查看: cat $ADMIN_TOKEN_FILE"
-
-    for _ in {1..15}; do
-        if [ -f "$ADMIN_TOKEN_FILE" ]; then
-            sleep 1
-            TOKEN_CONTENT="$(cat "$ADMIN_TOKEN_FILE" || true)"
-            if [ -n "$TOKEN_CONTENT" ]; then
-                ADMIN_TOKEN="$TOKEN_CONTENT"
-                break
-            fi
-        fi
-        sleep 2
-    done
+    ADMIN_HINT="已保留服务器现有管理员账号配置（用户名默认为 admin）"
+    if [ ! -f "$APP_DIR/backend/data/admin_credentials.json" ]; then
+        ADMIN_HINT="首次登录默认 admin / admin123456（请登录后立即修改）"
+    fi
 
     log_info "========================================="
     log_info "部署完成"
     log_info "========================================="
     echo "前台地址: http://${USER_IP}/"
     echo "后台地址: http://${USER_IP}/admin/index.html"
-    echo "管理员 Token: $ADMIN_TOKEN"
+    echo "管理员登录: $ADMIN_HINT"
     echo "日志查看: journalctl -u limit-up-sniper -f"
 }
 

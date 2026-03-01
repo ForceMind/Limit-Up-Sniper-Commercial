@@ -48,6 +48,8 @@ class LHBManager:
         self._kline_fail_trigger_count = 3
         self._kline_pause_seconds = 1800
         self._kline_pause_seconds_hard = 3600
+        self._kline_pause_seconds_hard_max = 86400
+        self._kline_pause_seconds_hard_next = self._kline_pause_seconds_hard
         self._akshare_request_lock = threading.Lock()
         self._akshare_last_request_ts = 0.0
         self._akshare_min_interval_sec = 1.2
@@ -591,7 +593,12 @@ class LHBManager:
     def _register_kline_network_error(self, err):
         now_ts = time.time()
         if self._is_hard_network_error(err):
-            self._activate_kline_pause(self._kline_pause_seconds_hard, "连接被远端中断/疑似反爬")
+            pause_s = min(
+                max(int(self._kline_pause_seconds_hard or 3600), int(self._kline_pause_seconds_hard_next or 3600)),
+                int(self._kline_pause_seconds_hard_max or 86400),
+            )
+            self._activate_kline_pause(pause_s, "连接被远端中断/疑似反爬")
+            self._kline_pause_seconds_hard_next = min(pause_s * 2, int(self._kline_pause_seconds_hard_max or 86400))
             return
 
         if now_ts - self._kline_fail_window_start >= self._kline_fail_window_seconds:

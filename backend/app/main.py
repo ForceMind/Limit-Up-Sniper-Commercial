@@ -597,6 +597,15 @@ def get_day_kline_from_cache(clean_code: str):
 
 
 def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
+    # Day-K is end-of-day data. Skip network refresh during intraday or non-trading days
+    # to reduce unnecessary upstream pressure and anti-crawl risk.
+    if not force:
+        now_dt = datetime.now()
+        if now_dt.weekday() >= 5:
+            return
+        if now_dt.hour < 15 or (now_dt.hour == 15 and now_dt.minute < 30):
+            return
+
     if lhb_manager.is_kline_network_paused():
         return
     now_ts = time.time()
