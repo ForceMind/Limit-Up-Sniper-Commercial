@@ -19,6 +19,7 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from app.core.config_manager import SYSTEM_CONFIG
 from app.core.runtime_logs import add_runtime_log
+from app.core.operation_log import log_user_operation
 
 logger = logging.getLogger("payment")
 
@@ -27,6 +28,7 @@ DATA_DIR = BASE_DIR / "data"
 ADMIN_PANEL_PATH_FILE = DATA_DIR / "admin_panel_path.json"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 ORDER_NOTIFY_DELAY_SECONDS = 180
+EMAIL_SEND_LOG_FILE = DATA_DIR / "email_send_logs.jsonl"
 
 
 router = APIRouter()
@@ -91,6 +93,31 @@ def _safe_text(value: Any, limit: int = 200) -> str:
     if len(text) > limit:
         return text[: limit - 3] + "..."
     return text
+
+
+def _append_email_send_log(
+    event: str,
+    *,
+    status: str,
+    order_code: str = "",
+    detail: str = "",
+    extra: Optional[Dict[str, Any]] = None,
+):
+    try:
+        payload: Dict[str, Any] = {
+            "time": datetime.now(tz=SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S"),
+            "event": _safe_text(event, 80),
+            "status": _safe_text(status, 20),
+            "order_code": _safe_text(order_code, 64),
+            "detail": _safe_text(detail, 500),
+        }
+        if isinstance(extra, dict) and extra:
+            payload["extra"] = {str(k): _safe_text(v, 300) for k, v in extra.items()}
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(EMAIL_SEND_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
 
 
 def _version_label(version: str) -> str:
@@ -315,11 +342,12 @@ def _build_order_email(
     return subject, plain_text, html_text
 
 
-def _send_email(subject: str, plain_text: str, html_text: str):
+def _send_email(subject: str, plain_text: str, html_text: str) -> Tuple[bool, str]:
     email_config = SYSTEM_CONFIG.get("email_config", {})
     if not isinstance(email_config, dict) or not bool(email_config.get("enabled")):
-        logger.info("[支付] 邮件通知未启用，跳过发送")
-        return
+        detail = "邮件通知未启用"
+        logger.info("[支付] %s，跳过发送", detail)
+        return False, detail
 
     sender_email = str(email_config.get("smtp_user", "") or "").strip()
     sender_password = str(email_config.get("smtp_password", "") or "").strip()
@@ -332,8 +360,9 @@ def _send_email(subject: str, plain_text: str, html_text: str):
         smtp_port = 465
 
     if not (sender_email and sender_password and recipient_email and smtp_server):
-        logger.error("[支付] 邮件配置不完整，跳过发送")
-        return
+        detail = "邮件配置不完整（请检查发件邮箱/授权码/收件邮箱/SMTP服务器）"
+        logger.error("[支付] %s", detail)
+        return False, detail
 
     message = MIMEMultipart("alternative")
     message["Subject"] = subject
@@ -354,8 +383,27 @@ def _send_email(subject: str, plain_text: str, html_text: str):
                 server.login(sender_email, sender_password)
                 server.sendmail(sender_email, recipient_email, message.as_string())
         logger.info("[支付] 邮件发送成功: %s", recipient_email)
+        return True, f"邮件已发送至 {recipient_email}"
+    except smtplib.SMTPAuthenticationError as exc:
+        detail = f"SMTP认证失败，请检查邮箱授权码: {exc}"
+        logger.error("[支付] %s", detail)
+        return False, detail
+    except smtplib.SMTPConnectError as exc:
+        detail = f"SMTP连接失败，请检查服务器/端口: {exc}"
+        logger.error("[支付] %s", detail)
+        return False, detail
+    except smtplib.SMTPRecipientsRefused as exc:
+        detail = f"收件人被拒绝: {exc}"
+        logger.error("[支付] %s", detail)
+        return False, detail
+    except smtplib.SMTPException as exc:
+        detail = f"SMTP发送异常: {exc}"
+        logger.error("[支付] %s", detail)
+        return False, detail
     except Exception as exc:
-        logger.error("[支付] 邮件发送失败: %s", exc)
+        detail = f"邮件发送失败: {exc}"
+        logger.error("[支付] %s", detail)
+        return False, detail
 
 
 def _send_order_notification(
@@ -366,6 +414,19 @@ def _send_order_notification(
     request_base_url: str,
 ):
     try:
+        add_runtime_log(
+            f"[支付][邮件] 开始发送: 订单={order.order_code}, 事件={event_type}, 状态={_status_label(order.status)}"
+        )
+        _append_email_send_log(
+            "send_start",
+            status="pending",
+            order_code=str(order.order_code),
+            detail=f"event={event_type}, status={_status_label(order.status)}",
+            extra={
+                "version": _version_label(order.target_version),
+                "client_ip": _safe_text(client_ip or "-", 64),
+            },
+        )
         subject, plain_text, html_text = _build_order_email(
             order=order,
             event_type=event_type,
@@ -373,29 +434,107 @@ def _send_order_notification(
             user_agent=user_agent,
             request_base_url=request_base_url,
         )
-        _send_email(subject, plain_text, html_text)
-        add_runtime_log(
-            f"[支付] 邮件通知已发送: 订单={order.order_code}, 事件={event_type}, 版本={_version_label(order.target_version)}, 状态={_status_label(order.status)}"
-        )
+        ok, detail = _send_email(subject, plain_text, html_text)
+        if ok:
+            add_runtime_log(
+                f"[支付][邮件] 发送成功: 订单={order.order_code}, 事件={event_type}, 版本={_version_label(order.target_version)}, 状态={_status_label(order.status)}"
+            )
+            _append_email_send_log(
+                "send_done",
+                status="success",
+                order_code=str(order.order_code),
+                detail=detail,
+                extra={"event_type": event_type},
+            )
+            log_user_operation(
+                "email_order_notify",
+                status="success",
+                actor="system",
+                method="POST",
+                path="/api/payment/email_notify",
+                detail=detail,
+                username=account_store.get_username_by_device_id(str(order.user.device_id if order.user else "")) or "",
+                device_id=str(order.user.device_id if order.user else ""),
+                ip=_safe_text(client_ip or "-", 64),
+                extra={"event_type": event_type, "order_code": str(order.order_code)},
+            )
+        else:
+            add_runtime_log(
+                f"[支付][邮件] 发送失败: 订单={order.order_code}, 事件={event_type}, 原因={detail}"
+            )
+            _append_email_send_log(
+                "send_done",
+                status="failed",
+                order_code=str(order.order_code),
+                detail=detail,
+                extra={"event_type": event_type},
+            )
+            log_user_operation(
+                "email_order_notify",
+                status="failed",
+                actor="system",
+                method="POST",
+                path="/api/payment/email_notify",
+                detail=detail,
+                username=account_store.get_username_by_device_id(str(order.user.device_id if order.user else "")) or "",
+                device_id=str(order.user.device_id if order.user else ""),
+                ip=_safe_text(client_ip or "-", 64),
+                extra={"event_type": event_type, "order_code": str(order.order_code)},
+            )
     except Exception as exc:
         logger.error("[支付] 构建邮件失败: %s", exc)
+        add_runtime_log(f"[支付][邮件] 构建邮件失败: 订单={order.order_code}, 错误={exc}")
+        _append_email_send_log(
+            "send_build_error",
+            status="failed",
+            order_code=str(order.order_code),
+            detail=str(exc),
+            extra={"event_type": event_type},
+        )
 
 
 def _schedule_order_created_notification(order_id: int, client_ip: str, user_agent: str, request_base_url: str):
     def _job():
+        _append_email_send_log(
+            "delay_queue",
+            status="pending",
+            order_code=str(order_id),
+            detail=f"订单创建后延迟 {ORDER_NOTIFY_DELAY_SECONDS} 秒发送邮件",
+        )
+        add_runtime_log(
+            f"[支付][邮件] 延迟任务已排队: order_id={order_id}, wait={ORDER_NOTIFY_DELAY_SECONDS}s"
+        )
         time.sleep(ORDER_NOTIFY_DELAY_SECONDS)
         db = database.SessionLocal()
         try:
             order = db.query(models.PurchaseOrder).filter(models.PurchaseOrder.id == order_id).first()
             if not order:
                 logger.info("[支付] 延迟邮件跳过：订单不存在 id=%s", order_id)
+                _append_email_send_log(
+                    "delay_skip",
+                    status="failed",
+                    order_code=str(order_id),
+                    detail="订单不存在，跳过发送",
+                )
                 return
             status = str(order.status or "").strip().lower()
             if status not in {"pending", "waiting_verification"}:
                 add_runtime_log(
                     f"[支付] 延迟邮件跳过: 订单={order.order_code}, 当前状态={_status_label(status)}"
                 )
+                _append_email_send_log(
+                    "delay_skip",
+                    status="success",
+                    order_code=str(order.order_code),
+                    detail=f"订单状态为 {_status_label(status)}，无需发送",
+                )
                 return
+            _append_email_send_log(
+                "delay_execute",
+                status="pending",
+                order_code=str(order.order_code),
+                detail="延迟等待结束，开始发送邮件",
+            )
             _send_order_notification(
                 order=order,
                 event_type="created",
@@ -405,6 +544,13 @@ def _schedule_order_created_notification(order_id: int, client_ip: str, user_age
             )
         except Exception as exc:
             logger.error("[支付] 延迟邮件发送异常: %s", exc)
+            add_runtime_log(f"[支付][邮件] 延迟任务异常: order_id={order_id}, error={exc}")
+            _append_email_send_log(
+                "delay_error",
+                status="failed",
+                order_code=str(order_id),
+                detail=str(exc),
+            )
         finally:
             db.close()
 
@@ -565,6 +711,16 @@ async def create_order(
     add_runtime_log(
         f"[支付] 新订单邮件将延迟 {ORDER_NOTIFY_DELAY_SECONDS} 秒发送: {order.order_code}"
     )
+    _append_email_send_log(
+        "order_created",
+        status="pending",
+        order_code=str(order.order_code),
+        detail=f"订单已创建，邮件将在 {ORDER_NOTIFY_DELAY_SECONDS} 秒后触发",
+        extra={
+            "version": _version_label(order.target_version),
+            "amount": float(order.amount or 0.0),
+        },
+    )
 
     return {
         "order_code": order.order_code,
@@ -640,6 +796,12 @@ async def cancel_order(
     client_ip = request.client.host if request.client else ""
     user_agent = request.headers.get("user-agent", "")
     request_base_url = _request_base_url(request)
+    _append_email_send_log(
+        "order_cancelled",
+        status="pending",
+        order_code=str(order.order_code),
+        detail="订单已取消，触发即时邮件通知",
+    )
     _send_order_notification(
         order=order,
         event_type="cancelled",

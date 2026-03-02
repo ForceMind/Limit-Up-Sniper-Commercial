@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>涨停狙击手 (Limit-Up Sniper) v2.6.2</title>
+    <title>涨停狙击手 (Limit-Up Sniper) v2.6.3</title>
     <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <link rel="manifest" href="static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -290,7 +290,10 @@
                     </div>
                 </div>
                 <div class="flex-1 overflow-auto p-4 space-y-4 bg-gray-100 dark:bg-gray-900/50">
-                    <div v-if="newsList.length === 0" class="text-center text-gray-500 py-10">暂无新闻记录</div>
+                    <div v-if="newsLoading" class="text-center text-blue-600 dark:text-blue-300 py-3 text-sm">
+                        正在拉取最新新闻，请稍候...
+                    </div>
+                    <div v-if="newsList.length === 0 && !newsLoading" class="text-center text-gray-500 py-10">暂无新闻记录</div>
                     <div v-for="(group, gIndex) in newsList" :key="gIndex" class="space-y-2">
                         <div class="sticky top-0 z-10 bg-gray-200 dark:bg-gray-700 px-3 py-1 text-xs font-bold text-gray-600 dark:text-gray-300 rounded opacity-90">{{ group.date }}</div>
                         <div v-for="(news, index) in group.items" :key="index" class="bg-white dark:bg-gray-800 p-4 rounded shadow-sm border border-gray-200 dark:border-gray-700">
@@ -336,9 +339,12 @@
                  v-show="(!isMobile && showAggressivePanel) || (isMobile && activeTab === 'pre')">
                 <div class="p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
                     <h2 class="text-purple-600 dark:text-purple-400 font-bold flex items-center gap-2 text-sm md:text-base">
-                        <span>🎯</span> 竞价抢筹 (Aggressive)
+                        <span>🎯</span> 竞价抢筹
                     </h2>
                     <div class="flex items-center gap-2">
+                        <button @click="openListGuide('aggressive')" class="text-[11px] px-2 py-0.5 rounded border border-purple-200 text-purple-600 hover:bg-purple-50 dark:border-purple-700 dark:text-purple-300 dark:hover:bg-purple-900/30">
+                            说明
+                        </button>
                         <button @click="showAggressivePanel = false" class="hidden md:block text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300" title="隐藏面板">
                             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12" />
@@ -427,9 +433,12 @@
                  v-show="!isMobile || activeTab === 'intra'">
                 <div class="p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
                     <h2 class="text-red-600 dark:text-red-400 font-bold flex items-center gap-2 text-sm md:text-base">
-                        <span>🚀</span> 盘中打板 (Intraday)
+                        <span>🚀</span> 盘中打板
                     </h2>
                     <div class="flex items-center gap-2">
+                        <button @click="openListGuide('intraday')" class="text-[11px] px-2 py-0.5 rounded border border-red-200 text-red-600 hover:bg-red-50 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/30">
+                            说明
+                        </button>
                         <span class="text-xs text-gray-500">动量排序</span>
                     </div>
                 </div>
@@ -513,7 +522,7 @@
                         
                         <!-- Discarded List (Below Intraday) -->
                         <div v-if="discardedStocks.length > 0" class="mt-4 border-t border-gray-200 dark:border-gray-700 pt-2">
-                            <div class="px-3 py-1 text-xs text-gray-500 font-bold">已剔除 / 变弱 (Discarded)</div>
+                            <div class="px-3 py-1 text-xs text-gray-500 font-bold">已剔除 / 变弱</div>
                             <div class="p-2 space-y-1 opacity-60 grayscale hover:grayscale-0 transition-all">
                                 <div v-for="(stock, index) in discardedStocks" :key="stock.code" 
                                      class="rounded text-sm hover:bg-gray-100 dark:hover:bg-gray-700 border border-transparent grid gap-2 items-center px-2 py-2 bg-gray-100 dark:bg-gray-800/30"
@@ -557,9 +566,12 @@
                  v-show="(!isMobile && showManualPanel) || (isMobile && activeTab === 'manual')">
                 <div class="p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
                     <h2 class="text-blue-600 dark:text-blue-400 font-bold flex items-center gap-2 text-sm md:text-base">
-                        <span>📝</span> 自选个股 (Manual)
+                        <span>📝</span> 自选个股
                     </h2>
                     <div class="flex items-center gap-2">
+                        <button @click="openListGuide('manual')" class="text-[11px] px-2 py-0.5 rounded border border-blue-200 text-blue-600 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-300 dark:hover:bg-blue-900/30">
+                            说明
+                        </button>
                         <button @click="isEditMode = !isEditMode" class="text-xs px-2 py-1 rounded border transition-colors" 
                                 :class="isEditMode ? 'bg-red-100 text-red-600 border-red-300' : 'bg-gray-100 text-gray-600 border-gray-300'">
                             {{ isEditMode ? '完成' : '编辑' }}
@@ -1502,14 +1514,61 @@
             </div>
         </div>
 
+        <!-- List Guide Modal -->
+        <div v-if="listGuideModal.show" class="fixed inset-0 z-[110] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" @click.self="listGuideModal.show = false">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-lg p-6">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">{{ listGuideModal.title }}</h3>
+                    <button @click="listGuideModal.show = false" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 text-xl">&times;</button>
+                </div>
+                <p class="text-sm text-gray-700 dark:text-gray-300 mb-4 whitespace-pre-wrap">{{ listGuideModal.desc }}</p>
+                <ul class="list-disc pl-5 text-sm text-gray-600 dark:text-gray-400 space-y-1">
+                    <li v-for="(tip, idx) in listGuideModal.tips" :key="'guide_tip_' + idx">{{ tip }}</li>
+                </ul>
+                <div class="mt-5 text-right">
+                    <button @click="listGuideModal.show = false" class="px-4 py-2 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">我看明白了</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Unified Error Modal -->
+        <div v-if="errorModal.show" class="fixed inset-0 z-[115] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm" @click.self="closeErrorModal">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md p-6">
+                <div class="flex items-center gap-2 mb-2">
+                    <span class="text-red-500">⚠️</span>
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">{{ errorModal.title || '错误提示' }}</h3>
+                </div>
+                <p class="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-all">{{ errorModal.message }}</p>
+                <div v-if="errorModal.code" class="text-xs text-gray-500 mt-3">错误码: {{ errorModal.code }}</div>
+                <div v-if="errorModal.time" class="text-xs text-gray-500 mt-1">时间: {{ errorModal.time }}</div>
+                <div class="mt-5 flex justify-end gap-2">
+                    <button @click="copyText(errorModal.message, '错误信息已复制')" class="px-3 py-1.5 text-sm border rounded hover:bg-gray-50 dark:hover:bg-gray-700">复制信息</button>
+                    <button @click="closeErrorModal" class="px-4 py-1.5 text-sm bg-red-600 text-white rounded hover:bg-red-700">确定</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Copy Fallback Modal -->
+        <div v-if="copyFallbackModal.show" class="fixed inset-0 z-[116] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm" @click.self="copyFallbackModal.show = false">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-xl p-6">
+                <div class="flex items-center justify-between mb-3">
+                    <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">复制失败，请手动复制</h3>
+                    <button @click="copyFallbackModal.show = false" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 text-xl">&times;</button>
+                </div>
+                <textarea :value="copyFallbackModal.content" readonly class="w-full h-44 border border-gray-300 dark:border-gray-600 rounded p-2 text-xs font-mono bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200"></textarea>
+                <div class="mt-4 flex justify-end gap-2">
+                    <button @click="copyText(copyFallbackModal.content, '已复制')" class="px-3 py-1.5 text-sm border rounded hover:bg-gray-50 dark:hover:bg-gray-700">再试一次复制</button>
+                    <button @click="copyFallbackModal.show = false" class="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">我知道了</button>
+                </div>
+            </div>
+        </div>
+
     </div>
 
     <script>
         // Global Error Handler (Added by Debugger)
         window.onerror = function(message, source, lineno, colno, error) {
             console.error('[CRITICAL ERROR]', message, 'at', source, ':', lineno, colno);
-            // Optionally alert if you want to see it on mobile
-            // alert('Error: ' + message + ' Line: ' + lineno);
         };
         console.log('App Starting...');
         
@@ -1538,6 +1597,7 @@
                 requestUrl.includes('/api/auth/login_user') ||
                 requestUrl.includes('/api/auth/register') ||
                 requestUrl.includes('/api/auth/login') ||
+                requestUrl.includes('/api/client/error_popup') ||
                 requestUrl.includes('/api/admin/')
             );
         };
@@ -1587,6 +1647,9 @@
 
                     // Data
                     newsList: [],
+                    newsRawItems: [],
+                    newsLoading: false,
+                    newsLastTimestamp: 0,
                     showNewsModal: false,
                     showReasonModal: false,
                     currentReasonStock: null,
@@ -1683,7 +1746,7 @@
                     isRegisteredAccount: false,
                     accountCanApplyTrial: false,
                     fingerprintId: '',
-                    frontendVersion: 'v2.6.2',
+                    frontendVersion: 'v2.6.3',
                     serverVersion: '获取中...',
                     loginLoading: false,
                     loadingChart: false,
@@ -1693,6 +1756,10 @@
                     msgModal: { show: false, msg: '', type: 'info' },
                     msgTimer: null,
                     confirmModal: { show: false, msg: '', resolve: null },
+                    listGuideModal: { show: false, title: '', desc: '', tips: [] },
+                    errorModal: { show: false, title: '错误提示', message: '', code: '', time: '' },
+                    copyFallbackModal: { show: false, content: '' },
+                    lastErrorFingerprint: '',
                     lastFetchTime: 0,
 
                     // --- New User & Subscription Data ---
@@ -1870,8 +1937,8 @@
                     return this.localFavoriteQuotes
                         .filter(s => this.checkBoardVisibility(s.code))
                         .sort((a, b) => {
-                            const timeA = a.added_time || 0;
-                            const timeB = b.added_time || 0;
+                            const timeA = Number(a.added_time || 0);
+                            const timeB = Number(b.added_time || 0);
                             if (timeA !== timeB) return timeB - timeA;
                             return b.initial_score - a.initial_score;
                         });
@@ -2165,10 +2232,13 @@
                             }
                         } catch (fallbackErr) {}
 
-                        try {
-                            window.prompt('复制失败，请手动复制以下内容：', text);
-                        } catch (promptErr) {}
-                        this.showMsg('复制失败，请手动复制', 'error');
+                        this.copyFallbackModal.content = text;
+                        this.copyFallbackModal.show = true;
+                        this.showErrorDialog('复制失败，请手动复制', {
+                            source: 'copy_text',
+                            code: 'COPY_FALLBACK',
+                            report: true
+                        });
                         return false;
                     }
                 },
@@ -2305,6 +2375,7 @@
                     this.isRegisteredAccount = false;
                     this.accountCanApplyTrial = false;
                     this.loadLocalFavorites();
+                    this.loadNewsCache();
                     await this.fetchLocalFavoriteQuotes();
                 },
                 getFavoritesStorageKey() {
@@ -2318,7 +2389,28 @@
                 loadLocalFavorites() {
                     try {
                         const raw = localStorage.getItem(this.getFavoritesStorageKey());
-                        this.localFavorites = raw ? JSON.parse(raw) : {};
+                        const parsed = raw ? JSON.parse(raw) : {};
+                        const normalized = {};
+                        if (parsed && typeof parsed === 'object') {
+                            Object.entries(parsed).forEach(([code, value]) => {
+                                const key = this.normalizeStockCode(code);
+                                if (!key) return;
+                                let addedTime = 0;
+                                if (value && typeof value === 'object') {
+                                    const direct = Number(value.added_time || 0);
+                                    if (Number.isFinite(direct) && direct > 0) {
+                                        addedTime = direct;
+                                    } else if (value.added_at) {
+                                        const dt = new Date(value.added_at).getTime();
+                                        if (Number.isFinite(dt) && dt > 0) addedTime = dt;
+                                    }
+                                }
+                                if (!addedTime) addedTime = Date.now();
+                                normalized[key] = { code: key, added_time: addedTime };
+                            });
+                        }
+                        this.localFavorites = normalized;
+                        this.saveLocalFavorites();
                     } catch (e) {
                         this.localFavorites = {};
                     }
@@ -2344,7 +2436,12 @@
                             is_favorite: true,
                             added_time: this.localFavorites[item.code]?.added_time || 0,
                             strategy: 'Manual'
-                        }));
+                        })).sort((a, b) => {
+                            const timeA = Number(a.added_time || 0);
+                            const timeB = Number(b.added_time || 0);
+                            if (timeA !== timeB) return timeB - timeA;
+                            return String(a.code || '').localeCompare(String(b.code || ''));
+                        });
                         this.localFavoriteQuotes = enriched;
                     } catch (e) {
                         console.error('Failed to fetch local favorite quotes', e);
@@ -2390,6 +2487,7 @@
                             this.displayUsername = meta.username || localStorage.getItem('sniper_username') || '';
                             this.accountCanApplyTrial = !!meta.can_apply_trial;
                             this.loadLocalFavorites();
+                            this.loadNewsCache();
                             await this.fetchLocalFavoriteQuotes();
                             await this.fetchInviteInfo();
                             this.maybeStartOnboarding(false);
@@ -2933,41 +3031,113 @@
                     }
                 },
 
+                newsCacheKey() {
+                    return `sniper_news_cache_v1_${this.isRegisteredAccount ? (this.displayUsername || 'user') : (this.deviceId || 'guest')}`;
+                },
+                loadNewsCache() {
+                    try {
+                        const raw = localStorage.getItem(this.newsCacheKey());
+                        if (!raw) return;
+                        const payload = JSON.parse(raw);
+                        const items = Array.isArray(payload?.items) ? payload.items : [];
+                        const ts = Number(payload?.last_timestamp || 0);
+                        this.newsRawItems = items;
+                        this.newsLastTimestamp = Number.isFinite(ts) && ts > 0 ? ts : 0;
+                        this.rebuildNewsList();
+                    } catch (e) {}
+                },
+                saveNewsCache() {
+                    try {
+                        localStorage.setItem(this.newsCacheKey(), JSON.stringify({
+                            items: this.newsRawItems,
+                            last_timestamp: this.newsLastTimestamp,
+                            updated_at: Date.now()
+                        }));
+                    } catch (e) {}
+                },
+                mergeNewsItems(existing, incoming) {
+                    const merged = [];
+                    const seen = new Set();
+                    const keyOf = (item) => {
+                        const source = String(item?.source || '').trim();
+                        const text = String(item?.text || '').trim();
+                        const ts = Number(item?.timestamp || 0);
+                        return `${source}|${ts}|${text.slice(0, 80)}`;
+                    };
+                    const all = [...(Array.isArray(incoming) ? incoming : []), ...(Array.isArray(existing) ? existing : [])];
+                    for (const row of all) {
+                        if (!row || typeof row !== 'object') continue;
+                        const key = keyOf(row);
+                        if (!key || seen.has(key)) continue;
+                        seen.add(key);
+                        merged.push(row);
+                    }
+                    merged.sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0));
+                    return merged;
+                },
+                rebuildNewsList() {
+                    const grouped = {};
+                    const today = new Date().toDateString();
+                    const yesterday = new Date(new Date().setDate(new Date().getDate() - 1)).toDateString();
+                    for (const item of (this.newsRawItems || [])) {
+                        const ts = Number(item?.timestamp || 0);
+                        const d = ts > 0 ? new Date(ts * 1000) : null;
+                        if (!d || !Number.isFinite(d.getTime())) continue;
+                        let dateKey = d.toDateString();
+                        if (dateKey === today) dateKey = '今天';
+                        else if (dateKey === yesterday) dateKey = '昨天';
+                        else dateKey = d.toLocaleDateString();
+                        if (!grouped[dateKey]) grouped[dateKey] = [];
+                        grouped[dateKey].push(item);
+                    }
+                    this.newsList = Object.keys(grouped).map(key => ({
+                        date: key,
+                        items: grouped[key]
+                    }));
+                },
+                async fetchNewsHistoryIncremental(force = false) {
+                    if (!this.hasDataAccess) return;
+                    const sinceTs = force ? 0 : Number(this.newsLastTimestamp || 0);
+                    this.newsLoading = true;
+                    try {
+                        const qs = new URLSearchParams();
+                        if (sinceTs > 0) qs.set('since_ts', String(Math.floor(sinceTs)));
+                        const apiUrl = qs.toString()
+                            ? `${API_BASE_URL}/api/news_history?${qs.toString()}`
+                            : `${API_BASE_URL}/api/news_history`;
+                        const res = await fetch(apiUrl);
+                        const data = await res.json();
+                        if (data.status === 'success') {
+                            const incoming = Array.isArray(data.data) ? data.data : [];
+                            this.newsRawItems = this.mergeNewsItems(this.newsRawItems, incoming);
+                            const latestTs = Number(data.latest_timestamp || 0);
+                            if (Number.isFinite(latestTs) && latestTs > this.newsLastTimestamp) {
+                                this.newsLastTimestamp = latestTs;
+                            } else if (this.newsRawItems.length > 0) {
+                                this.newsLastTimestamp = Number(this.newsRawItems[0]?.timestamp || this.newsLastTimestamp || 0);
+                            }
+                            this.rebuildNewsList();
+                            this.saveNewsCache();
+                        }
+                    } catch (e) {
+                        console.error('Failed to fetch news history', e);
+                        this.showMsg('新闻更新失败，已显示本地缓存', 'info');
+                    } finally {
+                        this.newsLoading = false;
+                    }
+                },
                 async openNewsCenter() {
                     if (!this.hasDataAccess) {
                         this.showMsg('当前无权限访问数据，请先开通或续费', 'error');
                         return;
                     }
                     this.showNewsModal = true;
-                    try {
-                        const res = await fetch(API_BASE_URL + '/api/news_history');
-                        const data = await res.json();
-                        if (data.status === 'success') {
-                            // Group by date
-                            const grouped = {};
-                            const today = new Date().toDateString();
-                            const yesterday = new Date(new Date().setDate(new Date().getDate() - 1)).toDateString();
-                            
-                            data.data.forEach(item => {
-                                const d = new Date(item.timestamp * 1000);
-                                let dateKey = d.toDateString();
-                                if (dateKey === today) dateKey = '今天';
-                                else if (dateKey === yesterday) dateKey = '昨天';
-                                else dateKey = d.toLocaleDateString();
-                                
-                                if (!grouped[dateKey]) grouped[dateKey] = [];
-                                grouped[dateKey].push(item);
-                            });
-                            
-                            // Convert to array for v-for
-                            this.newsList = Object.keys(grouped).map(key => ({
-                                date: key,
-                                items: grouped[key]
-                            }));
-                        }
-                    } catch (e) {
-                        console.error("Failed to fetch news history", e);
+                    if (!this.newsRawItems || this.newsRawItems.length === 0) {
+                        this.loadNewsCache();
+                    } else {
+                        this.rebuildNewsList();
                     }
+                    await this.fetchNewsHistoryIncremental(false);
                 },
                 async clearNewsHistory(range = 'all') {
                     if (!this.hasDataAccess) return;
@@ -2983,8 +3153,11 @@
                         const res = await fetch(API_BASE_URL + `/api/news_history/clear?range=${range}`);
                         const data = await res.json();
                         if (data.status === 'success') {
-                            // Refresh news list
-                            await this.openNewsCenter();
+                            this.newsRawItems = [];
+                            this.newsList = [];
+                            this.newsLastTimestamp = 0;
+                            this.saveNewsCache();
+                            await this.fetchNewsHistoryIncremental(true);
                         }
                     } catch (e) {
                         console.error("Failed to clear news history", e);
@@ -2993,6 +3166,45 @@
                 showReason(stock) {
                     this.currentReasonStock = stock;
                     this.showReasonModal = true;
+                },
+                openListGuide(type) {
+                    const key = String(type || '').trim().toLowerCase();
+                    const guides = {
+                        aggressive: {
+                            title: '竞价抢筹使用说明',
+                            desc: '该列表用于盘前观察候选标的，结合评分、换手、流通市值与板块信息做计划。',
+                            tips: [
+                                '优先看评分、涨幅、流通值和板块联动是否一致。',
+                                '点击股票名称可打开分时/日K查看细节。',
+                                '左侧细条按钮可查看该股票被选入的逻辑。'
+                            ]
+                        },
+                        intraday: {
+                            title: '盘中打板使用说明',
+                            desc: '该列表用于交易时段追踪实时强势股，按动量排序展示。',
+                            tips: [
+                                '优先关注涨速、换手与板块共振。',
+                                '疑似主力席位仅作参考，不构成投资建议。',
+                                'AI按钮会消耗AI次数，请按需使用。'
+                            ]
+                        },
+                        manual: {
+                            title: '自选个股使用说明',
+                            desc: '自选用于持续跟踪你的重点股票，默认按添加时间倒序，最新添加在最上方。',
+                            tips: [
+                                '通过顶部搜索添加股票，支持代码和拼音。',
+                                '打开编辑后可快速删除不再关注的标的。',
+                                '自选中的AI分析也会计入AI次数。'
+                            ]
+                        }
+                    };
+                    const cfg = guides[key] || guides.manual;
+                    this.listGuideModal = {
+                        show: true,
+                        title: cfg.title,
+                        desc: cfg.desc,
+                        tips: Array.isArray(cfg.tips) ? cfg.tips : []
+                    };
                 },
                 handleSearchBlur() {
                     setTimeout(() => {
@@ -4336,14 +4548,57 @@
                         console.error(e);
                     }
                 },
+                async reportErrorPopup(message, source = '', code = '') {
+                    if (!message) return;
+                    try {
+                        await fetch(`${API_BASE_URL}/api/client/error_popup`, {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({
+                                message: String(message || ''),
+                                source: String(source || ''),
+                                code: String(code || '')
+                            })
+                        });
+                    } catch (e) {}
+                },
+                showErrorDialog(message, opts = {}) {
+                    const text = String(message || '操作失败').trim() || '操作失败';
+                    const code = String(opts.code || '').trim();
+                    const source = String(opts.source || '').trim();
+                    const now = new Date();
+                    const ts = now.toLocaleString('zh-CN', { hour12: false });
+                    this.errorModal = {
+                        show: true,
+                        title: String(opts.title || '错误提示'),
+                        message: text,
+                        code,
+                        time: ts
+                    };
+                    const fingerprint = `${source}|${code}|${text}`;
+                    if (fingerprint && fingerprint !== this.lastErrorFingerprint) {
+                        this.lastErrorFingerprint = fingerprint;
+                        this.reportErrorPopup(text, source, code);
+                        setTimeout(() => {
+                            if (this.lastErrorFingerprint === fingerprint) this.lastErrorFingerprint = '';
+                        }, 1500);
+                    }
+                },
+                closeErrorModal() {
+                    this.errorModal.show = false;
+                },
                 // Custom Message Modal
                 showMsg(msg, type = 'info') {
+                    if (type === 'error') {
+                        this.showErrorDialog(msg, { source: 'show_msg_error' });
+                        return;
+                    }
                     if (this.msgTimer) {
                         clearTimeout(this.msgTimer);
                         this.msgTimer = null;
                     }
                     this.msgModal = { show: true, msg, type };
-                    const timeout = type === 'error' ? 4000 : 2500;
+                    const timeout = 2500;
                     this.msgTimer = setTimeout(() => {
                         if (this.msgModal.msg === msg) this.msgModal.show = false;
                     }, timeout);
@@ -4370,6 +4625,7 @@
                 this.initFingerprintId();
                 this.captureInviteCodeFromUrl();
                 this.loadLocalFavorites();
+                this.loadNewsCache();
                 
                 // Init User
                 this.checkLogin().then(() => {
@@ -4445,7 +4701,7 @@
                 fetch(API_BASE_URL + '/api/status')
                     .then(res => res.json())
                     .then(data => {
-                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.6.2';
+                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.6.3';
                         if (data.status === 'success') {
                             const isMarketOpenDay = data.is_market_open_day;
                             

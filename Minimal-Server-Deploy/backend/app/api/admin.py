@@ -2084,6 +2084,7 @@ async def list_data_files(
         "ai_usage_alert_state.json": "AI费用告警状态",
         "provider_test_logs.jsonl": "外网接口体检日志",
         "security_audit_logs.jsonl": "后台安全审计日志",
+        "email_send_logs.jsonl": "订单邮件发送进度日志",
         "user_operation_logs.jsonl": "用户操作日志",
         "runtime_logs.jsonl": "运行时日志",
         "system_metrics_baseline.json": "系统统计基线数据",

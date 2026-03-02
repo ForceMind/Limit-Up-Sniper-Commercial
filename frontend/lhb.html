@@ -184,6 +184,20 @@
     </div>
     
 
+
+    <div v-if="errorModal.show" class="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm" @click.self="closeErrorModal">
+        <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md p-6">
+            <div class="flex items-center gap-2 mb-2">
+                <span class="text-red-500">⚠️</span>
+                <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">提示</h3>
+            </div>
+            <p class="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{{ errorModal.message }}</p>
+            <div class="mt-5 text-right">
+                <button @click="closeErrorModal" class="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700">确定</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const { createApp } = Vue
 
@@ -205,7 +219,11 @@
 
             const requestUrl = resolveRequestUrl(resource);
             const response = await originalFetch(resource, config);
-            if ((response.status === 401 || response.status === 403) && requestUrl.includes('/api/')) {
+            if (
+                (response.status === 401 || response.status === 403) &&
+                requestUrl.includes('/api/') &&
+                !requestUrl.includes('/api/client/error_popup')
+            ) {
                 let detail = '';
                 try {
                     const payload = await response.clone().json();
@@ -246,6 +264,10 @@
                     isDark: false,
                     isMobile: window.innerWidth < 768,
                     sortOrder: 'desc', // 'desc' or 'asc'
+                    errorModal: {
+                        show: false,
+                        message: ''
+                    },
                     lhbStatus: {
                         today: '',
                         sync_time: '18:00',
@@ -284,13 +306,28 @@
                     const payload = (event && event.detail) ? event.detail : {};
                     const status = Number(payload.status || 0);
                     const detail = String(payload.detail || '');
-                    if (status === 403) {
-                        alert(detail || '当前功能需要会员权限，请先开通或续费会员。');
-                    } else {
-                        alert(detail || '登录状态失效，请先登录。');
-                    }
+                    this.showErrorModal(status === 403 ? (detail || '当前功能需要会员权限，请先开通或续费会员。') : (detail || '登录状态失效，请先登录。'));
                     localStorage.setItem('sniper_open_subscription', '1');
-                    window.location.href = 'index.html';
+                    setTimeout(() => {
+                        window.location.href = 'index.html';
+                    }, 300);
+                },
+                showErrorModal(message) {
+                    const text = String(message || '操作失败');
+                    this.errorModal.message = text;
+                    this.errorModal.show = true;
+                    fetch(API_BASE_URL + '/api/client/error_popup', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({
+                            message: text,
+                            source: 'lhb_auth',
+                            code: 'LHB_AUTH'
+                        })
+                    }).catch(() => {});
+                },
+                closeErrorModal() {
+                    this.errorModal.show = false;
                 },
                 toggleSort() {
                     this.sortOrder = this.sortOrder === 'desc' ? 'asc' : 'desc';
