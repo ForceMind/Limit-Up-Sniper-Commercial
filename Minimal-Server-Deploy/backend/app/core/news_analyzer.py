@@ -8,6 +8,7 @@ from pathlib import Path
 from app.core.stock_utils import calculate_metrics
 from app.core.market_scanner import scan_intraday_limit_up, get_market_overview, scan_limit_up_pool, scan_broken_limit_pool
 from app.core.ai_cache import ai_cache
+from app.core.ai_usage import record_ai_usage_from_result
 from app.core.lhb_manager import lhb_manager
 from app.core.news_admin_store import append_news_analysis_record
 
@@ -573,6 +574,15 @@ def analyze_news_with_deepseek(news_batch, market_summary="", logger=None, mode=
         
         # Save to Cache
         ai_cache.set(cache_key, data, meta=_build_usage_meta(result))
+        record_ai_usage_from_result(
+            result,
+            source="news_batch",
+            extra={
+                "mode": str(mode or ""),
+                "news_count": len(news_batch or []),
+                "cache_key": cache_key,
+            },
+        )
         try:
             append_news_analysis_record(
                 mode=mode,
@@ -951,6 +961,16 @@ def analyze_single_stock(stock_data, logger=None, prompt_type='normal', api_key=
 
             # Save to cache
             ai_cache.set(cache_key, content, meta=_build_usage_meta(result))
+            record_ai_usage_from_result(
+                result,
+                source="single_stock",
+                extra={
+                    "code": str(code or ""),
+                    "name": str(name or ""),
+                    "prompt_type": str(prompt_type or ""),
+                    "cache_key": cache_key,
+                },
+            )
             
             return content
         else:
@@ -1432,6 +1452,14 @@ def analyze_daily_lhb(date_str, lhb_data, logger=None, force_update=False):
             result = response.json()
             content = result['choices'][0]['message']['content']
             ai_cache.set(cache_key, content, meta=_build_usage_meta(result))
+            record_ai_usage_from_result(
+                result,
+                source="lhb_daily_review",
+                extra={
+                    "date": str(date_str or ""),
+                    "cache_key": cache_key,
+                },
+            )
             return content
         else:
             return f"分析失败: AI接口返回错误 {response.status_code}"

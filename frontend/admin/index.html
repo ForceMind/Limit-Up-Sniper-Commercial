@@ -2450,29 +2450,24 @@
                 },
                 async downloadDataBackup() {
                     try {
-                        const res = await fetch(API_BASE_URL + '/api/admin/data/export', { headers: { 'X-Admin-Token': this.token } });
+                        const res = await fetch(API_BASE_URL + '/api/admin/data/export/url', {
+                            method: 'POST',
+                            headers: { 'X-Admin-Token': this.token }
+                        });
                         if (res.status === 403) { this.clearAuth(true); return; }
-                        if (!res.ok) {
-                            const err = await res.json().catch(() => ({}));
-                            throw new Error(err.detail || '备份导出失败');
-                        }
-                        const blob = await res.blob();
-                        if (!blob || Number(blob.size || 0) <= 0) {
-                            throw new Error('备份文件为空，下载未开始');
-                        }
-                        const url = URL.createObjectURL(blob);
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) throw new Error(data.detail || '备份导出失败');
+                        const url = String(data.download_url || '').trim();
+                        if (!url) throw new Error('未获取到下载地址');
                         const a = document.createElement('a');
                         a.href = url;
-                        const filename = (res.headers.get('content-disposition') || '').match(/filename=\"?([^\";]+)\"?/)?.[1] || 'sniper_data_export.zip';
-                        a.download = filename;
+                        a.target = '_blank';
+                        a.rel = 'noopener';
                         a.style.display = 'none';
                         document.body.appendChild(a);
                         a.click();
-                        setTimeout(() => {
-                            try { a.remove(); } catch (_) {}
-                            try { URL.revokeObjectURL(url); } catch (_) {}
-                        }, 30000);
-                        this.showMsg('数据备份下载已开始', 'success');
+                        setTimeout(() => { try { a.remove(); } catch (_) {} }, 3000);
+                        this.showMsg(`一次性下载链接已创建（${Number(data.expires_in_seconds || 120)}秒内有效，仅可下载一次）`, 'success');
                     } catch (e) {
                         this.showMsg(e.message || '备份导出失败', 'error');
                     }

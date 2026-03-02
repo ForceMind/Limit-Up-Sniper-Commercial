@@ -45,6 +45,25 @@ SYSTEM_CONFIG = {
         "aliyun": "",
         "other": ""
     },
+    "ai_cost_config": {
+        "default": {
+            "input_per_million_cny": 2.0,
+            "output_per_million_cny": 3.0
+        },
+        "models": {
+            "deepseek-chat": {
+                "provider": "deepseek",
+                "input_per_million_cny": 2.0,
+                "output_per_million_cny": 3.0
+            }
+        },
+        "alert": {
+            "enabled": True,
+            "daily_threshold_cny": 100.0,
+            "step_cny": 100.0,
+            "cooldown_minutes": 60
+        }
+    },
     "data_provider_config": {
         "biying_enabled": False,
         "biying_license_key": "",
@@ -100,7 +119,7 @@ def load_config():
                 for key in ["auto_analysis_enabled", "use_smart_schedule", "fixed_interval_minutes",
                            "schedule_plan", "news_auto_clean_enabled", "news_auto_clean_days",
                            "last_run_time", "next_run_time",
-                           "email_config", "api_keys", "data_provider_config", "community_config", "referral_config", "pricing_config"]:
+                           "email_config", "api_keys", "ai_cost_config", "data_provider_config", "community_config", "referral_config", "pricing_config"]:
                     if key in saved_config:
                         SYSTEM_CONFIG[key] = saved_config[key]
         except Exception as e:
@@ -132,6 +151,7 @@ def save_config():
                 "news_auto_clean_days": SYSTEM_CONFIG.get("news_auto_clean_days", 14),
                 "email_config": SYSTEM_CONFIG.get("email_config", {}),
                 "api_keys": SYSTEM_CONFIG.get("api_keys", {}),
+                "ai_cost_config": SYSTEM_CONFIG.get("ai_cost_config", {}),
                 "data_provider_config": SYSTEM_CONFIG.get("data_provider_config", {}),
                 "community_config": SYSTEM_CONFIG.get("community_config", {}),
                 "referral_config": SYSTEM_CONFIG.get("referral_config", {}),

@@ -1,4 +1,4 @@
-﻿from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks, UploadFile, File
+﻿from fastapi import APIRouter, Depends, HTTPException, Header, BackgroundTasks, UploadFile, File, Request
 from fastapi.responses import FileResponse
 from starlette.background import BackgroundTask
 from sqlalchemy.orm import Session, joinedload
@@ -37,6 +37,12 @@ from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
 import statistics
+import threading
+from app.core.ai_usage import (
+    calculate_ai_cost_cny,
+    summarize_ai_usage_for_date,
+    get_ai_pricing_snapshot,
+)
 
 router = APIRouter()
 
@@ -55,6 +61,9 @@ RATE_LIMIT_MAX_ATTEMPTS = 5
 SESSION_EXPIRE_HOURS = 24
 failed_attempts: Dict[str, List[float]] = {}
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+EXPORT_TICKET_TTL_SECONDS = 120
+_export_ticket_lock = threading.Lock()
+_export_tickets: Dict[str, Dict[str, Any]] = {}
 
 
 def _load_json(path: Path, default):
@@ -71,6 +80,81 @@ def _save_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _build_export_zip() -> Tuple[Path, str]:
+    if not DATA_DIR.exists():
+        raise HTTPException(status_code=404, detail="Data directory not found")
+    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    temp_zip = Path(tempfile.gettempdir()) / f"sniper_data_export_{ts}_{secrets.token_hex(4)}.zip"
+    try:
+        with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for file_path in DATA_DIR.rglob("*"):
+                if not file_path.is_file():
+                    continue
+                arc = str(file_path.relative_to(DATA_DIR)).replace("\\", "/")
+                zf.write(file_path, arcname=arc)
+    except Exception as e:
+        if temp_zip.exists():
+            try:
+                temp_zip.unlink()
+            except Exception:
+                pass
+        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
+    return temp_zip, f"sniper_data_export_{ts}.zip"
+
+
+def _cleanup_export_tickets_locked(now_ts: Optional[float] = None):
+    current = float(now_ts or time.time())
+    expired: List[Dict[str, Any]] = []
+    for token, info in list(_export_tickets.items()):
+        expires_ts = float(info.get("expires_ts", 0) or 0)
+        if expires_ts <= 0 or current > expires_ts:
+            expired.append(_export_tickets.pop(token, {}))
+    for item in expired:
+        path = Path(str(item.get("file_path", "")).strip())
+        if path.exists():
+            try:
+                path.unlink()
+            except Exception:
+                pass
+
+
+def _consume_export_ticket(ticket: str, request_ip: str) -> Dict[str, Any]:
+    token = str(ticket or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Missing export ticket")
+    now_ts = time.time()
+    with _export_ticket_lock:
+        _cleanup_export_tickets_locked(now_ts)
+        info = _export_tickets.pop(token, None)
+    if not isinstance(info, dict):
+        raise HTTPException(status_code=404, detail="Invalid or expired export ticket")
+
+    expected_ip = str(info.get("ip", "")).strip()
+    if expected_ip and request_ip and request_ip != expected_ip:
+        file_path = Path(str(info.get("file_path", "")).strip())
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except Exception:
+                pass
+        raise HTTPException(status_code=403, detail="Export ticket IP mismatch")
+
+    expires_ts = float(info.get("expires_ts", 0) or 0)
+    if expires_ts <= 0 or now_ts > expires_ts:
+        file_path = Path(str(info.get("file_path", "")).strip())
+        if file_path.exists():
+            try:
+                file_path.unlink()
+            except Exception:
+                pass
+        raise HTTPException(status_code=410, detail="Export ticket expired")
+
+    file_path = Path(str(info.get("file_path", "")).strip())
+    if not file_path.exists():
+        raise HTTPException(status_code=404, detail="Export file not found")
+    return info
 
 
 def _load_user_accounts() -> Dict[str, dict]:
@@ -1062,6 +1146,7 @@ class AdminConfigUpdate(BaseModel):
     lhb_min_amount: Optional[int] = None
     email_config: Optional[dict] = None
     api_keys: Optional[dict] = None
+    ai_cost_config: Optional[dict] = None
     data_provider_config: Optional[dict] = None
     community_config: Optional[dict] = None
     referral_config: Optional[dict] = None
@@ -1450,25 +1535,12 @@ async def get_today_overview(
         if path in {"/api/analyze/stock", "/api/stock/analyze", "/api/pools/analyze"} and status == "success":
             ai_api_calls_today += 1
 
-    # AI token usage (from cache entries created today)
-    ai_prompt_tokens_today = 0
-    ai_completion_tokens_today = 0
-    ai_total_tokens_today = 0
-    for entry in ai_cache.cache.values():
-        if not isinstance(entry, dict):
-            continue
-        ts = _safe_int(entry.get("timestamp", 0))
-        if ts <= 0:
-            continue
-        dt_sh = datetime.fromtimestamp(ts, tz=timezone.utc).astimezone(SHANGHAI_TZ)
-        if not (start_sh <= dt_sh < end_sh):
-            continue
-        usage = _ai_usage_from_entry(entry)
-        ai_prompt_tokens_today += int(usage.get("prompt_tokens", 0) or 0)
-        ai_completion_tokens_today += int(usage.get("completion_tokens", 0) or 0)
-        ai_total_tokens_today += int(usage.get("total_tokens", 0) or 0)
-
-    ai_cost_today = (ai_prompt_tokens_today / 1_000_000.0) * 2.0 + (ai_completion_tokens_today / 1_000_000.0) * 3.0
+    # AI token / cost usage (from dedicated ledger, more accurate than cache estimation)
+    usage_summary = summarize_ai_usage_for_date(start_sh.strftime("%Y-%m-%d"))
+    ai_prompt_tokens_today = int(usage_summary.get("prompt_tokens", 0) or 0)
+    ai_completion_tokens_today = int(usage_summary.get("completion_tokens", 0) or 0)
+    ai_total_tokens_today = int(usage_summary.get("total_tokens", 0) or 0)
+    ai_cost_today = float(usage_summary.get("total_cost_cny", 0.0) or 0.0)
 
     # Current quota consumption snapshot from users table
     users_all = db.query(models.User).all()
@@ -1577,6 +1649,26 @@ async def get_admin_config(authorized: bool = Depends(verify_admin)):
             "aliyun": "",
             "other": ""
         }
+    if 'ai_cost_config' not in config or not isinstance(config.get('ai_cost_config'), dict):
+        config['ai_cost_config'] = {
+            "default": {
+                "input_per_million_cny": 2.0,
+                "output_per_million_cny": 3.0,
+            },
+            "models": {
+                "deepseek-chat": {
+                    "provider": "deepseek",
+                    "input_per_million_cny": 2.0,
+                    "output_per_million_cny": 3.0,
+                }
+            },
+            "alert": {
+                "enabled": True,
+                "daily_threshold_cny": 100.0,
+                "step_cny": 100.0,
+                "cooldown_minutes": 60,
+            },
+        }
     provider_cfg = config.get('data_provider_config')
     if not isinstance(provider_cfg, dict):
         provider_cfg = {}
@@ -1626,6 +1718,9 @@ async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depe
     if config.api_keys is not None:
         SYSTEM_CONFIG["api_keys"] = _merge_dict(SYSTEM_CONFIG.get("api_keys"), config.api_keys)
 
+    if config.ai_cost_config is not None:
+        SYSTEM_CONFIG["ai_cost_config"] = _merge_dict(SYSTEM_CONFIG.get("ai_cost_config"), config.ai_cost_config)
+
     if config.data_provider_config is not None:
         merged_provider_cfg = _merge_dict(SYSTEM_CONFIG.get("data_provider_config"), config.data_provider_config)
         try:
@@ -1663,36 +1758,57 @@ async def update_admin_config(config: AdminConfigUpdate, authorized: bool = Depe
     return {"status": "success"}
 
 
+@router.post("/data/export/url")
+async def create_data_export_url(request: Request, authorized: bool = Depends(verify_admin)):
+    temp_zip, filename = _build_export_zip()
+    client_ip = (
+        str(request.headers.get("X-Forwarded-For", "") or "").split(",")[0].strip()
+        or (request.client.host if request.client else "")
+    )
+    ticket = secrets.token_urlsafe(24)
+    expires_ts = time.time() + EXPORT_TICKET_TTL_SECONDS
+    with _export_ticket_lock:
+        _cleanup_export_tickets_locked()
+        _export_tickets[ticket] = {
+            "file_path": str(temp_zip),
+            "filename": filename,
+            "expires_ts": float(expires_ts),
+            "ip": client_ip,
+            "created_at": datetime.utcnow().replace(microsecond=0).isoformat(),
+        }
+    rel = f"/api/admin/data/export/download?ticket={ticket}"
+    full_url = f"{str(request.base_url).rstrip('/')}{rel}"
+    add_runtime_log(
+        f"[后台] 已生成一次性数据导出链接: file={temp_zip.name}, expires_in={EXPORT_TICKET_TTL_SECONDS}s, ip={client_ip or '-'}"
+    )
+    return {
+        "status": "success",
+        "download_url": full_url,
+        "expires_in_seconds": EXPORT_TICKET_TTL_SECONDS,
+        "one_time": True,
+    }
+
+
 @router.get("/data/export")
-async def export_data_package(authorized: bool = Depends(verify_admin)):
-    if not DATA_DIR.exists():
-        raise HTTPException(status_code=404, detail="Data directory not found")
+async def export_data_package(request: Request, authorized: bool = Depends(verify_admin)):
+    # 兼容旧版前端：返回一次性下载地址（不再直接返回文件流）
+    return await create_data_export_url(request, authorized)
 
-    ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-    temp_zip = Path(tempfile.gettempdir()) / f"sniper_data_export_{ts}_{secrets.token_hex(4)}.zip"
 
-    try:
-        with zipfile.ZipFile(temp_zip, "w", compression=zipfile.ZIP_DEFLATED) as zf:
-            for file_path in DATA_DIR.rglob("*"):
-                if not file_path.is_file():
-                    continue
-                arc = str(file_path.relative_to(DATA_DIR)).replace("\\", "/")
-                zf.write(file_path, arcname=arc)
-    except Exception as e:
-        if temp_zip.exists():
-            try:
-                temp_zip.unlink()
-            except Exception:
-                pass
-        raise HTTPException(status_code=500, detail=f"Export failed: {e}")
-
-    add_runtime_log(f"[后台] 数据导出包已生成: {temp_zip.name}")
-    filename = f"sniper_data_export_{ts}.zip"
+@router.get("/data/export/download")
+async def download_export_with_ticket(ticket: str, request: Request):
+    client_ip = (
+        str(request.headers.get("X-Forwarded-For", "") or "").split(",")[0].strip()
+        or (request.client.host if request.client else "")
+    )
+    info = _consume_export_ticket(ticket=ticket, request_ip=client_ip)
+    file_path = Path(str(info.get("file_path", "")).strip())
+    filename = str(info.get("filename", "sniper_data_export.zip") or "sniper_data_export.zip")
     return FileResponse(
-        path=str(temp_zip),
+        path=str(file_path),
         media_type="application/zip",
         filename=filename,
-        background=BackgroundTask(lambda: temp_zip.unlink(missing_ok=True)),
+        background=BackgroundTask(lambda: file_path.unlink(missing_ok=True)),
     )
 
 
@@ -2562,19 +2678,29 @@ async def get_user_operation_logs(
 async def get_ai_cache_stats(limit: int = 100, authorized: bool = Depends(verify_admin)):
     safe_limit = max(20, min(int(limit or 100), 500))
     all_items = []
+    pricing_snapshot = get_ai_pricing_snapshot()
     for key, entry in ai_cache.cache.items():
         if not isinstance(entry, dict):
             continue
         usage = _ai_usage_from_entry(entry)
         prompt_tokens = usage["prompt_tokens"]
         completion_tokens = usage["completion_tokens"]
-        input_cost = (prompt_tokens / 1_000_000.0) * 2.0
-        output_cost = (completion_tokens / 1_000_000.0) * 3.0
+        meta = entry.get("meta", {}) if isinstance(entry.get("meta", {}), dict) else {}
+        provider = str(meta.get("provider", "deepseek") or "deepseek").strip()
+        model = str(meta.get("model", "deepseek-chat") or "deepseek-chat").strip()
+        item_cost = calculate_ai_cost_cny(
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
+            provider=provider,
+            model=model,
+        )
         all_items.append({
             "key": key,
             "timestamp": _safe_int(entry.get("timestamp", 0)),
             "usage": usage,
-            "cost_cny": round(input_cost + output_cost, 6),
+            "provider": provider,
+            "model": model,
+            "cost_cny": round(item_cost, 6),
             "preview": _preview_data(entry.get("data")),
         })
 
@@ -2583,20 +2709,20 @@ async def get_ai_cache_stats(limit: int = 100, authorized: bool = Depends(verify
 
     total_input_tokens = sum(x["usage"]["prompt_tokens"] for x in all_items)
     total_output_tokens = sum(x["usage"]["completion_tokens"] for x in all_items)
-    total_cost = (total_input_tokens / 1_000_000.0) * 2.0 + (total_output_tokens / 1_000_000.0) * 3.0
+    total_cost = sum(float(x.get("cost_cny", 0.0) or 0.0) for x in all_items)
+    today_text = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")
+    billing_today = summarize_ai_usage_for_date(today_text)
 
     return {
         "total_keys": len(ai_cache.cache),
         "visible_keys": len(recent_items),
-        "pricing": {
-            "input_per_million_cny": 2.0,
-            "output_per_million_cny": 3.0,
-        },
+        "pricing": pricing_snapshot,
         "totals": {
             "input_tokens": total_input_tokens,
             "output_tokens": total_output_tokens,
             "total_cost_cny": round(total_cost, 6),
         },
+        "billing_today": billing_today,
         "items": recent_items,
     }
 
@@ -2613,13 +2739,23 @@ async def get_ai_cache_item(key: str, authorized: bool = Depends(verify_admin)):
     usage = _ai_usage_from_entry(entry)
     prompt_tokens = usage["prompt_tokens"]
     completion_tokens = usage["completion_tokens"]
-    total_cost = (prompt_tokens / 1_000_000.0) * 2.0 + (completion_tokens / 1_000_000.0) * 3.0
+    meta = entry.get("meta", {}) if isinstance(entry.get("meta", {}), dict) else {}
+    provider = str(meta.get("provider", "deepseek") or "deepseek").strip()
+    model = str(meta.get("model", "deepseek-chat") or "deepseek-chat").strip()
+    total_cost = calculate_ai_cost_cny(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        provider=provider,
+        model=model,
+    )
 
     return {
         "key": cache_key,
         "timestamp": _safe_int(entry.get("timestamp", 0)),
         "meta": entry.get("meta", {}),
         "usage": usage,
+        "provider": provider,
+        "model": model,
         "cost_cny": round(total_cost, 6),
         "data": entry.get("data"),
     }
@@ -3168,4 +3304,6 @@ async def sync_lhb_missing(
         "message": "龙虎榜缺失交易日补数已启动。",
         "missing_dates": missing_dates,
     }
+
+
 
