@@ -1,4 +1,4 @@
-import akshare as ak
+﻿import akshare as ak
 import requests
 import pandas as pd
 import time
@@ -48,6 +48,12 @@ class DataProvider:
         self._biying_minute_state = {"minute": "", "count": 0}
         self._biying_quota_log_ts = 0.0
         self._biying_http_err_log_ts = 0.0
+        self._biying_next_retry_ts = 0.0
+        self._biying_fail_cooldown_base_sec = 1800
+        self._biying_fail_cooldown_sec = self._biying_fail_cooldown_base_sec
+        self._biying_fail_cooldown_max_sec = 43200
+        self._biying_fail_streak = 0
+        self._biying_cooldown_log_ts = 0.0
         self._biying_quote_cache = {}
         self._biying_quote_cache_ttl = 30
         self._biying_intraday_cache = {}
@@ -184,6 +190,58 @@ class DataProvider:
         except Exception:
             pass
 
+    def _sanitize_biying_license_key(self, raw_value):
+        key = str(raw_value or "").strip()
+        if not key:
+            return ""
+
+        prefixes = ("license", "licence", "证书", "您的")
+        changed = True
+        while changed and key:
+            changed = False
+            low = key.lower()
+            for p in prefixes:
+                if low.startswith(p):
+                    key = key[len(p):].strip(" :：")
+                    changed = True
+                    break
+        return key.strip()
+
+    def _mask_biying_url(self, url, license_key):
+        text = str(url or "")
+        key = str(license_key or "").strip()
+        if not key:
+            return text
+        if len(key) <= 8:
+            masked = "*" * len(key)
+        else:
+            masked = f"{key[:4]}***{key[-4:]}"
+        return text.replace(key, masked)
+
+    def _mark_biying_success(self):
+        if self._biying_fail_streak > 0:
+            upgraded_base = max(
+                int(self._biying_fail_cooldown_base_sec or 1800),
+                int(self._biying_fail_cooldown_sec or 1800),
+            )
+            self._biying_fail_cooldown_base_sec = min(upgraded_base, self._biying_fail_cooldown_max_sec)
+        self._biying_fail_streak = 0
+        self._biying_fail_cooldown_sec = self._biying_fail_cooldown_base_sec
+        self._biying_next_retry_ts = 0.0
+
+    def _mark_biying_failure(self):
+        if self._biying_fail_streak <= 0:
+            next_cooldown = self._biying_fail_cooldown_base_sec
+        else:
+            next_cooldown = min(
+                self._biying_fail_cooldown_sec * 2,
+                self._biying_fail_cooldown_max_sec,
+            )
+        self._biying_fail_streak += 1
+        self._biying_fail_cooldown_sec = int(next_cooldown)
+        self._biying_next_retry_ts = time.time() + self._biying_fail_cooldown_sec
+        return self._biying_fail_cooldown_sec
+
     def _get_biying_config(self):
         try:
             from app.core.config_manager import SYSTEM_CONFIG
@@ -192,9 +250,10 @@ class DataProvider:
                 minute_limit = int(cfg.get("biying_minute_limit", 3000) or 3000)
             except Exception:
                 minute_limit = 3000
+            key = self._sanitize_biying_license_key(cfg.get("biying_license_key", ""))
             return {
                 "enabled": bool(cfg.get("biying_enabled")),
-                "license_key": str(cfg.get("biying_license_key", "")).strip(),
+                "license_key": key,
                 "endpoint": str(cfg.get("biying_endpoint", "")).strip(),
                 "cert_path": str(cfg.get("biying_cert_path", "")).strip(),
                 "minute_limit": max(1, min(minute_limit, 100000)),
@@ -243,12 +302,20 @@ class DataProvider:
         cfg = self._get_biying_config()
         if not self._biying_enabled(cfg):
             return None
+        now_ts = time.time()
+        if now_ts < self._biying_next_retry_ts:
+            if now_ts - self._biying_cooldown_log_ts >= 60:
+                remain = int(max(0, self._biying_next_retry_ts - now_ts))
+                self.log(f"[*] 必盈通道冷却中（剩余{remain}s），跳过本次请求")
+                self._biying_cooldown_log_ts = now_ts
+            return None
         if not self._reserve_biying_quota(cfg, 1):
             return None
 
         base_url = self._biying_base_url(cfg).rstrip("/")
         req_path = "/" + str(path or "").lstrip("/")
         url = f"{base_url}{req_path}"
+        masked_url = self._mask_biying_url(url, cfg.get("license_key", ""))
         cert_value = None
         cert_path = str(cfg.get("cert_path", "")).strip()
         if cert_path:
@@ -273,22 +340,35 @@ class DataProvider:
                     request_kwargs["cert"] = cert_value
                 resp = self._call_provider("biying", lambda: session.get(url, **request_kwargs))
             if resp.status_code != 200:
-                now_ts = time.time()
+                cooldown = self._mark_biying_failure()
                 if now_ts - self._biying_http_err_log_ts >= 60:
-                    self.log(f"[!] 必盈接口返回异常状态码 {resp.status_code}: {url}")
+                    body = str((resp.text or "")).strip().replace("\n", " ")
+                    if len(body) > 220:
+                        body = body[:220] + "..."
+                    if body:
+                        self.log(f"[!] 必盈接口返回异常状态码 {resp.status_code}: {masked_url}，响应: {body}（进入通道冷却，{cooldown}s 后重试）")
+                    else:
+                        self.log(f"[!] 必盈接口返回异常状态码 {resp.status_code}: {masked_url}（进入通道冷却，{cooldown}s 后重试）")
                     self._biying_http_err_log_ts = now_ts
                 return None
             try:
-                return resp.json()
+                payload = resp.json()
             except Exception:
                 text = (resp.text or "").strip()
                 if not text:
+                    self._mark_biying_failure()
                     return None
-                return json.loads(text)
+                try:
+                    payload = json.loads(text)
+                except Exception:
+                    self._mark_biying_failure()
+                    return None
+            self._mark_biying_success()
+            return payload
         except Exception as e:
-            now_ts = time.time()
+            cooldown = self._mark_biying_failure()
             if now_ts - self._biying_http_err_log_ts >= 60:
-                self.log(f"[!] 必盈请求失败: {e}")
+                self.log(f"[!] 必盈请求失败: {e}（进入通道冷却，{cooldown}s 后重试）")
                 self._biying_http_err_log_ts = now_ts
             return None
 
@@ -1920,6 +2000,7 @@ class DataProvider:
 
 # Global instance
 data_provider = DataProvider()
+
 
 
 

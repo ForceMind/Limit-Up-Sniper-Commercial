@@ -59,7 +59,7 @@ KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
-SERVER_VERSION = "v2.6.2"
+SERVER_VERSION = "v2.6.3"
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
@@ -111,6 +111,7 @@ USER_OP_LOG_SKIP_PREFIXES = (
     "/api/auth/register",
     "/api/auth/apply_trial",
     "/api/auth/invite_info",
+    "/api/client/error_popup",
 )
 
 API_DEVICE_AUTH_EXEMPT_PATHS = {
@@ -550,17 +551,57 @@ def reload_watchlist_globals():
     WATCH_LIST = list(set(list(watchlist_map.keys()) + list(favorites_map.keys())))
 
 @app.get("/api/news_history")
-async def get_news_history(user: models.User = Depends(check_data_permission)):
+async def get_news_history(
+    since_ts: Optional[int] = None,
+    limit: int = 2000,
+    user: models.User = Depends(check_data_permission),
+):
     """获取新闻历史记录"""
     history_file = DATA_DIR / "news_history.json"
     if history_file.exists():
         try:
             with open(history_file, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                return {"status": "success", "data": data}
+                items = data if isinstance(data, list) else []
+                safe_limit = max(1, min(int(limit or 2000), 5000))
+                safe_since = int(since_ts or 0)
+
+                if safe_since > 0:
+                    filtered = []
+                    for row in items:
+                        if not isinstance(row, dict):
+                            continue
+                        ts = int(row.get("timestamp", 0) or 0)
+                        if ts > safe_since:
+                            filtered.append(row)
+                    filtered.sort(key=lambda x: int(x.get("timestamp", 0) or 0), reverse=True)
+                    filtered = filtered[:safe_limit]
+                    latest_ts = max([int(x.get("timestamp", 0) or 0) for x in items], default=0)
+                    return {
+                        "status": "success",
+                        "data": filtered,
+                        "latest_timestamp": int(latest_ts),
+                        "total": len(items),
+                        "delta": len(filtered),
+                    }
+
+                items_sorted = sorted(
+                    [x for x in items if isinstance(x, dict)],
+                    key=lambda x: int(x.get("timestamp", 0) or 0),
+                    reverse=True,
+                )
+                items_sorted = items_sorted[:safe_limit]
+                latest_ts = max([int(x.get("timestamp", 0) or 0) for x in items], default=0)
+                return {
+                    "status": "success",
+                    "data": items_sorted,
+                    "latest_timestamp": int(latest_ts),
+                    "total": len(items),
+                    "delta": len(items_sorted),
+                }
         except Exception as e:
             return {"status": "error", "message": str(e)}
-    return {"status": "success", "data": []}
+    return {"status": "success", "data": [], "latest_timestamp": 0, "total": 0, "delta": 0}
 
 # 全局变量
 watchlist_data = load_watchlist()
@@ -1221,6 +1262,12 @@ class FavoriteStatRequest(BaseModel):
     stock_name: str = ""
 
 
+class ClientErrorPopupRequest(BaseModel):
+    message: str
+    source: Optional[str] = ""
+    code: Optional[str] = ""
+
+
 @app.get("/api/favorites/quotes")
 async def api_favorite_quotes(codes: str = "", user: models.User = Depends(check_data_permission)):
     code_list = [normalize_stock_code(c) for c in codes.split(",") if c.strip()]
@@ -1256,8 +1303,63 @@ async def api_favorite_quotes(codes: str = "", user: models.User = Depends(check
         stock["is_favorite"] = True
         stock["strategy"] = "Manual"
         stock["news_summary"] = stock.get("news_summary") or "本地自选"
+        fav_meta = favorites_map.get(code) or {}
+        added_ts = 0
+        try:
+            added_ts = int(float(fav_meta.get("added_time", 0) or 0))
+        except Exception:
+            added_ts = 0
+        if added_ts <= 0:
+            added_at = str(fav_meta.get("added_at", "") or "").strip()
+            if added_at:
+                try:
+                    parsed_dt = datetime.strptime(added_at, "%Y-%m-%d %H:%M:%S")
+                    added_ts = int(parsed_dt.timestamp() * 1000)
+                except Exception:
+                    added_ts = 0
+        stock["added_time"] = added_ts
         enriched.append(stock)
     return enriched
+
+
+@app.post("/api/client/error_popup")
+async def report_client_error_popup(
+    payload: ClientErrorPopupRequest,
+    request: Request,
+    user: models.User = Depends(get_current_user),
+):
+    message = str(payload.message or "").strip()
+    if not message:
+        raise HTTPException(status_code=400, detail="Missing message")
+
+    source = str(payload.source or "").strip()
+    code = str(payload.code or "").strip()
+    device_id = str(user.device_id or "").strip()
+    username = account_store.get_username_by_device_id(device_id) or ""
+    actor = "guest" if device_id.startswith("guest") else "user"
+    client_ip = _client_ip_from_request(request)
+    device_info = _device_info_from_request(request)
+
+    log_user_operation(
+        "frontend_error_popup",
+        status="success",
+        actor=actor,
+        method="POST",
+        path="/api/client/error_popup",
+        detail=message[:280],
+        username=username,
+        device_id=device_id,
+        device_info=device_info,
+        ip=client_ip,
+        extra={
+            "source": source or "-",
+            "code": code or "-",
+        },
+    )
+    add_runtime_log(
+        f"[前端] 错误弹窗: user={username or '-'}, device={device_id or '-'}, source={source or '-'}, code={code or '-'}, msg={message[:80]}"
+    )
+    return {"status": "success"}
 
 
 @app.post("/api/watchlist/stat/add")
@@ -2482,15 +2584,23 @@ async def get_stock_kline(code: str, type: str = "1min", user: models.User = Dep
                 )
                 if df is not None and not df.empty:
                     return {"status": "success", "data": df.to_dict('records')}
+            return {"status": "success", "data": [], "message": "分时缓存暂无数据，请稍后重试"}
         elif type == "day":
             rows = get_day_kline_from_cache(clean_code)
+            if not rows:
+                try:
+                    await asyncio.to_thread(refresh_day_kline_cache_for_code, clean_code, False)
+                    rows = get_day_kline_from_cache(clean_code)
+                except Exception:
+                    rows = []
             if rows:
                 return {"status": "success", "data": rows}
+            return {"status": "success", "data": [], "message": "日K缓存暂无数据，请稍后重试"}
                 
     except Exception as e:
         return {"status": "error", "message": str(e)}
-    
-    return {"status": "error", "message": "No data found"}
+
+    return {"status": "success", "data": [], "message": "暂无K线数据"}
 
 @app.get("/api/stock/ai_markers")
 async def get_ai_markers(code: str, type: str = None, user: models.User = Depends(check_data_permission)):

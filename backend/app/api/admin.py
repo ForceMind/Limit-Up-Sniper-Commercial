@@ -2084,6 +2084,7 @@ async def list_data_files(
         "ai_usage_alert_state.json": "AI费用告警状态",
         "provider_test_logs.jsonl": "外网接口体检日志",
         "security_audit_logs.jsonl": "后台安全审计日志",
+        "email_send_logs.jsonl": "订单邮件发送进度日志",
         "user_operation_logs.jsonl": "用户操作日志",
         "runtime_logs.jsonl": "运行时日志",
         "system_metrics_baseline.json": "系统统计基线数据",
@@ -2522,9 +2523,18 @@ def _read_security_audit_logs(
     }
 
 
-def _read_provider_test_logs(page: int = 1, page_size: int = 10) -> Dict[str, Any]:
+def _read_provider_test_logs(
+    page: int = 1,
+    page_size: int = 10,
+    date_from: str = "",
+    date_to: str = "",
+    batch_keyword: str = "",
+) -> Dict[str, Any]:
     safe_page = max(1, int(page or 1))
     safe_size = max(1, min(int(page_size or 10), 100))
+    date_from_text = str(date_from or "").strip()
+    date_to_text = str(date_to or "").strip()
+    batch_kw = str(batch_keyword or "").strip().lower()
     if not PROVIDER_TEST_LOG_FILE.exists():
         return {
             "items": [],
@@ -2554,8 +2564,20 @@ def _read_provider_test_logs(page: int = 1, page_size: int = 10) -> Dict[str, An
             obj = json.loads(raw)
         except Exception:
             continue
-        if isinstance(obj, dict):
-            out.append(obj)
+        if not isinstance(obj, dict):
+            continue
+        if batch_kw:
+            test_id = str(obj.get("test_id", "")).strip().lower()
+            if batch_kw not in test_id:
+                continue
+        if date_from_text or date_to_text:
+            dt_sh = _as_shanghai_datetime(obj.get("time"), assume_utc_when_naive=False)
+            row_date = dt_sh.strftime("%Y-%m-%d") if dt_sh else str(obj.get("time", "")).strip()[:10]
+            if date_from_text and row_date and row_date < date_from_text:
+                continue
+            if date_to_text and row_date and row_date > date_to_text:
+                continue
+        out.append(obj)
     out.reverse()
     total = len(out)
     start = (safe_page - 1) * safe_size
@@ -3223,15 +3245,46 @@ async def run_provider_self_test(authorized: bool = Depends(verify_admin)):
 @router.get("/monitor/provider_test/logs")
 async def get_provider_self_test_logs(
     page: int = 1,
-    page_size: int = 10,
+    page_size: int = 1,
     limit: int = 0,
+    date_from: str = "",
+    date_to: str = "",
+    batch_keyword: str = "",
     authorized: bool = Depends(verify_admin),
 ):
+    date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    dfrom = str(date_from or "").strip()
+    dto = str(date_to or "").strip()
+    if dfrom and not date_re.match(dfrom):
+        raise HTTPException(status_code=400, detail="date_from format should be YYYY-MM-DD")
+    if dto and not date_re.match(dto):
+        raise HTTPException(status_code=400, detail="date_to format should be YYYY-MM-DD")
+
     if int(limit or 0) > 0:
-        data = _read_provider_test_logs(page=1, page_size=int(limit))
+        data = _read_provider_test_logs(
+            page=1,
+            page_size=int(limit),
+            date_from=dfrom,
+            date_to=dto,
+            batch_keyword=batch_keyword,
+        )
     else:
-        data = _read_provider_test_logs(page=page, page_size=page_size)
-    return {"status": "success", **data}
+        data = _read_provider_test_logs(
+            page=page,
+            page_size=page_size,
+            date_from=dfrom,
+            date_to=dto,
+            batch_keyword=batch_keyword,
+        )
+    return {
+        "status": "success",
+        "filters": {
+            "date_from": dfrom,
+            "date_to": dto,
+            "batch_keyword": str(batch_keyword or "").strip(),
+        },
+        **data,
+    }
 
 
 class AdminNewsDeleteRequest(BaseModel):
