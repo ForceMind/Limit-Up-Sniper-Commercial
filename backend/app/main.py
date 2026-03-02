@@ -2482,15 +2482,23 @@ async def get_stock_kline(code: str, type: str = "1min", user: models.User = Dep
                 )
                 if df is not None and not df.empty:
                     return {"status": "success", "data": df.to_dict('records')}
+            return {"status": "success", "data": [], "message": "分时缓存暂无数据，请稍后重试"}
         elif type == "day":
             rows = get_day_kline_from_cache(clean_code)
+            if not rows:
+                try:
+                    await asyncio.to_thread(refresh_day_kline_cache_for_code, clean_code, False)
+                    rows = get_day_kline_from_cache(clean_code)
+                except Exception:
+                    rows = []
             if rows:
                 return {"status": "success", "data": rows}
+            return {"status": "success", "data": [], "message": "日K缓存暂无数据，请稍后重试"}
                 
     except Exception as e:
         return {"status": "error", "message": str(e)}
-    
-    return {"status": "error", "message": "No data found"}
+
+    return {"status": "success", "data": [], "message": "暂无K线数据"}
 
 @app.get("/api/stock/ai_markers")
 async def get_ai_markers(code: str, type: str = None, user: models.User = Depends(check_data_permission)):

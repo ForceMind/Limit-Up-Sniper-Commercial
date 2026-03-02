@@ -966,7 +966,7 @@
                         <div class="flex flex-wrap items-center justify-between gap-3">
                             <div>
                                 <div class="text-lg font-bold">外网接口体检</div>
-                                <div class="text-xs text-gray-500">测试结果按批次分页展示，可在此追踪外网数据源可用性</div>
+                                <div class="text-xs text-gray-500">按批次时间倒序分页，默认每页 1 个批次，可按日期/批次号筛选</div>
                             </div>
                             <div class="flex items-center gap-2">
                                 <button @click="runProviderSelfTest" :disabled="providerTestRunning" class="px-3 py-1.5 rounded text-sm text-white disabled:opacity-60"
@@ -974,6 +974,18 @@
                                     {{ providerTestRunning ? '体检中...' : '测试一次所有接口' }}
                                 </button>
                             </div>
+                        </div>
+
+                        <div class="flex flex-wrap items-center gap-2 text-xs">
+                            <input type="date" v-model="providerTestFilter.date_from" class="border rounded px-2 py-1">
+                            <input type="date" v-model="providerTestFilter.date_to" class="border rounded px-2 py-1">
+                            <input type="text" v-model.trim="providerTestFilter.batch_keyword" @keyup.enter="fetchProviderTestLogs(1)" placeholder="批次号关键词" class="border rounded px-2 py-1 w-36">
+                            <select v-model.number="providerTestPagination.page_size" @change="fetchProviderTestLogs(1)" class="border rounded px-2 py-1">
+                                <option :value="1">每页1批次</option>
+                                <option :value="3">每页3批次</option>
+                                <option :value="6">每页6批次</option>
+                            </select>
+                            <button @click="fetchProviderTestLogs(1)" class="px-2 py-1 border rounded bg-blue-50 text-blue-700 hover:bg-blue-100">查询</button>
                         </div>
 
                         <div v-if="providerTestLogs.length === 0" class="text-sm text-gray-500 py-8 text-center border rounded">暂无体检日志</div>
@@ -1929,7 +1941,8 @@
                     overviewToday: {},
                     providerTestRunning: false,
                     providerTestLogs: [],
-                    providerTestPagination: { page: 1, page_size: 6, total: 0, total_pages: 1 },
+                    providerTestFilter: { date_from: '', date_to: '', batch_keyword: '' },
+                    providerTestPagination: { page: 1, page_size: 1, total: 0, total_pages: 1 },
                     overviewAutoRefreshTimer: null,
                     watchlistStats: [],
                     watchlistStatsStorage: 'backend/data/watchlist_stats.json',
@@ -2393,10 +2406,13 @@
                 async fetchProviderTestLogs(page = null) {
                     try {
                         const nextPage = Math.max(1, Number(page || this.providerTestPagination.page || 1));
-                        const pageSize = Math.max(1, Math.min(Number(this.providerTestPagination.page_size || 6), 50));
+                        const pageSize = Math.max(1, Math.min(Number(this.providerTestPagination.page_size || 1), 50));
                         const qs = new URLSearchParams({
                             page: String(nextPage),
-                            page_size: String(pageSize)
+                            page_size: String(pageSize),
+                            date_from: this.providerTestFilter.date_from || '',
+                            date_to: this.providerTestFilter.date_to || '',
+                            batch_keyword: this.providerTestFilter.batch_keyword || ''
                         }).toString();
                         const res = await fetch(API_BASE_URL + `/api/admin/monitor/provider_test/logs?${qs}`, { headers: this.getHeaders() });
                         if (res.status === 403) { this.clearAuth(true); return; }

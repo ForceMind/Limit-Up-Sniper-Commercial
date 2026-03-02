@@ -3825,18 +3825,41 @@
 
                         const data = await res.json();
                         if (data.status === 'success' && Array.isArray(data.data)) {
-                            this.renderChart(data.data);
+                            if (data.data.length > 0) {
+                                this.renderChart(data.data);
+                            } else {
+                                this.currentKlineData = [];
+                                this.renderNoDataChart(data.message || '暂无K线数据');
+                            }
                         } else {
-                            console.error(data.message || 'Invalid data format');
+                            this.currentKlineData = [];
+                            this.renderNoDataChart(data.message || 'K线数据异常');
                         }
                     } catch (e) {
-                        console.error(e);
+                        this.currentKlineData = [];
+                        this.renderNoDataChart('K线加载失败');
                     } finally {
                         if (this.showChartModal && this.currentStock.code === code) {
                             this.loadingChart = false;
                             if (this.chartInstance) this.chartInstance.hideLoading();
                         }
                     }
+                },
+                renderNoDataChart(message = '暂无K线数据') {
+                    if (!this.chartInstance || this.chartInstance.isDisposed()) return;
+                    this.chartInstance.clear();
+                    this.chartInstance.setOption({
+                        title: {
+                            text: String(message || '暂无K线数据'),
+                            left: 'center',
+                            top: 'center',
+                            textStyle: {
+                                color: '#9ca3af',
+                                fontSize: 14,
+                                fontWeight: 'normal'
+                            }
+                        }
+                    });
                 },
                 renderChart(data) {
                     if (!this.chartInstance || this.chartInstance.isDisposed()) return;
