@@ -59,7 +59,7 @@ KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
-SERVER_VERSION = "v2.5.8"
+SERVER_VERSION = "v2.5.9"
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
@@ -2103,7 +2103,18 @@ async def sync_lhb_data(background_tasks: BackgroundTasks, days: Optional[int] =
 
 @app.get("/api/lhb/status")
 async def get_lhb_status(user: models.User = Depends(check_data_permission)):
-    today_status = lhb_manager.get_today_sync_status()
+    now = datetime.now()
+    sync_time = lhb_manager._get_sync_time()
+    sync_dt = lhb_manager._get_sync_datetime_for_date(now.date())
+    before_sync_time = now < sync_dt
+    today_has_data = lhb_manager.has_data_for_today()
+    today_status = {
+        "today": now.strftime("%Y-%m-%d"),
+        "sync_time": sync_time,
+        "today_has_data": bool(today_has_data),
+        "before_sync_time": bool(before_sync_time),
+        "message": f"今日龙虎榜数据预计 {sync_time} 后同步，请稍后查看。" if (before_sync_time and not today_has_data) else "",
+    }
     return {
         "is_syncing": lhb_manager.is_syncing,
         "sync_time": today_status.get("sync_time", "18:00"),

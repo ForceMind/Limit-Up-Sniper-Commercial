@@ -36,7 +36,6 @@ from app.core.news_admin_store import (
 from datetime import datetime, timedelta, timezone
 from pydantic import BaseModel
 from zoneinfo import ZoneInfo
-from collections import deque
 import statistics
 
 router = APIRouter()
@@ -1817,13 +1816,85 @@ def _safe_data_path(rel_path: str) -> Path:
 
 
 @router.get("/data/files")
-async def list_data_files(authorized: bool = Depends(verify_admin)):
+async def list_data_files(
+    page: int = 1,
+    page_size: int = 80,
+    category: str = "all",
+    keyword: str = "",
+    authorized: bool = Depends(verify_admin),
+):
     files = []
     hidden_cache_dirs = {"kline_cache", "kline_day_cache"}
     folder_stats: Dict[str, Dict[str, Any]] = {}
+    safe_page = max(1, int(page or 1))
+    safe_size = max(10, min(int(page_size or 80), 200))
+    category_norm = str(category or "all").strip().lower()
+    if category_norm not in {"all", "config", "data"}:
+        raise HTTPException(status_code=400, detail="invalid category")
+    keyword_norm = str(keyword or "").strip().lower()
+
+    config_file_names = {
+        "config.json",
+        "lhb_config.json",
+        "admin_credentials.json",
+        "admin_panel_path.json",
+        "admin_sessions.json",
+        "pricing_config.json",
+    }
+    purpose_map = {
+        "commercial.db": "用户与订单主数据库",
+        "config.json": "系统主配置（调度、邮件、数据源、价格等）",
+        "lhb_config.json": "龙虎榜配置",
+        "user_accounts.json": "账号、设备与邀请码数据",
+        "referral_records.json": "邀请关系与奖励记录",
+        "watchlist.json": "选股池结果",
+        "watchlist_stats.json": "自选股统计",
+        "favorites.json": "用户自选股列表",
+        "provider_test_logs.jsonl": "外网接口体检日志",
+        "user_operation_logs.jsonl": "用户操作日志",
+        "runtime_logs.jsonl": "运行时日志",
+        "system_metrics_baseline.json": "系统统计基线数据",
+        "seat_mappings.json": "龙虎榜席位映射",
+        "vip_seats.json": "龙虎榜VIP席位",
+        "lhb_history.csv": "龙虎榜历史数据",
+    }
+
+    def classify_file(rel_str: str) -> str:
+        name = Path(rel_str).name.lower()
+        if name in config_file_names:
+            return "config"
+        if "config" in name or name.startswith("admin_"):
+            return "config"
+        return "data"
+
+    def file_purpose(rel_str: str) -> str:
+        name = Path(rel_str).name.lower()
+        if name in purpose_map:
+            return purpose_map[name]
+        if rel_str.startswith("news/"):
+            return "新闻缓存与AI分析结果"
+        if rel_str.startswith("kline_"):
+            return "K线缓存数据"
+        if name.endswith(".db"):
+            return "数据库文件"
+        if name.endswith(".json") or name.endswith(".jsonl"):
+            return "结构化数据文件"
+        if name.endswith(".csv"):
+            return "CSV数据文件"
+        return "业务数据文件"
 
     if not DATA_DIR.exists():
-        return {"files": files, "folders": []}
+        return {
+            "files": files,
+            "folders": [],
+            "summary": {"all": 0, "config": 0, "data": 0},
+            "page": safe_page,
+            "page_size": safe_size,
+            "total": 0,
+            "total_pages": 1,
+            "category": category_norm,
+            "keyword": keyword,
+        }
 
     for file_path in DATA_DIR.rglob("*"):
         if not file_path.is_file():
@@ -1849,10 +1920,32 @@ async def list_data_files(authorized: bool = Depends(verify_admin)):
                 "path": rel_str,
                 "size": int(stat.st_size),
                 "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                "category": classify_file(rel_str),
+                "purpose": file_purpose(rel_str),
             }
         )
 
     files.sort(key=lambda x: x["path"])
+    summary = {
+        "all": len(files),
+        "config": sum(1 for x in files if x.get("category") == "config"),
+        "data": sum(1 for x in files if x.get("category") == "data"),
+    }
+
+    if category_norm != "all":
+        files = [x for x in files if str(x.get("category", "")).lower() == category_norm]
+    if keyword_norm:
+        files = [
+            x
+            for x in files
+            if keyword_norm in str(x.get("path", "")).lower()
+            or keyword_norm in str(x.get("purpose", "")).lower()
+        ]
+
+    total = len(files)
+    start = (safe_page - 1) * safe_size
+    files = files[start:start + safe_size]
+
     folders = []
     for item in folder_stats.values():
         folders.append(
@@ -1866,7 +1959,17 @@ async def list_data_files(authorized: bool = Depends(verify_admin)):
             }
         )
     folders.sort(key=lambda x: x["path"])
-    return {"files": files, "folders": folders}
+    return {
+        "files": files,
+        "folders": folders,
+        "summary": summary,
+        "page": safe_page,
+        "page_size": safe_size,
+        "total": total,
+        "total_pages": max(1, (total + safe_size - 1) // safe_size),
+        "category": category_norm,
+        "keyword": keyword,
+    }
 
 
 @router.get("/data/file")
@@ -2067,11 +2170,18 @@ def _append_provider_test_log(entry: Dict[str, Any]):
         pass
 
 
-def _read_provider_test_logs(limit: int = 50) -> List[Dict[str, Any]]:
-    safe_limit = max(1, min(int(limit or 50), 500))
+def _read_provider_test_logs(page: int = 1, page_size: int = 10) -> Dict[str, Any]:
+    safe_page = max(1, int(page or 1))
+    safe_size = max(1, min(int(page_size or 10), 100))
     if not PROVIDER_TEST_LOG_FILE.exists():
-        return []
-    lines = deque(maxlen=safe_limit)
+        return {
+            "items": [],
+            "total": 0,
+            "page": safe_page,
+            "page_size": safe_size,
+            "total_pages": 1,
+        }
+    lines: List[str] = []
     try:
         with open(PROVIDER_TEST_LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
             for line in f:
@@ -2079,16 +2189,32 @@ def _read_provider_test_logs(limit: int = 50) -> List[Dict[str, Any]]:
                 if text:
                     lines.append(text)
     except Exception:
-        return []
+        return {
+            "items": [],
+            "total": 0,
+            "page": safe_page,
+            "page_size": safe_size,
+            "total_pages": 1,
+        }
     out: List[Dict[str, Any]] = []
-    for raw in reversed(lines):
+    for raw in lines:
         try:
             obj = json.loads(raw)
         except Exception:
             continue
         if isinstance(obj, dict):
             out.append(obj)
-    return out
+    out.reverse()
+    total = len(out)
+    start = (safe_page - 1) * safe_size
+    items = out[start:start + safe_size]
+    return {
+        "items": items,
+        "total": total,
+        "page": safe_page,
+        "page_size": safe_size,
+        "total_pages": max(1, (total + safe_size - 1) // safe_size),
+    }
 
 
 def _parse_any_datetime(value: Any) -> Optional[datetime]:
@@ -2614,9 +2740,17 @@ async def run_provider_self_test(authorized: bool = Depends(verify_admin)):
     return {"status": "success", "record": record}
 
 @router.get("/monitor/provider_test/logs")
-async def get_provider_self_test_logs(limit: int = 30, authorized: bool = Depends(verify_admin)):
-    logs = _read_provider_test_logs(limit=limit)
-    return {"status": "success", "items": logs}
+async def get_provider_self_test_logs(
+    page: int = 1,
+    page_size: int = 10,
+    limit: int = 0,
+    authorized: bool = Depends(verify_admin),
+):
+    if int(limit or 0) > 0:
+        data = _read_provider_test_logs(page=1, page_size=int(limit))
+    else:
+        data = _read_provider_test_logs(page=page, page_size=page_size)
+    return {"status": "success", **data}
 
 
 class AdminNewsDeleteRequest(BaseModel):
