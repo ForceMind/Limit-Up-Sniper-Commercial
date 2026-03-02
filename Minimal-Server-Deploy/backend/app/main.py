@@ -59,7 +59,7 @@ KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
-SERVER_VERSION = "v2.6.1"
+SERVER_VERSION = "v2.6.2"
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
@@ -659,11 +659,16 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
     day_kline_attempt_ts[clean_code] = now_ts
 
     try:
+        biying_cfg = data_provider._get_biying_config()
+        biying_enabled = data_provider._biying_enabled(biying_cfg)
         biying_rows = data_provider.fetch_day_kline_history(clean_code, days=365)
         if biying_rows:
             with open(cache_path, "w", encoding="utf-8") as f:
                 json.dump(biying_rows, f, ensure_ascii=False)
             day_kline_refresh_ts[clean_code] = now_ts
+            return
+        if biying_enabled:
+            # If Biying is enabled, do not fall back to AKShare to avoid anti-crawl pressure.
             return
 
         import akshare as ak
@@ -2356,7 +2361,4 @@ async def get_ai_markers(code: str, type: str = None, user: models.User = Depend
 # Must be last to not override API routes
 if FRONTEND_DIR.exists():
     app.mount("/", StaticFiles(directory=str(FRONTEND_DIR), html=True), name="static")
-
-
-
 

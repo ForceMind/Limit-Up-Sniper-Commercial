@@ -20,6 +20,7 @@ DATA_DIR.mkdir(exist_ok=True)
 KLINE_DIR.mkdir(exist_ok=True)
 
 from app.core.profile_builder import build_profiles
+from app.core.data_provider import data_provider
 
 class LHBManager:
     def __init__(self):
@@ -607,6 +608,82 @@ class LHBManager:
             json.dump(vip_seats, f, ensure_ascii=False, indent=2)
         self.load_vip_seats()
 
+    def _is_biying_kline_enabled(self) -> bool:
+        try:
+            cfg = data_provider._get_biying_config()
+            return bool(data_provider._biying_enabled(cfg))
+        except Exception:
+            return False
+
+    def _fetch_kline_via_biying_5min(self, code: str, date_str: str, is_today: bool = False):
+        try:
+            cfg = data_provider._get_biying_config()
+            if not data_provider._biying_enabled(cfg):
+                return None
+
+            clean_code = "".join(filter(str.isdigit, str(code or "")))
+            if len(clean_code) != 6:
+                return None
+            symbol = data_provider._normalize_biying_symbol(clean_code)
+            if not symbol:
+                return None
+
+            date_compact = str(date_str or "").replace("-", "")
+            payload = data_provider._biying_request_json(
+                f"/hsstock/history/{symbol}/5/n/{cfg['license_key']}",
+                params={"st": date_compact, "et": date_compact, "lt": 360},
+                timeout=8,
+            )
+            rows = data_provider._parse_biying_kline_rows(payload) or []
+
+            if (not rows) and is_today:
+                payload = data_provider._biying_request_json(
+                    f"/hsstock/latest/{symbol}/5/n/{cfg['license_key']}",
+                    params={"lt": 120},
+                    timeout=8,
+                )
+                rows = data_provider._parse_biying_kline_rows(payload) or []
+
+            if not rows:
+                return None
+
+            selected = []
+            for row in rows:
+                row_date = str(row.get("date", "") or "")[:10]
+                if row_date == date_str:
+                    selected.append(row)
+            if not selected and is_today:
+                selected = rows
+            if not selected:
+                return None
+
+            def _f(v):
+                try:
+                    return float(v or 0)
+                except Exception:
+                    return 0.0
+
+            out = []
+            for row in selected:
+                out.append({
+                    "时间": str(row.get("time", "") or ""),
+                    "开盘": _f(row.get("open", 0)),
+                    "收盘": _f(row.get("close", 0)),
+                    "最高": _f(row.get("high", 0)),
+                    "最低": _f(row.get("low", 0)),
+                    "成交量": _f(row.get("volume", 0)),
+                    "成交额": _f(row.get("amount", 0)),
+                })
+
+            kdf = pd.DataFrame(out)
+            if kdf.empty:
+                return None
+            if "时间" in kdf.columns:
+                kdf = kdf.sort_values("时间").reset_index(drop=True)
+            return kdf
+        except Exception:
+            return None
+
     def download_kline_data(self, df, logger=None):
         """
         Download 1-min K-line data for the specific date and stock
@@ -617,6 +694,7 @@ class LHBManager:
         tasks = df[['stock_code', 'trade_date']].drop_duplicates()
         
         if logger: logger(f"[龙虎榜] 正在同步 {len(tasks)} 个 K线数据文件...")
+        biying_enabled = self._is_biying_kline_enabled()
         
         for _, row in tasks.iterrows():
             code = str(row['stock_code']).zfill(6)
@@ -626,6 +704,20 @@ class LHBManager:
             file_path = KLINE_DIR / file_name
             
             if file_path.exists(): continue
+
+            if biying_enabled:
+                try:
+                    biying_df = self._fetch_kline_via_biying_5min(
+                        code,
+                        date_str,
+                        date_str == datetime.now().strftime("%Y-%m-%d"),
+                    )
+                    if biying_df is not None and not biying_df.empty:
+                        biying_df.to_csv(file_path, index=False)
+                    # 必盈启用时，不回退 AKShare，避免触发反爬。
+                    continue
+                except Exception:
+                    continue
             
             try:
                 # akshare: stock_zh_a_minute
@@ -729,11 +821,14 @@ class LHBManager:
         return int(max(0, self._kline_pause_until_ts - now_ts))
 
     def get_kline_1min(self, code, date_str, min_refresh_seconds=600, allow_network=True):
-        file_path = KLINE_DIR / f"{code}_{date_str}.csv"
+        clean_code = "".join(filter(str.isdigit, str(code or "")))
+        if len(clean_code) != 6:
+            return None
+        file_path = KLINE_DIR / f"{clean_code}_{date_str}.csv"
         
         # If it's today, we always fetch fresh data to ensure we have the latest minutes
         is_today = date_str == datetime.now().strftime('%Y-%m-%d')
-        cache_key = f"{''.join(filter(str.isdigit, str(code)))}_{date_str}"
+        cache_key = f"{clean_code}_{date_str}"
         now_ts = time.time()
         cached_df = None
         
@@ -767,10 +862,28 @@ class LHBManager:
                 return cached_df
             return None
              
-        # Try to fetch if missing or if it's today
+        self._kline_last_attempt_ts[cache_key] = now_ts
+
+        # 优先使用必盈分时；启用必盈时不回退 AKShare，避免触发反爬。
+        biying_enabled = self._is_biying_kline_enabled()
+        if biying_enabled:
+            try:
+                biying_df = self._fetch_kline_via_biying_5min(clean_code, date_str, is_today)
+                if biying_df is not None and not biying_df.empty:
+                    biying_df.to_csv(file_path, index=False)
+                    self._kline_last_fetch_ts[cache_key] = now_ts
+                    self._kline_fail_window_count = 0
+                    self._kline_fail_window_start = now_ts
+                    return biying_df
+            except Exception as e:
+                self._log_kline_fetch_error(code, e)
+
+            if cached_df is not None and not cached_df.empty:
+                return cached_df
+            return None
+
+        # 必盈未启用时才使用 AKShare
         try:
-            self._kline_last_attempt_ts[cache_key] = now_ts
-            # Format date for akshare
             start_point = datetime.strptime(date_str + " 09:00:00", "%Y-%m-%d %H:%M:%S")
             end_point = datetime.strptime(date_str + " 15:00:00", "%Y-%m-%d %H:%M:%S")
             if is_today:
@@ -781,13 +894,10 @@ class LHBManager:
                     end_point = start_point
             start_dt = start_point.strftime("%Y-%m-%d %H:%M:%S")
             end_dt = end_point.strftime("%Y-%m-%d %H:%M:%S")
-            
-            # Remove non-digits from code just in case
-            clean_code = "".join(filter(str.isdigit, str(code)))
-            
+
             self._throttle_akshare_request()
             kline = ak.stock_zh_a_hist_min_em(symbol=clean_code, start_date=start_dt, end_date=end_dt, period="1", adjust="qfq")
-            
+
             if kline is not None and not kline.empty:
                 kline.to_csv(file_path, index=False)
                 self._kline_last_fetch_ts[cache_key] = now_ts
