@@ -90,10 +90,10 @@
                             <div class="text-xs text-gray-500 mt-2">已完成金额 ¥{{ Number((overviewToday.orders || {}).amount_completed || 0).toFixed(2) }}</div>
                         </div>
                         <div class="bg-white border rounded p-4">
-                            <div class="text-xs text-gray-500">今日登录</div>
-                            <div class="text-2xl font-bold mt-1">{{ (overviewToday.logins || {}).user_login_success || 0 }}</div>
-                            <div class="text-xs text-gray-500 mt-2">唯一设备 {{ (overviewToday.logins || {}).unique_user_devices || 0 }}</div>
-                            <div class="text-xs text-gray-500">管理员登录 {{ (overviewToday.logins || {}).admin_login_success || 0 }}</div>
+                            <div class="text-xs text-gray-500">今日在线</div>
+                            <div class="text-2xl font-bold mt-1">{{ (overviewToday.online || {}).active_devices_today || 0 }}</div>
+                            <div class="text-xs text-gray-500 mt-2">注册用户 {{ (overviewToday.online || {}).active_registered_users_today || 0 }} · 游客设备 {{ (overviewToday.online || {}).active_guest_devices_today || 0 }}</div>
+                            <div class="text-xs text-gray-500">登录接口 {{ (overviewToday.logins || {}).user_login_success || 0 }} · 管理员登录 {{ (overviewToday.logins || {}).admin_login_success || 0 }}</div>
                         </div>
                     </div>
 
@@ -131,6 +131,9 @@
                         </div>
                         <div class="bg-white border rounded p-4">
                             <div class="text-xs text-gray-500">带宽与流量</div>
+                            <div class="text-sm mt-2">当前总带宽 <span class="font-bold">{{ formatSpeed((((overviewToday.runtime || {}).network || {}).total_bps_current || 0)) }}</span></div>
+                            <div class="text-xs text-gray-500">下行 {{ formatSpeed((((overviewToday.runtime || {}).network || {}).rx_bps_current || 0)) }} · 上行 {{ formatSpeed((((overviewToday.runtime || {}).network || {}).tx_bps_current || 0)) }}</div>
+                            <div class="text-xs text-gray-500 mt-2">今日平均 {{ formatSpeed((((overviewToday.runtime || {}).network || {}).total_bps_today_avg || 0)) }}</div>
                             <div class="text-sm mt-2">今日总流量 <span class="font-bold">{{ formatBytes((((overviewToday.runtime || {}).network || {}).total_bytes_today || 0)) }}</span></div>
                             <div class="text-xs text-gray-500">下行 {{ formatBytes((((overviewToday.runtime || {}).network || {}).rx_bytes_today || 0)) }} · 上行 {{ formatBytes((((overviewToday.runtime || {}).network || {}).tx_bytes_today || 0)) }}</div>
                             <div class="text-xs text-gray-500 mt-2">累计总流量 {{ formatBytes((((overviewToday.runtime || {}).network || {}).total_bytes_total || 0)) }}</div>
@@ -143,9 +146,11 @@
                         </div>
                         <div class="bg-white border rounded p-4">
                             <div class="text-xs text-gray-500">AI 使用量</div>
-                            <div class="text-2xl font-bold mt-1">{{ ((overviewToday.ai_usage || {}).daily_ai_quota_used_total || 0) }}</div>
-                            <div class="text-xs text-gray-500 mt-2">用户AI计数累计</div>
-                            <div class="text-xs text-gray-500">今日AI接口调用 {{ ((overviewToday.api_usage || {}).ai_calls_today || 0) }}</div>
+                            <div class="text-2xl font-bold mt-1">{{ ((overviewToday.ai_usage || {}).user_quota_total_today || 0) }}</div>
+                            <div class="text-xs text-gray-500 mt-2">缓存命中 {{ ((overviewToday.ai_usage || {}).user_cached_quota_today || 0) }} · 真实调用 {{ ((overviewToday.ai_usage || {}).user_real_quota_today || 0) }} · 其他 {{ ((overviewToday.ai_usage || {}).user_other_quota_today || 0) }}</div>
+                            <div class="text-xs text-gray-500">系统自动真实调用 {{ ((overviewToday.ai_usage || {}).system_real_calls_today || 0) }}</div>
+                            <div class="text-xs text-gray-500 mt-2">用户功能：{{ formatAiFeatureBreakdown(((overviewToday.ai_usage || {}).user_feature_breakdown || []), true) }}</div>
+                            <div class="text-xs text-gray-500">系统功能：{{ formatAiFeatureBreakdown(((overviewToday.ai_usage || {}).system_feature_breakdown || []), false) }}</div>
                         </div>
                         <div class="bg-white border rounded p-4">
                             <div class="text-xs text-gray-500">Token 与成本</div>
@@ -2500,6 +2505,28 @@
                 },
                 formatBytes(size) {
                     return this.formatFileSize(size);
+                },
+                formatSpeed(bytesPerSec) {
+                    const n = Number(bytesPerSec || 0);
+                    if (!Number.isFinite(n) || n <= 0) return '0 B/s';
+                    return `${this.formatFileSize(n)}/s`;
+                },
+                formatAiFeatureBreakdown(items, includeCache = false) {
+                    if (!Array.isArray(items) || items.length === 0) return '-';
+                    const parts = [];
+                    for (const raw of items) {
+                        const item = raw || {};
+                        const name = String(item.feature || item.name || item.source || '').trim() || '未分类';
+                        const total = Number(item.total || item.count || 0);
+                        if (includeCache) {
+                            const cached = Number(item.cached || 0);
+                            const real = Number(item.real || 0);
+                            parts.push(`${name} ${total}(缓存${cached}/真实${real})`);
+                        } else {
+                            parts.push(`${name} ${total}`);
+                        }
+                    }
+                    return parts.slice(0, 4).join(' · ');
                 },
                 formatPercent(value, digits = 2) {
                     const n = Number(value || 0);

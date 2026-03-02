@@ -119,6 +119,9 @@ API_DEVICE_AUTH_EXEMPT_PATHS = {
     "/api/auth/login_user",
     "/api/admin/login",
 }
+PRESENCE_HEARTBEAT_SECONDS = 15 * 60
+_presence_last_logged: dict = {}
+_presence_lock = threading.Lock()
 
 
 def _client_ip_from_request(request: Request) -> str:
@@ -220,6 +223,100 @@ def _resolve_actor(path: str, request: Request) -> str:
     return "anonymous"
 
 
+def _maybe_log_online_presence(
+    request: Request,
+    *,
+    status_code: int,
+    username: str,
+    device_id: str,
+    device_info: str,
+    client_ip: str,
+) -> None:
+    path = request.url.path
+    if not path.startswith("/api/"):
+        return
+    if path.startswith("/api/admin/"):
+        return
+    if int(status_code or 0) >= 400:
+        return
+
+    actor = _resolve_actor(path, request)
+    if actor == "admin":
+        return
+
+    key = str(device_id or "").strip() or f"user:{str(username or '').strip()}"
+    if not key or key == "user:":
+        return
+
+    now_ts = time.time()
+    should_log = False
+    with _presence_lock:
+        last_ts = float(_presence_last_logged.get(key, 0) or 0)
+        if now_ts - last_ts >= PRESENCE_HEARTBEAT_SECONDS:
+            _presence_last_logged[key] = now_ts
+            should_log = True
+    if not should_log:
+        return
+
+    log_user_operation(
+        "online_presence",
+        status="success",
+        actor=actor,
+        method=request.method,
+        path=path,
+        ip=client_ip,
+        username=username,
+        device_id=device_id,
+        device_info=device_info,
+        detail="在线心跳",
+    )
+
+
+def _safe_bool_text(value: Optional[bool]) -> str:
+    if value is True:
+        return "true"
+    if value is False:
+        return "false"
+    return "unknown"
+
+
+def _log_ai_quota_event(
+    request: Request,
+    user: models.User,
+    *,
+    feature: str,
+    source: str,
+    cached: Optional[bool],
+    real_call: Optional[bool],
+    extra: Optional[dict] = None,
+) -> None:
+    payload = {
+        "feature": str(feature or "").strip() or "未分类",
+        "source": str(source or "").strip() or "-",
+        "cached": _safe_bool_text(cached),
+        "real_call": _safe_bool_text(real_call),
+    }
+    if isinstance(extra, dict):
+        for k, v in extra.items():
+            payload[str(k)] = v
+    try:
+        log_user_operation(
+            "ai_quota_consume",
+            status="success",
+            actor="user",
+            method=request.method,
+            path=request.url.path,
+            username=str(getattr(user, "username", "") or ""),
+            device_id=str(getattr(user, "device_id", "") or (request.headers.get("X-Device-ID") or "").strip()),
+            device_info=_device_info_from_request(request),
+            ip=_client_ip_from_request(request),
+            detail=f"feature={payload.get('feature')} cached={payload.get('cached')} real_call={payload.get('real_call')}",
+            extra=payload,
+        )
+    except Exception:
+        pass
+
+
 @app.middleware("http")
 async def admin_panel_custom_path_guard(request: Request, call_next):
     path = request.url.path
@@ -305,6 +402,17 @@ async def user_operation_logger(request: Request, call_next):
             detail=f"status_code={status_code}, latency_ms={latency_ms}",
             extra={"status_code": status_code, "latency_ms": latency_ms},
         )
+    else:
+        status_code = int(getattr(response, "status_code", 0) or 0)
+
+    _maybe_log_online_presence(
+        request,
+        status_code=status_code,
+        username=username,
+        device_id=device_id,
+        device_info=device_info,
+        client_ip=client_ip,
+    )
 
     return response
 
@@ -2032,17 +2140,36 @@ class StockAnalysisRequest(BaseModel):
     apiKey: Optional[str] = None # Optional API Key for standalone mode
 
 @app.post("/api/analyze_stock")
-async def api_analyze_stock(request: StockAnalysisRequest, user: models.User = Depends(get_current_user), db = Depends(lambda: next(database.get_db()))):
+async def api_analyze_stock(
+    request: StockAnalysisRequest,
+    http_request: Request,
+    user: models.User = Depends(get_current_user),
+    db = Depends(lambda: next(database.get_db())),
+):
     """
     调用 AI 分析单个股票（支持缓存）
     """
     await check_ai_permission(user)
-    user_service.consume_quota(db, user, 'ai')
     stock_data = request.dict()
     api_key = stock_data.get('apiKey')
     code = stock_data.get('code')
     force = stock_data.get('force', False)
     prompt_type = request.promptType
+
+    def _consume_and_log(cached: Optional[bool], real_call: Optional[bool]):
+        user_service.consume_quota(db, user, 'ai')
+        _log_ai_quota_event(
+            http_request,
+            user,
+            feature="个股AI分析",
+            source="single_stock",
+            cached=cached,
+            real_call=real_call,
+            extra={
+                "code": str(code or ""),
+                "prompt_type": str(prompt_type or ""),
+            },
+        )
 
     # Construct composite cache key
     cache_key = f"{code}_{prompt_type}"
@@ -2050,6 +2177,7 @@ async def api_analyze_stock(request: StockAnalysisRequest, user: models.User = D
     # Fast path: return cache if valid.
     cached_content = _get_valid_analysis_content(cache_key, prompt_type, force=force)
     if cached_content is not None:
+        _consume_and_log(cached=True, real_call=False)
         return {"status": "success", "analysis": cached_content, "cached": True}
 
     # Single-flight guard for high concurrency: one cache key => one live AI request.
@@ -2057,8 +2185,10 @@ async def api_analyze_stock(request: StockAnalysisRequest, user: models.User = D
     async with analysis_lock:
         cached_content = _get_valid_analysis_content(cache_key, prompt_type, force=force)
         if cached_content is not None:
+            _consume_and_log(cached=True, real_call=False)
             return {"status": "success", "analysis": cached_content, "cached": True}
 
+        _consume_and_log(cached=False, real_call=True)
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
             None,
@@ -2163,18 +2293,42 @@ class LHBAnalyzeRequest(BaseModel):
 
 @app.post("/api/lhb/analyze")
 @app.post("/api/lhb/analyze_daily")
-async def analyze_lhb_daily_api(req: LHBAnalyzeRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def analyze_lhb_daily_api(
+    req: LHBAnalyzeRequest,
+    http_request: Request,
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     # Run in thread pool
     # 深度复盘仍需高级权限，但消耗 AI 次数
     await check_review_permission(user, skip_quota=True)
     await check_ai_permission(user)
+    cache_key = f"lhb_daily_analysis_{req.date}"
+    cached_result = None
+    if not req.force:
+        cached_result = ai_cache.get(cache_key)
     user_service.consume_quota(db, user, 'ai')
+    _log_ai_quota_event(
+        http_request,
+        user,
+        feature="龙虎榜AI复盘",
+        source="lhb_daily_review",
+        cached=bool(cached_result),
+        real_call=False if cached_result else True,
+        extra={
+            "date": str(req.date or ""),
+            "force": bool(req.force),
+        },
+    )
+
+    if cached_result:
+        return {"status": "ok", "result": cached_result, "analysis": cached_result, "cached": True}
     
     loop = asyncio.get_event_loop()
     # Fetch data first
     data = lhb_manager.get_daily_data(req.date)
     result = await loop.run_in_executor(None, lambda: analyze_daily_lhb(req.date, data, force_update=req.force))
-    return {"status": "ok", "result": result, "analysis": result}
+    return {"status": "ok", "result": result, "analysis": result, "cached": False}
 
 @app.get("/api/lhb/analysis")
 async def get_lhb_analysis_api(date: str, user: models.User = Depends(get_current_user)):
@@ -2244,27 +2398,57 @@ async def fetch_lhb_data(background_tasks: BackgroundTasks, user: models.User = 
 
 @app.post("/api/analyze/stock")
 @app.post("/api/stock/analyze")
-async def analyze_stock_manual(request: AnalyzeRequest, user: models.User = Depends(get_current_user), db: Session = Depends(get_db)):
+async def analyze_stock_manual(
+    req: AnalyzeRequest,
+    http_request: Request,
+    user: models.User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """手动触发个股 AI 分析"""
+    cache_key = f"stock_analysis_{req.code}_{req.promptType}"
+    cached_hit = False
+    if not req.force:
+        try:
+            last_ts = int(ai_cache.get_timestamp(cache_key) or 0)
+            if last_ts > 0:
+                elapsed = int(time.time()) - last_ts
+                if elapsed < 600 and ai_cache.get(cache_key):
+                    cached_hit = True
+        except Exception:
+            cached_hit = False
+
     # 扣除次数
     await check_ai_permission(user)
     user_service.consume_quota(db, user, 'ai')
+    _log_ai_quota_event(
+        http_request,
+        user,
+        feature="个股手动分析",
+        source="single_stock",
+        cached=cached_hit,
+        real_call=False if cached_hit else True,
+        extra={
+            "code": str(req.code or ""),
+            "prompt_type": str(req.promptType or ""),
+            "force": bool(req.force),
+        },
+    )
     
     stock_data = {
-        "code": request.code,
-        "name": request.name,
-        "promptType": request.promptType,
+        "code": req.code,
+        "name": req.name,
+        "promptType": req.promptType,
         "current": 0,
         "change_percent": 0,
-        "turnover": request.turnover,
-        "circulation_value": request.circulation_value,
-        "kline_data": request.kline_data
+        "turnover": req.turnover,
+        "circulation_value": req.circulation_value,
+        "kline_data": req.kline_data
     }
     
     try:
         # If turnover/circ_mv missing, fill from in-memory quote cache only.
         if stock_data['turnover'] is None or stock_data['circulation_value'] is None:
-            clean_req_code = "".join(filter(str.isdigit, request.code))
+            clean_req_code = "".join(filter(str.isdigit, req.code))
             for row in _get_stock_quotes_cache():
                 row_code = str(row.get("code", ""))
                 clean_row_code = "".join(filter(str.isdigit, row_code))
@@ -2279,7 +2463,7 @@ async def analyze_stock_manual(request: AnalyzeRequest, user: models.User = Depe
     except:
         pass
 
-    result = analyze_single_stock(stock_data, force_update=request.force)
+    result = analyze_single_stock(stock_data, force_update=req.force)
     return {"status": "success", "result": result}
 
 @app.get("/api/stock/kline")

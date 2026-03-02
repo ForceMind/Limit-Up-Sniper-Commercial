@@ -1444,11 +1444,8 @@ async def get_today_overview(
         elif status in {"rejected", "cancelled"}:
             orders_rejected += 1
 
-    # Login and operation summary
-    login_success_count = 0
-    admin_login_count = 0
-    unique_login_devices = set()
-    user_op_count = 0
+    # User operations for today (single pass over logs)
+    today_ops: List[Tuple[Dict[str, Any], datetime]] = []
     for row in _iter_user_operation_logs():
         dt_sh = _as_shanghai_datetime(row.get("time"), assume_utc_when_naive=False)
         if not dt_sh:
@@ -1457,11 +1454,41 @@ async def get_today_overview(
             break
         if dt_sh >= end_sh:
             continue
+        today_ops.append((row, dt_sh))
 
-        user_op_count += 1
+    login_success_count = 0
+    admin_login_count = 0
+    unique_login_devices = set()
+    user_op_count = len(today_ops)
+
+    api_calls_today = 0
+    api_failed_today = 0
+    api_unique_devices = set()
+    ai_api_calls_today = 0
+
+    online_devices_today = set()
+    online_registered_users_today = set()
+    online_guest_devices_today = set()
+    online_recent_devices = set()
+    now_ts = now_sh.timestamp()
+    registered_usernames = {str(x).strip() for x in accounts.keys() if str(x).strip()}
+
+    user_ai_quota_total_today = 0
+    user_ai_quota_cached_today = 0
+    user_ai_quota_real_today = 0
+    user_ai_quota_other_today = 0
+    user_ai_feature_counters: Dict[str, Dict[str, Any]] = {}
+    user_ai_real_source_counters: Dict[str, int] = {}
+
+    for row, dt_sh in today_ops:
         action = str(row.get("action", "")).strip().lower()
         status = str(row.get("status", "")).strip().lower()
         did = str(row.get("device_id", "")).strip()
+        path = str(row.get("path", "")).strip()
+        actor = str(row.get("actor", "")).strip().lower()
+        username = str(row.get("username", "")).strip()
+        extra = row.get("extra", {})
+        extra_map = extra if isinstance(extra, dict) else {}
 
         if status == "success" and action == "user_login":
             login_success_count += 1
@@ -1469,6 +1496,53 @@ async def get_today_overview(
                 unique_login_devices.add(did)
         elif status == "success" and action == "admin_login":
             admin_login_count += 1
+
+        if action == "api_call" and path.startswith("/api/"):
+            api_calls_today += 1
+            if status != "success":
+                api_failed_today += 1
+            if did:
+                api_unique_devices.add(did)
+
+        if action in {"api_call", "online_presence"} and path.startswith("/api/") and status == "success":
+            if did:
+                online_devices_today.add(did)
+                if now_ts - dt_sh.timestamp() <= 300:
+                    online_recent_devices.add(did)
+            registered_name = ""
+            if username and username in registered_usernames:
+                registered_name = username
+            elif did and did in registered_devices:
+                registered_name = str(device_to_username.get(did, "")).strip()
+            if registered_name:
+                online_registered_users_today.add(registered_name)
+            elif did and actor != "admin":
+                online_guest_devices_today.add(did)
+
+        if action == "ai_quota_consume" and status == "success":
+            ai_api_calls_today += 1
+            user_ai_quota_total_today += 1
+            feature = str(extra_map.get("feature", "")).strip() or "未分类"
+            source = str(extra_map.get("source", "")).strip() or "-"
+            cached_flag = _parse_bool_text(extra_map.get("cached"))
+            real_call_flag = _parse_bool_text(extra_map.get("real_call"))
+
+            counter = user_ai_feature_counters.setdefault(
+                feature,
+                {"feature": feature, "total": 0, "cached": 0, "real": 0, "other": 0},
+            )
+            counter["total"] += 1
+
+            if cached_flag is True:
+                user_ai_quota_cached_today += 1
+                counter["cached"] += 1
+            elif real_call_flag is True:
+                user_ai_quota_real_today += 1
+                counter["real"] += 1
+                user_ai_real_source_counters[source] = int(user_ai_real_source_counters.get(source, 0) or 0) + 1
+            else:
+                user_ai_quota_other_today += 1
+                counter["other"] += 1
 
     # Referral
     referrals_today = 0
@@ -1508,40 +1582,51 @@ async def get_today_overview(
         if start_sh <= dt_sh < end_sh:
             ai_analysis_today += 1
 
-    # API call stats for today
-    api_calls_today = 0
-    api_failed_today = 0
-    api_unique_devices = set()
-    ai_api_calls_today = 0
-    for row in _iter_user_operation_logs():
-        dt_sh = _as_shanghai_datetime(row.get("time"), assume_utc_when_naive=False)
-        if not dt_sh:
-            continue
-        if dt_sh < start_sh:
-            break
-        if dt_sh >= end_sh:
-            continue
-        action = str(row.get("action", "")).strip().lower()
-        path = str(row.get("path", "")).strip()
-        status = str(row.get("status", "")).strip().lower()
-        device_id = str(row.get("device_id", "")).strip()
-
-        if action == "api_call" and path.startswith("/api/"):
-            api_calls_today += 1
-            if status != "success":
-                api_failed_today += 1
-            if device_id:
-                api_unique_devices.add(device_id)
-
-        if path in {"/api/analyze/stock", "/api/stock/analyze", "/api/pools/analyze"} and status == "success":
-            ai_api_calls_today += 1
-
     # AI token / cost usage (from dedicated ledger, more accurate than cache estimation)
-    usage_summary = summarize_ai_usage_for_date(start_sh.strftime("%Y-%m-%d"))
+    today_text = start_sh.strftime("%Y-%m-%d")
+    usage_summary = summarize_ai_usage_for_date(today_text)
     ai_prompt_tokens_today = int(usage_summary.get("prompt_tokens", 0) or 0)
     ai_completion_tokens_today = int(usage_summary.get("completion_tokens", 0) or 0)
     ai_total_tokens_today = int(usage_summary.get("total_tokens", 0) or 0)
     ai_cost_today = float(usage_summary.get("total_cost_cny", 0.0) or 0.0)
+    ai_total_real_calls_today = int(usage_summary.get("count", 0) or 0)
+
+    usage_report = query_ai_usage_report(
+        page=1,
+        page_size=10,
+        date_from=today_text,
+        date_to=today_text,
+    )
+    source_agg = []
+    if isinstance(usage_report, dict):
+        agg = usage_report.get("agg", {})
+        if isinstance(agg, dict) and isinstance(agg.get("by_source"), list):
+            source_agg = [x for x in agg.get("by_source", []) if isinstance(x, dict)]
+
+    user_feature_breakdown = sorted(
+        list(user_ai_feature_counters.values()),
+        key=lambda x: (int(x.get("total", 0) or 0), int(x.get("real", 0) or 0)),
+        reverse=True,
+    )
+    system_feature_breakdown: List[Dict[str, Any]] = []
+    for item in source_agg:
+        source_key = str(item.get("key", "")).strip() or "-"
+        source_total = max(0, int(item.get("count", 0) or 0))
+        user_real_for_source = max(0, int(user_ai_real_source_counters.get(source_key, 0) or 0))
+        system_count = max(0, source_total - user_real_for_source)
+        if system_count <= 0:
+            continue
+        system_feature_breakdown.append(
+            {
+                "source": source_key,
+                "name": _ai_source_display_name(source_key),
+                "count": system_count,
+                "total_tokens": max(0, int(item.get("total_tokens", 0) or 0)),
+                "cost_cny": round(float(item.get("total_cost_cny", 0.0) or 0.0), 6),
+            }
+        )
+    system_feature_breakdown.sort(key=lambda x: int(x.get("count", 0) or 0), reverse=True)
+    system_ai_real_calls_today = max(0, ai_total_real_calls_today - user_ai_quota_real_today)
 
     # Current quota consumption snapshot from users table
     users_all = db.query(models.User).all()
@@ -1550,21 +1635,8 @@ async def get_today_overview(
         ai_quota_used_total += max(0, int(u.daily_ai_count or 0))
 
     # Realtime system metrics
-    runtime_metrics = _collect_system_runtime_metrics(start_sh.strftime("%Y-%m-%d"))
+    runtime_metrics = _collect_system_runtime_metrics(today_text)
     ws_stats = await ws_hub.snapshot_stats()
-
-    # Online by recent activity in last 5 minutes (best-effort)
-    online_recent_devices = set()
-    now_ts = now_sh.timestamp()
-    for row in _iter_user_operation_logs()[:2000]:
-        dt_sh = _as_shanghai_datetime(row.get("time"), assume_utc_when_naive=False)
-        if not dt_sh:
-            continue
-        if now_ts - dt_sh.timestamp() > 300:
-            break
-        did = str(row.get("device_id", "")).strip()
-        if did:
-            online_recent_devices.add(did)
 
     return {
         "date": start_sh.strftime("%Y-%m-%d"),
@@ -1588,6 +1660,12 @@ async def get_today_overview(
             "user_login_success": login_success_count,
             "admin_login_success": admin_login_count,
             "unique_user_devices": len(unique_login_devices),
+        },
+        "online": {
+            "active_devices_today": len(online_devices_today),
+            "active_registered_users_today": len(online_registered_users_today),
+            "active_guest_devices_today": len(online_guest_devices_today),
+            "online_recent_devices_5m": len(online_recent_devices),
         },
         "operations": {
             "user_operations": user_op_count,
@@ -1613,6 +1691,13 @@ async def get_today_overview(
         },
         "ai_usage": {
             "daily_ai_quota_used_total": int(ai_quota_used_total),
+            "user_quota_total_today": int(user_ai_quota_total_today),
+            "user_cached_quota_today": int(user_ai_quota_cached_today),
+            "user_real_quota_today": int(user_ai_quota_real_today),
+            "user_other_quota_today": int(user_ai_quota_other_today),
+            "system_real_calls_today": int(system_ai_real_calls_today),
+            "user_feature_breakdown": user_feature_breakdown,
+            "system_feature_breakdown": system_feature_breakdown,
             "prompt_tokens_today": int(ai_prompt_tokens_today),
             "completion_tokens_today": int(ai_completion_tokens_today),
             "total_tokens_today": int(ai_total_tokens_today),
@@ -2230,6 +2315,28 @@ def _safe_text(value: Any, max_len: int = 300) -> str:
     return text[:max_len] + "..."
 
 
+def _parse_bool_text(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    return None
+
+
+def _ai_source_display_name(source: str) -> str:
+    key = str(source or "").strip().lower()
+    mapping = {
+        "news_batch": "新闻批量分析",
+        "single_stock": "个股分析",
+        "lhb_daily_review": "龙虎榜深度复盘",
+        "-": "未分类",
+    }
+    return mapping.get(key, source or "未分类")
+
+
 def _ai_usage_from_entry(entry: Dict[str, Any]) -> Dict[str, int]:
     meta = entry.get("meta") or {}
     usage = meta.get("usage") if isinstance(meta, dict) else {}
@@ -2636,13 +2743,36 @@ def _save_metrics_baseline(data: Dict[str, Any]):
 
 def _ensure_today_network_baseline(date_text: str, current_net: Dict[str, int]) -> Dict[str, Any]:
     baseline = _load_metrics_baseline()
+    now_ts = float(time.time())
     if str(baseline.get("date", "")).strip() != date_text:
         baseline = {
             "date": date_text,
             "rx_bytes": int(current_net.get("rx_bytes", 0) or 0),
             "tx_bytes": int(current_net.get("tx_bytes", 0) or 0),
+            "day_start_ts": now_ts,
+            "last_probe_ts": now_ts,
+            "last_rx_bytes": int(current_net.get("rx_bytes", 0) or 0),
+            "last_tx_bytes": int(current_net.get("tx_bytes", 0) or 0),
             "updated_at": datetime.utcnow().replace(microsecond=0).isoformat(),
         }
+        _save_metrics_baseline(baseline)
+        return baseline
+
+    changed = False
+    if _safe_float(baseline.get("day_start_ts", 0), 0.0) <= 0:
+        baseline["day_start_ts"] = now_ts
+        changed = True
+    if _safe_float(baseline.get("last_probe_ts", 0), 0.0) <= 0:
+        baseline["last_probe_ts"] = now_ts
+        changed = True
+    if "last_rx_bytes" not in baseline:
+        baseline["last_rx_bytes"] = int(current_net.get("rx_bytes", 0) or 0)
+        changed = True
+    if "last_tx_bytes" not in baseline:
+        baseline["last_tx_bytes"] = int(current_net.get("tx_bytes", 0) or 0)
+        changed = True
+    if changed:
+        baseline["updated_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
         _save_metrics_baseline(baseline)
     return baseline
 
@@ -2670,6 +2800,30 @@ def _collect_system_runtime_metrics(date_text: str) -> Dict[str, Any]:
     baseline = _ensure_today_network_baseline(date_text, net)
     rx_today = max(0, int(net.get("rx_bytes", 0)) - int(baseline.get("rx_bytes", 0) or 0))
     tx_today = max(0, int(net.get("tx_bytes", 0)) - int(baseline.get("tx_bytes", 0) or 0))
+    now_ts = float(time.time())
+    last_probe_ts = _safe_float(baseline.get("last_probe_ts", 0), 0.0)
+    last_rx = int(baseline.get("last_rx_bytes", net.get("rx_bytes", 0)) or 0)
+    last_tx = int(baseline.get("last_tx_bytes", net.get("tx_bytes", 0)) or 0)
+
+    rx_bps_current = 0.0
+    tx_bps_current = 0.0
+    if last_probe_ts > 0 and now_ts > last_probe_ts:
+        delta_sec = max(0.001, now_ts - last_probe_ts)
+        delta_rx = max(0, int(net.get("rx_bytes", 0) or 0) - last_rx)
+        delta_tx = max(0, int(net.get("tx_bytes", 0) or 0) - last_tx)
+        rx_bps_current = round(float(delta_rx) / delta_sec, 2)
+        tx_bps_current = round(float(delta_tx) / delta_sec, 2)
+
+    day_start_ts = _safe_float(baseline.get("day_start_ts", now_ts), now_ts)
+    elapsed_today_sec = max(1.0, now_ts - day_start_ts)
+    rx_bps_today_avg = round(float(rx_today) / elapsed_today_sec, 2)
+    tx_bps_today_avg = round(float(tx_today) / elapsed_today_sec, 2)
+
+    baseline["last_probe_ts"] = now_ts
+    baseline["last_rx_bytes"] = int(net.get("rx_bytes", 0) or 0)
+    baseline["last_tx_bytes"] = int(net.get("tx_bytes", 0) or 0)
+    baseline["updated_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
+    _save_metrics_baseline(baseline)
 
     # Load average
     load1 = 0.0
@@ -2701,6 +2855,12 @@ def _collect_system_runtime_metrics(date_text: str) -> Dict[str, Any]:
             "rx_bytes_today": int(rx_today),
             "tx_bytes_today": int(tx_today),
             "total_bytes_today": int(rx_today + tx_today),
+            "rx_bps_current": float(rx_bps_current),
+            "tx_bps_current": float(tx_bps_current),
+            "total_bps_current": float(round(rx_bps_current + tx_bps_current, 2)),
+            "rx_bps_today_avg": float(rx_bps_today_avg),
+            "tx_bps_today_avg": float(tx_bps_today_avg),
+            "total_bps_today_avg": float(round(rx_bps_today_avg + tx_bps_today_avg, 2)),
         },
     }
 
