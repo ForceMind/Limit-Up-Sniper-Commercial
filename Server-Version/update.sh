@@ -5,10 +5,13 @@
 
 set -euo pipefail
 
-APP_DIR="/opt/limit-up-sniper"
+APP_NAME="limit-up-sniper-commercial"
+APP_DIR="/opt/${APP_NAME}"
+SERVICE_NAME="$APP_NAME"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 DEFAULT_SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
 SOURCE_ROOT_INPUT="${1:-}"
+PYTHON_CMD=""
 
 GREEN='\033[0;32m'
 RED='\033[0;31m'
@@ -18,6 +21,54 @@ NC='\033[0m'
 log_info() { echo -e "${GREEN}$1${NC}"; }
 log_warn() { echo -e "${YELLOW}$1${NC}"; }
 log_error() { echo -e "${RED}$1${NC}"; }
+
+is_python_compatible() {
+    local cmd="$1"
+    "$cmd" - <<'PY' >/dev/null 2>&1
+import sys
+sys.exit(0 if sys.version_info >= (3, 8) else 1)
+PY
+}
+
+select_python_cmd() {
+    local candidates=(python3.12 python3.11 python3.10 python3.9 python3.8 python3 python)
+    local cmd
+    for cmd in "${candidates[@]}"; do
+        if command -v "$cmd" >/dev/null 2>&1 && is_python_compatible "$cmd"; then
+            PYTHON_CMD="$(command -v "$cmd")"
+            break
+        fi
+    done
+
+    if [ -z "$PYTHON_CMD" ]; then
+        log_error "[错误] 未找到 Python 3.8+ 解释器，请先安装后再执行更新。"
+        exit 1
+    fi
+
+    log_info "使用 Python 解释器: $PYTHON_CMD"
+}
+
+ensure_venv() {
+    local need_recreate=false
+
+    if [ ! -x "$APP_DIR/venv/bin/python" ]; then
+        need_recreate=true
+    else
+        if ! "$APP_DIR/venv/bin/python" - <<'PY' >/dev/null 2>&1
+import sys
+sys.exit(0 if sys.version_info >= (3, 8) else 1)
+PY
+        then
+            need_recreate=true
+        fi
+    fi
+
+    if [ "$need_recreate" = true ]; then
+        log_warn "检测到缺失或旧版虚拟环境（<3.8），正在重建..."
+        rm -rf "$APP_DIR/venv"
+        "$PYTHON_CMD" -m venv "$APP_DIR/venv"
+    fi
+}
 
 require_root() {
     if [ "${EUID}" -ne 0 ]; then
@@ -157,21 +208,21 @@ fix_runtime_permissions() {
 
 install_dependencies() {
     log_warn "[5/5] 安装/更新 Python 依赖..."
-    if [ -f "$APP_DIR/venv/bin/activate" ]; then
-        # shellcheck disable=SC1091
-        source "$APP_DIR/venv/bin/activate"
-        if ! pip install -r "$APP_DIR/backend/requirements.txt" --no-cache-dir -i https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org; then
-            log_warn "官方 PyPI 安装失败，尝试阿里云镜像..."
-            pip install -r "$APP_DIR/backend/requirements.txt" --no-cache-dir -i http://mirrors.cloud.aliyuncs.com/pypi/simple/ --trusted-host mirrors.cloud.aliyuncs.com
+    ensure_venv
+    "$APP_DIR/venv/bin/python" -m pip install --upgrade pip -q
+    if ! "$APP_DIR/venv/bin/python" -m pip install -r "$APP_DIR/backend/requirements.txt" --no-cache-dir -i https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org; then
+        log_warn "官方 PyPI 安装失败，尝试清华镜像..."
+        if ! "$APP_DIR/venv/bin/python" -m pip install -r "$APP_DIR/backend/requirements.txt" --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn; then
+            log_warn "清华镜像安装失败，尝试阿里云镜像..."
+            "$APP_DIR/venv/bin/python" -m pip install -r "$APP_DIR/backend/requirements.txt" --no-cache-dir -i http://mirrors.cloud.aliyuncs.com/pypi/simple/ --trusted-host mirrors.cloud.aliyuncs.com
         fi
-    else
-        echo "跳过: 未找到虚拟环境 $APP_DIR/venv"
     fi
 }
 
 main() {
     require_root
     resolve_source
+    select_python_cmd
     prepare_backup_dir
 
     log_info "=== 涨停狙击手商业版：通用更新脚本 ==="
@@ -179,7 +230,7 @@ main() {
     echo "源码目录: $SOURCE_ROOT"
 
     log_warn "停止服务..."
-    systemctl stop limit-up-sniper || true
+    systemctl stop "$SERVICE_NAME" || true
 
     backup_runtime_files
     pull_latest_if_needed
@@ -189,13 +240,13 @@ main() {
     install_dependencies
 
     echo "重启服务..."
-    systemctl restart limit-up-sniper
+    systemctl restart "$SERVICE_NAME"
     systemctl restart nginx || true
 
     log_info "========================================="
     log_info "更新完成，运行数据与配置已恢复"
     log_info "========================================="
-    systemctl status limit-up-sniper --no-pager | head -n 8 || true
+    systemctl status "$SERVICE_NAME" --no-pager | head -n 8 || true
 }
 
 main "$@"

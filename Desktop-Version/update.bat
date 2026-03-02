@@ -71,10 +71,15 @@ if exist "._data_backup" rd /s /q "._data_backup"
 echo [3/3] 正在更新依赖项...
 if exist "venv" (
     call venv\Scripts\activate
-    pip install -r ..\backend\requirements.txt -i https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org
+    venv\Scripts\python.exe -m pip install --upgrade pip
+    venv\Scripts\python.exe -m pip install -r ..\backend\requirements.txt -i https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org
     if !errorlevel! neq 0 (
-        echo [警告] 官方 PyPI 安装失败，正在尝试阿里云镜像...
-        pip install -r ..\backend\requirements.txt -i http://mirrors.cloud.aliyuncs.com/pypi/simple/ --trusted-host mirrors.cloud.aliyuncs.com
+        echo [警告] 官方 PyPI 安装失败，正在尝试清华镜像...
+        venv\Scripts\python.exe -m pip install -r ..\backend\requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+    )
+    if !errorlevel! neq 0 (
+        echo [警告] 清华镜像安装失败，正在尝试阿里云镜像...
+        venv\Scripts\python.exe -m pip install -r ..\backend\requirements.txt -i http://mirrors.cloud.aliyuncs.com/pypi/simple/ --trusted-host mirrors.cloud.aliyuncs.com
     )
     if !errorlevel! neq 0 (
         echo [错误] 依赖更新失败，请检查网络或代理设置后重试。
