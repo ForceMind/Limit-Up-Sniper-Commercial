@@ -160,7 +160,10 @@ install_dependencies() {
     if [ -f "$APP_DIR/venv/bin/activate" ]; then
         # shellcheck disable=SC1091
         source "$APP_DIR/venv/bin/activate"
-        pip install -r "$APP_DIR/backend/requirements.txt" --no-cache-dir
+        if ! pip install -r "$APP_DIR/backend/requirements.txt" --no-cache-dir -i https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org; then
+            log_warn "官方 PyPI 安装失败，尝试阿里云镜像..."
+            pip install -r "$APP_DIR/backend/requirements.txt" --no-cache-dir -i http://mirrors.cloud.aliyuncs.com/pypi/simple/ --trusted-host mirrors.cloud.aliyuncs.com
+        fi
     else
         echo "跳过: 未找到虚拟环境 $APP_DIR/venv"
     fi

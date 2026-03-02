@@ -27,7 +27,16 @@ if not exist "venv" (
 echo [2/3] 正在安装依赖项...
 call venv\Scripts\activate
 pip install --upgrade pip
-pip install -r ..\backend\requirements.txt
+pip install -r ..\backend\requirements.txt -i https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org
+if %errorlevel% neq 0 (
+    echo [警告] 官方 PyPI 安装失败，正在尝试阿里云镜像...
+    pip install -r ..\backend\requirements.txt -i http://mirrors.cloud.aliyuncs.com/pypi/simple/ --trusted-host mirrors.cloud.aliyuncs.com
+)
+if %errorlevel% neq 0 (
+    echo [错误] 依赖安装失败，请检查网络或代理设置后重试。
+    pause
+    exit /b 1
+)
 
 :: 4. 设置 API 密钥
 echo [3/3] 正在配置 API 密钥...

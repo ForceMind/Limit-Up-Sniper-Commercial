@@ -490,7 +490,10 @@ setup_python_venv() {
     # shellcheck disable=SC1091
     source "$APP_DIR/venv/bin/activate"
     pip install --upgrade pip -q
-    pip install -r requirements.txt --no-cache-dir
+    if ! pip install -r requirements.txt --no-cache-dir -i https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org; then
+        log_warn "官方 PyPI 安装失败，尝试阿里云镜像..."
+        pip install -r requirements.txt --no-cache-dir -i http://mirrors.cloud.aliyuncs.com/pypi/simple/ --trusted-host mirrors.cloud.aliyuncs.com
+    fi
 }
 
 setup_systemd() {
