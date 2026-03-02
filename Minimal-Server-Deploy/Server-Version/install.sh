@@ -10,8 +10,15 @@ RED='\033[0;31m'
 YELLOW='\033[1;33m'
 NC='\033[0m'
 
-APP_DIR="/opt/limit-up-sniper"
-SERVICE_FILE="/etc/systemd/system/limit-up-sniper.service"
+APP_NAME="limit-up-sniper-commercial"
+APP_DIR="/opt/${APP_NAME}"
+SERVICE_NAME="${APP_NAME}"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+DEFAULT_INTERNAL_PORT="8000"
+INTERNAL_PORT="$DEFAULT_INTERNAL_PORT"
+DEFAULT_EXTERNAL_PORT="80"
+EXTERNAL_PORT="$DEFAULT_EXTERNAL_PORT"
+USER_IP=""
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
 
@@ -35,8 +42,111 @@ detect_os() {
     fi
 }
 
+is_valid_port() {
+    local port="$1"
+    [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
+}
+
+is_port_in_use() {
+    local port="$1"
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnH "sport = :$port" 2>/dev/null | grep -q .
+        return
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -iTCP:"$port" -sTCP:LISTEN -t >/dev/null 2>&1
+        return
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -ltn 2>/dev/null | awk '{print $4}' | grep -Eq "[:.]${port}$"
+        return
+    fi
+
+    python3 - "$port" <<'PY' >/dev/null 2>&1
+import socket
+import sys
+
+port = int(sys.argv[1])
+s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+try:
+    s.bind(("0.0.0.0", port))
+except OSError:
+    sys.exit(0)
+finally:
+    s.close()
+sys.exit(1)
+PY
+}
+
+resolve_internal_port() {
+    local preferred="$1"
+    local candidate="$preferred"
+
+    if ! is_valid_port "$candidate"; then
+        candidate="$DEFAULT_INTERNAL_PORT"
+    fi
+
+    while is_port_in_use "$candidate"; do
+        candidate=$((candidate + 1))
+        if [ "$candidate" -gt 65535 ]; then
+            log_error "[错误] 未找到可用内网端口"
+            exit 1
+        fi
+    done
+
+    INTERNAL_PORT="$candidate"
+}
+
+configure_ports() {
+    log_warn "[4/7] 配置端口（外网自定义 + 内网自动避让）..."
+
+    local existing_internal="$DEFAULT_INTERNAL_PORT"
+    if [ -f "$SERVICE_FILE" ]; then
+        local parsed_internal
+        parsed_internal=$(grep -Eo -- '--port[[:space:]]+[0-9]+' "$SERVICE_FILE" | head -n 1 | awk '{print $2}') || true
+        if is_valid_port "$parsed_internal"; then
+            existing_internal="$parsed_internal"
+        fi
+    fi
+
+    resolve_internal_port "$existing_internal"
+    if [ "$INTERNAL_PORT" = "$existing_internal" ]; then
+        log_info "内网端口使用: $INTERNAL_PORT"
+    else
+        log_warn "内网端口 $existing_internal 已被占用，自动切换为: $INTERNAL_PORT"
+    fi
+
+    local input_external
+    while true; do
+        read -r -p "请输入外网访问端口（默认: $DEFAULT_EXTERNAL_PORT）: " input_external
+        EXTERNAL_PORT="${input_external:-$DEFAULT_EXTERNAL_PORT}"
+
+        if ! is_valid_port "$EXTERNAL_PORT"; then
+            log_warn "端口无效，请输入 1-65535"
+            continue
+        fi
+
+        if [ "$EXTERNAL_PORT" = "$INTERNAL_PORT" ]; then
+            log_warn "外网端口不能与内网端口相同（当前内网: $INTERNAL_PORT）"
+            continue
+        fi
+
+        if is_port_in_use "$EXTERNAL_PORT"; then
+            log_warn "端口 $EXTERNAL_PORT 已被占用，请更换"
+            continue
+        fi
+
+        break
+    done
+
+    log_info "外网端口使用: $EXTERNAL_PORT"
+}
+
 install_deps() {
-    log_warn "[1/6] 安装系统依赖..."
+    log_warn "[1/7] 安装系统依赖..."
 
     if [[ "$OS_NAME" == *"Ubuntu"* ]] || [[ "$OS_NAME" == *"Debian"* ]]; then
         apt-get update -qq
@@ -76,7 +186,7 @@ check_source_tree() {
 }
 
 prepare_backup_dirs() {
-    RUNTIME_BACKUP_DIR="$(mktemp -d /tmp/limit-up-sniper-install-backup.XXXXXX)"
+    RUNTIME_BACKUP_DIR="$(mktemp -d /tmp/${APP_NAME}-install-backup.XXXXXX)"
     mkdir -p "$RUNTIME_BACKUP_DIR/backend" "$RUNTIME_BACKUP_DIR/frontend"
     HAD_OLD_DATA="false"
     HAD_OLD_FRONT_CONFIG="false"
@@ -93,8 +203,8 @@ prepare_backup_dirs() {
 }
 
 deploy_code_only() {
-    log_warn "[2/6] 部署代码文件（不覆盖运行时数据）..."
-    systemctl stop limit-up-sniper || true
+    log_warn "[2/7] 部署代码文件（不覆盖运行时数据）..."
+    systemctl stop "$SERVICE_NAME" || true
 
     mkdir -p "$APP_DIR"
     rm -rf "$APP_DIR/backend" "$APP_DIR/frontend"
@@ -127,7 +237,7 @@ deploy_code_only() {
 }
 
 ensure_runtime_files() {
-    log_warn "[3/6] 初始化运行目录与默认文件..."
+    log_warn "[3/7] 初始化运行目录与默认文件..."
 
     DATA_DIR="$APP_DIR/backend/data"
     CONFIG_FILE="$DATA_DIR/config.json"
@@ -368,7 +478,7 @@ PY
 }
 
 setup_python_venv() {
-    log_warn "[4/6] 配置 Python 虚拟环境并安装依赖..."
+    log_warn "[5/7] 配置 Python 虚拟环境并安装依赖..."
 
     mkdir -p "$APP_DIR"
     cd "$APP_DIR/backend"
@@ -384,7 +494,7 @@ setup_python_venv() {
 }
 
 setup_systemd() {
-    log_warn "[5/6] 配置 systemd 服务..."
+    log_warn "[6/7] 配置 systemd 服务..."
 
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
@@ -397,7 +507,7 @@ Group=root
 WorkingDirectory=$APP_DIR/backend
 Environment="PATH=$APP_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="DEEPSEEK_API_KEY=$FINAL_DEEPSEEK_KEY"
-ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 1
+ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $INTERNAL_PORT --workers 1
 Restart=always
 RestartSec=5
 
@@ -406,12 +516,12 @@ WantedBy=multi-user.target
 EOF
 
     systemctl daemon-reload
-    systemctl enable limit-up-sniper
-    systemctl restart limit-up-sniper
+    systemctl enable "$SERVICE_NAME"
+    systemctl restart "$SERVICE_NAME"
 }
 
 setup_nginx() {
-    log_warn "[6/6] 配置 Nginx 反向代理..."
+    log_warn "[7/7] 配置 Nginx 反向代理..."
 
     SERVER_IP="$(curl -s ifconfig.me || true)"
     SERVER_IP="${SERVER_IP:-服务器IP}"
@@ -419,23 +529,23 @@ setup_nginx() {
     USER_IP="${USER_IP:-$SERVER_IP}"
 
     if [ -d "/etc/nginx/sites-available" ]; then
-        NGINX_CONF="/etc/nginx/sites-available/limit-up-sniper"
-        NGINX_LINK="/etc/nginx/sites-enabled/limit-up-sniper"
+        NGINX_CONF="/etc/nginx/sites-available/${APP_NAME}"
+        NGINX_LINK="/etc/nginx/sites-enabled/${APP_NAME}"
         mkdir -p /etc/nginx/sites-enabled
     else
-        NGINX_CONF="/etc/nginx/conf.d/limit-up-sniper.conf"
+        NGINX_CONF="/etc/nginx/conf.d/${APP_NAME}.conf"
         NGINX_LINK=""
     fi
 
     cat > "$NGINX_CONF" <<EOF
 server {
-    listen 80;
+    listen $EXTERNAL_PORT;
     server_name $USER_IP;
 
     client_max_body_size 10M;
 
     location / {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:$INTERNAL_PORT;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
@@ -443,7 +553,7 @@ server {
     }
 
     location /ws {
-        proxy_pass http://127.0.0.1:8000;
+        proxy_pass http://127.0.0.1:$INTERNAL_PORT;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
@@ -472,10 +582,17 @@ show_result() {
     log_info "========================================="
     log_info "部署完成"
     log_info "========================================="
-    echo "前台地址: http://${USER_IP}/"
-    echo "后台地址: http://${USER_IP}/admin/index.html"
+    ACCESS_BASE_URL="http://${USER_IP}"
+    if [ "$EXTERNAL_PORT" != "80" ]; then
+        ACCESS_BASE_URL="http://${USER_IP}:${EXTERNAL_PORT}"
+    fi
+    echo "前台地址: ${ACCESS_BASE_URL}/"
+    echo "后台地址: ${ACCESS_BASE_URL}/admin/index.html"
     echo "管理员登录: $ADMIN_HINT"
-    echo "日志查看: journalctl -u limit-up-sniper -f"
+    echo "部署目录: $APP_DIR"
+    echo "服务名称: $SERVICE_NAME"
+    echo "端口映射: 外网 ${EXTERNAL_PORT} -> 内网 ${INTERNAL_PORT}"
+    echo "日志查看: journalctl -u ${SERVICE_NAME} -f"
 }
 
 cleanup_temp() {
@@ -501,6 +618,7 @@ main() {
     ensure_runtime_files
     read_existing_config_values
     prompt_keys_and_merge_config
+    configure_ports
     setup_python_venv
     setup_systemd
     setup_nginx
