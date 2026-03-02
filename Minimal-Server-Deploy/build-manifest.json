@@ -2,12 +2,13 @@
     "build_time":  "2026-02-28 15:30:28 +08:00",
     "source_root":  "E:\\Privy\\Limit-Up-Sniper-Commercial",
     "output_dir":  "E:\\Privy\\Limit-Up-Sniper-Commercial\\Minimal-Server-Deploy",
-    "backend_version":  "v2.6.0",
-    "frontend_version":  "v2.6.0",
-    "effective_version":  "v2.6.0",
+    "backend_version":  "v2.6.1",
+    "frontend_version":  "v2.6.1",
+    "effective_version":  "v2.6.1",
     "keep_runtime_data":  false,
     "file_count":  54,
     "total_size_bytes":  953327
 }
+
 
 

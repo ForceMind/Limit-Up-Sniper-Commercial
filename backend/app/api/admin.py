@@ -42,6 +42,7 @@ from app.core.ai_usage import (
     calculate_ai_cost_cny,
     summarize_ai_usage_for_date,
     get_ai_pricing_snapshot,
+    query_ai_usage_report,
 )
 
 router = APIRouter()
@@ -1781,6 +1782,13 @@ async def create_data_export_url(request: Request, authorized: bool = Depends(ve
     add_runtime_log(
         f"[后台] 已生成一次性数据导出链接: file={temp_zip.name}, expires_in={EXPORT_TICKET_TTL_SECONDS}s, ip={client_ip or '-'}"
     )
+    _append_security_audit_log(
+        event="data_export_ticket_created",
+        level="info",
+        detail=f"filename={filename}, expires_in={EXPORT_TICKET_TTL_SECONDS}s",
+        ip=client_ip,
+        context={"file": temp_zip.name},
+    )
     return {
         "status": "success",
         "download_url": full_url,
@@ -1801,9 +1809,25 @@ async def download_export_with_ticket(ticket: str, request: Request):
         str(request.headers.get("X-Forwarded-For", "") or "").split(",")[0].strip()
         or (request.client.host if request.client else "")
     )
-    info = _consume_export_ticket(ticket=ticket, request_ip=client_ip)
+    try:
+        info = _consume_export_ticket(ticket=ticket, request_ip=client_ip)
+    except HTTPException as e:
+        _append_security_audit_log(
+            event="data_export_ticket_rejected",
+            level="warning",
+            detail=f"status={e.status_code}, reason={e.detail}",
+            ip=client_ip,
+            context={"ticket_prefix": str(ticket or "")[:8]},
+        )
+        raise
     file_path = Path(str(info.get("file_path", "")).strip())
     filename = str(info.get("filename", "sniper_data_export.zip") or "sniper_data_export.zip")
+    _append_security_audit_log(
+        event="data_export_ticket_downloaded",
+        level="info",
+        detail=f"filename={filename}",
+        ip=client_ip,
+    )
     return FileResponse(
         path=str(file_path),
         media_type="application/zip",
@@ -1900,6 +1924,11 @@ async def restore_data_package(
         add_runtime_log(
             f"[ADMIN] Data restore done from {backup_file.filename}, snapshot={snapshot_name}, files={restored_files}"
         )
+        _append_security_audit_log(
+            event="data_restore_finished",
+            level="warning",
+            detail=f"filename={backup_file.filename}, snapshot={snapshot_name}, files={restored_files}",
+        )
         log_user_operation(
             "admin_data_restore",
             status="success",
@@ -1966,7 +1995,10 @@ async def list_data_files(
         "watchlist.json": "选股池结果",
         "watchlist_stats.json": "自选股统计",
         "favorites.json": "用户自选股列表",
+        "ai_usage_logs.jsonl": "AI调用明细日志（Token与成本）",
+        "ai_usage_alert_state.json": "AI费用告警状态",
         "provider_test_logs.jsonl": "外网接口体检日志",
+        "security_audit_logs.jsonl": "后台安全审计日志",
         "user_operation_logs.jsonl": "用户操作日志",
         "runtime_logs.jsonl": "运行时日志",
         "system_metrics_baseline.json": "系统统计基线数据",
@@ -2275,6 +2307,7 @@ def _contains_ci(text: str, keyword: str) -> bool:
 
 
 PROVIDER_TEST_LOG_FILE = DATA_DIR / "provider_test_logs.jsonl"
+SECURITY_AUDIT_LOG_FILE = DATA_DIR / "security_audit_logs.jsonl"
 
 
 def _append_provider_test_log(entry: Dict[str, Any]):
@@ -2284,6 +2317,102 @@ def _append_provider_test_log(entry: Dict[str, Any]):
             f.write(json.dumps(entry, ensure_ascii=False) + "\n")
     except Exception:
         pass
+
+
+def _append_security_audit_log(
+    event: str,
+    level: str = "info",
+    detail: str = "",
+    ip: str = "",
+    admin_username: str = "",
+    context: Optional[Dict[str, Any]] = None,
+):
+    payload = {
+        "time": datetime.now(SHANGHAI_TZ).replace(microsecond=0).isoformat(),
+        "event": str(event or "").strip() or "-",
+        "level": str(level or "info").strip().lower() or "info",
+        "detail": _safe_text(detail, 500),
+        "ip": str(ip or "").strip(),
+        "admin_username": str(admin_username or "").strip(),
+        "context": context if isinstance(context, dict) else {},
+    }
+    try:
+        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        with open(SECURITY_AUDIT_LOG_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        pass
+
+
+def _read_security_audit_logs(
+    page: int = 1,
+    page_size: int = 50,
+    level: str = "",
+    event: str = "",
+    keyword: str = "",
+) -> Dict[str, Any]:
+    safe_page = max(1, int(page or 1))
+    safe_size = max(10, min(int(page_size or 50), 200))
+    level_text = str(level or "").strip().lower()
+    event_text = str(event or "").strip().lower()
+    keyword_text = str(keyword or "").strip().lower()
+
+    if not SECURITY_AUDIT_LOG_FILE.exists():
+        return {
+            "items": [],
+            "total": 0,
+            "page": safe_page,
+            "page_size": safe_size,
+            "total_pages": 1,
+        }
+
+    items: List[Dict[str, Any]] = []
+    try:
+        with open(SECURITY_AUDIT_LOG_FILE, "r", encoding="utf-8", errors="ignore") as f:
+            for line in f:
+                text = line.strip()
+                if not text:
+                    continue
+                try:
+                    row = json.loads(text)
+                except Exception:
+                    continue
+                if not isinstance(row, dict):
+                    continue
+
+                row_level = str(row.get("level", "")).strip().lower()
+                row_event = str(row.get("event", "")).strip().lower()
+                if level_text and level_text != row_level:
+                    continue
+                if event_text and event_text not in row_event:
+                    continue
+                if keyword_text:
+                    merged = " ".join(
+                        [
+                            str(row.get("event", "") or ""),
+                            str(row.get("detail", "") or ""),
+                            str(row.get("ip", "") or ""),
+                            str(row.get("admin_username", "") or ""),
+                            json.dumps(row.get("context", {}), ensure_ascii=False),
+                        ]
+                    ).lower()
+                    if keyword_text not in merged:
+                        continue
+                items.append(row)
+    except Exception:
+        items = []
+
+    items.reverse()
+    total = len(items)
+    start = (safe_page - 1) * safe_size
+    page_items = items[start:start + safe_size]
+    return {
+        "items": page_items,
+        "total": total,
+        "page": safe_page,
+        "page_size": safe_size,
+        "total_pages": max(1, (total + safe_size - 1) // safe_size),
+    }
 
 
 def _read_provider_test_logs(page: int = 1, page_size: int = 10) -> Dict[str, Any]:
@@ -2674,6 +2803,27 @@ async def get_user_operation_logs(
     }
 
 
+@router.get("/logs/security")
+async def get_security_audit_logs(
+    page: int = 1,
+    page_size: int = 50,
+    level: str = "",
+    event: str = "",
+    keyword: str = "",
+    authorized: bool = Depends(verify_admin),
+):
+    level_norm = str(level or "").strip().lower()
+    if level_norm and level_norm not in {"info", "warning", "critical"}:
+        raise HTTPException(status_code=400, detail="Invalid level filter")
+    return _read_security_audit_logs(
+        page=page,
+        page_size=page_size,
+        level=level_norm,
+        event=event,
+        keyword=keyword,
+    )
+
+
 @router.get("/monitor/ai_cache")
 async def get_ai_cache_stats(limit: int = 100, authorized: bool = Depends(verify_admin)):
     safe_limit = max(20, min(int(limit or 100), 500))
@@ -2758,6 +2908,41 @@ async def get_ai_cache_item(key: str, authorized: bool = Depends(verify_admin)):
         "model": model,
         "cost_cny": round(total_cost, 6),
         "data": entry.get("data"),
+    }
+
+
+@router.get("/monitor/ai_cost/report")
+async def get_ai_cost_report(
+    page: int = 1,
+    page_size: int = 50,
+    date_from: str = "",
+    date_to: str = "",
+    provider: str = "",
+    model: str = "",
+    source: str = "",
+    authorized: bool = Depends(verify_admin),
+):
+    date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+    dfrom = str(date_from or "").strip()
+    dto = str(date_to or "").strip()
+    if dfrom and not date_re.match(dfrom):
+        raise HTTPException(status_code=400, detail="date_from format should be YYYY-MM-DD")
+    if dto and not date_re.match(dto):
+        raise HTTPException(status_code=400, detail="date_to format should be YYYY-MM-DD")
+
+    report = query_ai_usage_report(
+        page=page,
+        page_size=page_size,
+        date_from=dfrom,
+        date_to=dto,
+        provider=provider,
+        model=model,
+        source=source,
+    )
+    return {
+        "status": "success",
+        "pricing": get_ai_pricing_snapshot(),
+        **report,
     }
 
 

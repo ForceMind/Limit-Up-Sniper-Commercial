@@ -321,6 +321,86 @@
 
                         <section class="mb-8 border-b border-gray-200 pb-8 bg-white p-6 rounded-lg shadow-sm">
                             <h3 class="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
+                                <span class="text-rose-500">💰</span> AI 成本估算与告警
+                            </h3>
+                            <div class="bg-rose-50 border border-rose-100 rounded-lg p-4 space-y-5">
+                                <div>
+                                    <div class="text-sm font-bold text-gray-700 mb-2">默认计费单价（每百万Token，人民币）</div>
+                                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                        <div>
+                                            <label class="block text-xs text-gray-600 mb-1">输入单价</label>
+                                            <input type="number" min="0" step="0.0001" v-model.number="config.ai_cost_config.default.input_per_million_cny" class="w-full border rounded p-2 text-sm">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-600 mb-1">输出单价</label>
+                                            <input type="number" min="0" step="0.0001" v-model.number="config.ai_cost_config.default.output_per_million_cny" class="w-full border rounded p-2 text-sm">
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <div class="border-t pt-4">
+                                    <div class="text-sm font-bold text-gray-700 mb-2">模型级单价覆盖</div>
+                                    <div class="overflow-auto">
+                                        <table class="w-full min-w-[780px] text-sm">
+                                            <thead class="text-gray-500 border-b">
+                                                <tr>
+                                                    <th class="p-2 text-left">模型名</th>
+                                                    <th class="p-2 text-left">Provider</th>
+                                                    <th class="p-2 text-left">输入单价</th>
+                                                    <th class="p-2 text-left">输出单价</th>
+                                                    <th class="p-2 text-left">操作</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                <tr v-for="(row, idx) in aiCostModelRows" :key="'ai_cost_model_' + idx" class="border-b last:border-b-0">
+                                                    <td class="p-2"><input type="text" v-model="row.model" class="w-full border rounded p-2 text-xs font-mono" placeholder="deepseek-chat"></td>
+                                                    <td class="p-2"><input type="text" v-model="row.provider" class="w-full border rounded p-2 text-xs font-mono" placeholder="deepseek"></td>
+                                                    <td class="p-2"><input type="number" min="0" step="0.0001" v-model.number="row.input_per_million_cny" class="w-full border rounded p-2 text-xs"></td>
+                                                    <td class="p-2"><input type="number" min="0" step="0.0001" v-model.number="row.output_per_million_cny" class="w-full border rounded p-2 text-xs"></td>
+                                                    <td class="p-2">
+                                                        <button @click="removeAiCostModelRow(idx)" class="px-2 py-1 text-xs border rounded hover:bg-gray-100">删除</button>
+                                                    </td>
+                                                </tr>
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                    <div class="mt-2">
+                                        <button @click="addAiCostModelRow" class="px-3 py-1 text-xs border rounded hover:bg-gray-100">+ 添加模型单价</button>
+                                    </div>
+                                </div>
+
+                                <div class="border-t pt-4">
+                                    <div class="text-sm font-bold text-gray-700 mb-2">费用告警</div>
+                                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                                        <label class="flex items-center gap-2 text-sm">
+                                            <input type="checkbox" v-model="config.ai_cost_config.alert.enabled">
+                                            <span>启用告警邮件</span>
+                                        </label>
+                                        <div>
+                                            <label class="block text-xs text-gray-600 mb-1">日阈值 (¥)</label>
+                                            <input type="number" min="0.01" step="0.01" v-model.number="config.ai_cost_config.alert.daily_threshold_cny" class="w-full border rounded p-2 text-sm">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-600 mb-1">增量步长 (¥)</label>
+                                            <input type="number" min="0.01" step="0.01" v-model.number="config.ai_cost_config.alert.step_cny" class="w-full border rounded p-2 text-sm">
+                                        </div>
+                                        <div>
+                                            <label class="block text-xs text-gray-600 mb-1">告警冷却 (分钟)</label>
+                                            <input type="number" min="1" step="1" v-model.number="config.ai_cost_config.alert.cooldown_minutes" class="w-full border rounded p-2 text-sm">
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="mt-4 flex justify-end">
+                                <button @click="saveConfigSection('ai_cost')" class="px-4 py-2 rounded text-sm text-white"
+                                    :class="isConfigDirty('ai_cost') ? 'bg-amber-600 hover:bg-amber-700' : 'bg-blue-600 hover:bg-blue-700'">
+                                    {{ isConfigDirty('ai_cost') ? '保存AI成本配置（未保存）' : '保存AI成本配置' }}
+                                </button>
+                            </div>
+                        </section>
+
+                        <section class="mb-8 border-b border-gray-200 pb-8 bg-white p-6 rounded-lg shadow-sm">
+                            <h3 class="text-xl font-semibold mb-4 text-gray-800 flex items-center gap-2">
                                 <span class="text-emerald-500">📡</span> 数据源配置
                             </h3>
                             <div class="bg-emerald-50 border border-emerald-100 rounded-lg p-4 space-y-4">
@@ -571,7 +651,9 @@
                     <div class="flex gap-4 border-b border-gray-200 pb-2">
                         <button @click="activeLogTab='system'; fetchLogs('system')" :class="activeLogTab=='system'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">系统日志 (journalctl)</button>
                         <button @click="activeLogTab='user_ops'; fetchLogs('user_ops')" :class="activeLogTab=='user_ops'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">用户操作日志</button>
+                        <button @click="activeLogTab='security'; fetchSecurityLogs(1)" :class="activeLogTab=='security'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">安全审计日志</button>
                         <button @click="activeLogTab='ai_cache'; fetchLogs('ai_cache')" :class="activeLogTab=='ai_cache'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">AI 缓存监控</button>
+                        <button @click="activeLogTab='ai_cost_report'; fetchAICostReport(1)" :class="activeLogTab=='ai_cost_report'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">AI 成本报表</button>
                         <button @click="activeLogTab='provider_test'; fetchProviderTestLogs(1)" :class="activeLogTab=='provider_test'?'text-blue-600 border-b-2 border-blue-600 font-bold':''" class="px-4 py-2">外网接口体检</button>
                     </div>
 
@@ -647,6 +729,64 @@
                         </div>
                     </div>
 
+                    <!-- Security Audit Logs -->
+                    <div v-if="activeLogTab === 'security'" class="flex-1 bg-white rounded shadow text-sm overflow-hidden">
+                        <div class="p-3 border-b bg-gray-50 flex flex-wrap items-center gap-2">
+                            <select v-model="securityFilter.level" class="border rounded px-2 py-1 text-xs">
+                                <option value="">全部级别</option>
+                                <option value="info">信息</option>
+                                <option value="warning">告警</option>
+                                <option value="critical">严重</option>
+                            </select>
+                            <input v-model="securityFilter.event" @keyup.enter="fetchSecurityLogs(1)" type="text" class="border rounded px-2 py-1 text-xs w-44" placeholder="事件关键词">
+                            <input v-model="securityFilter.keyword" @keyup.enter="fetchSecurityLogs(1)" type="text" class="border rounded px-2 py-1 text-xs w-56" placeholder="详情/IP/上下文关键词">
+                            <button @click="fetchSecurityLogs(1)" class="px-3 py-1 text-xs border rounded hover:bg-gray-100">筛选</button>
+                        </div>
+                        <div class="overflow-auto max-h-[60vh]">
+                            <table class="w-full min-w-[1200px] text-left">
+                                <thead class="bg-gray-50 text-gray-500 sticky top-0">
+                                    <tr>
+                                        <th class="p-3">时间</th>
+                                        <th class="p-3">级别</th>
+                                        <th class="p-3">事件</th>
+                                        <th class="p-3">IP</th>
+                                        <th class="p-3">管理员</th>
+                                        <th class="p-3">详情</th>
+                                        <th class="p-3">上下文</th>
+                                    </tr>
+                                </thead>
+                                <tbody class="divide-y">
+                                    <tr v-for="(log, i) in securityLogs" :key="i">
+                                        <td class="p-3 whitespace-nowrap">{{ formatShanghaiTime(log.time) }}</td>
+                                        <td class="p-3 whitespace-nowrap">
+                                            <span class="px-2 py-0.5 rounded text-xs"
+                                                :class="(log.level || '').toLowerCase() === 'critical' ? 'bg-red-100 text-red-700'
+                                                    : ((log.level || '').toLowerCase() === 'warning' ? 'bg-amber-100 text-amber-700' : 'bg-blue-100 text-blue-700')">
+                                                {{ log.level || '-' }}
+                                            </span>
+                                        </td>
+                                        <td class="p-3 font-mono text-xs">{{ log.event || '-' }}</td>
+                                        <td class="p-3 font-mono text-xs">{{ log.ip || '-' }}</td>
+                                        <td class="p-3 text-xs">{{ log.admin_username || '-' }}</td>
+                                        <td class="p-3 text-xs text-gray-700">{{ log.detail || '-' }}</td>
+                                        <td class="p-3 text-xs text-gray-500">
+                                            <pre class="whitespace-pre-wrap">{{ formatJSON(log.context || {}) }}</pre>
+                                        </td>
+                                    </tr>
+                                    <tr v-if="securityLogs.length === 0"><td colspan="7" class="p-4 text-center text-gray-400">暂无安全审计日志</td></tr>
+                                </tbody>
+                            </table>
+                        </div>
+                        <div class="p-3 border-t bg-gray-50 flex items-center justify-between text-sm">
+                            <div>共 {{ securityPagination.total }} 条</div>
+                            <div class="flex items-center gap-2">
+                                <button @click="fetchSecurityLogs(securityPagination.page - 1)" :disabled="securityPagination.page <= 1" class="px-3 py-1 border rounded disabled:opacity-40">上一页</button>
+                                <span>第 {{ securityPagination.page }} / {{ Math.max(1, securityPagination.total_pages) }} 页</span>
+                                <button @click="fetchSecurityLogs(securityPagination.page + 1)" :disabled="securityPagination.page >= Math.max(1, securityPagination.total_pages)" class="px-3 py-1 border rounded disabled:opacity-40">下一页</button>
+                            </div>
+                        </div>
+                    </div>
+
                      <!-- AI Cache -->
                     <div v-if="activeLogTab === 'ai_cache'" class="flex-1 bg-white rounded shadow p-4 text-sm overflow-auto space-y-4">
                         <div class="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -691,6 +831,127 @@
                                     <div class="text-xs text-gray-500">成本: ¥{{ Number(aiCacheDetail.cost_cny || 0).toFixed(6) }}</div>
                                     <pre class="text-xs bg-white border rounded p-2 overflow-auto max-h-[46vh]">{{ formatJSON(aiCacheDetail.data) }}</pre>
                                 </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- AI Cost Report -->
+                    <div v-if="activeLogTab === 'ai_cost_report'" class="flex-1 bg-white border rounded p-4 space-y-4">
+                        <div class="flex flex-wrap items-end gap-2">
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">开始日期</label>
+                                <input type="date" v-model="aiCostFilter.date_from" class="border rounded px-2 py-1 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">结束日期</label>
+                                <input type="date" v-model="aiCostFilter.date_to" class="border rounded px-2 py-1 text-sm">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Provider</label>
+                                <input type="text" v-model="aiCostFilter.provider" @keyup.enter="fetchAICostReport(1)" class="border rounded px-2 py-1 text-sm w-28" placeholder="deepseek">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">Model</label>
+                                <input type="text" v-model="aiCostFilter.model" @keyup.enter="fetchAICostReport(1)" class="border rounded px-2 py-1 text-sm w-36" placeholder="deepseek-chat">
+                            </div>
+                            <div>
+                                <label class="block text-xs text-gray-500 mb-1">来源</label>
+                                <input type="text" v-model="aiCostFilter.source" @keyup.enter="fetchAICostReport(1)" class="border rounded px-2 py-1 text-sm w-32" placeholder="news_batch">
+                            </div>
+                            <button @click="fetchAICostReport(1)" class="px-3 py-1.5 text-sm border rounded hover:bg-gray-100">筛选</button>
+                        </div>
+
+                        <div class="grid grid-cols-2 md:grid-cols-5 gap-3">
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">请求次数</div>
+                                <div class="text-lg font-bold">{{ Number((aiCostReport.totals || {}).count || 0) }}</div>
+                            </div>
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">输入 Token</div>
+                                <div class="text-lg font-bold text-blue-700">{{ Number((aiCostReport.totals || {}).prompt_tokens || 0) }}</div>
+                            </div>
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">输出 Token</div>
+                                <div class="text-lg font-bold text-emerald-700">{{ Number((aiCostReport.totals || {}).completion_tokens || 0) }}</div>
+                            </div>
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">总 Token</div>
+                                <div class="text-lg font-bold">{{ Number((aiCostReport.totals || {}).total_tokens || 0) }}</div>
+                            </div>
+                            <div class="border rounded p-2 bg-gray-50">
+                                <div class="text-xs text-gray-500">累计成本 (¥)</div>
+                                <div class="text-lg font-bold text-red-600">{{ Number((aiCostReport.totals || {}).total_cost_cny || 0).toFixed(6) }}</div>
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
+                            <div class="border rounded p-3">
+                                <div class="text-sm font-bold mb-2">按 Provider</div>
+                                <div class="space-y-2 max-h-[220px] overflow-auto">
+                                    <div v-for="row in ((aiCostReport.agg || {}).by_provider || []).slice(0, 20)" :key="'p_' + row.key" class="text-xs border-b pb-1">
+                                        <div class="font-mono">{{ row.key }}</div>
+                                        <div class="text-gray-500">次数 {{ row.count }} · Token {{ row.total_tokens }} · ¥{{ Number(row.total_cost_cny || 0).toFixed(6) }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="border rounded p-3">
+                                <div class="text-sm font-bold mb-2">按模型</div>
+                                <div class="space-y-2 max-h-[220px] overflow-auto">
+                                    <div v-for="row in ((aiCostReport.agg || {}).by_model || []).slice(0, 20)" :key="'m_' + row.key" class="text-xs border-b pb-1">
+                                        <div class="font-mono">{{ row.key }}</div>
+                                        <div class="text-gray-500">次数 {{ row.count }} · Token {{ row.total_tokens }} · ¥{{ Number(row.total_cost_cny || 0).toFixed(6) }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="border rounded p-3">
+                                <div class="text-sm font-bold mb-2">按来源</div>
+                                <div class="space-y-2 max-h-[220px] overflow-auto">
+                                    <div v-for="row in ((aiCostReport.agg || {}).by_source || []).slice(0, 20)" :key="'s_' + row.key" class="text-xs border-b pb-1">
+                                        <div class="font-mono">{{ row.key }}</div>
+                                        <div class="text-gray-500">次数 {{ row.count }} · Token {{ row.total_tokens }} · ¥{{ Number(row.total_cost_cny || 0).toFixed(6) }}</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="overflow-auto border rounded">
+                            <table class="w-full min-w-[1100px] text-xs">
+                                <thead class="bg-gray-50 text-gray-500">
+                                    <tr>
+                                        <th class="p-2 text-left">时间</th>
+                                        <th class="p-2 text-left">来源</th>
+                                        <th class="p-2 text-left">Provider</th>
+                                        <th class="p-2 text-left">Model</th>
+                                        <th class="p-2 text-left">输入</th>
+                                        <th class="p-2 text-left">输出</th>
+                                        <th class="p-2 text-left">总Token</th>
+                                        <th class="p-2 text-left">成本 (¥)</th>
+                                    </tr>
+                                </thead>
+                                <tbody>
+                                    <tr v-for="(row, idx) in (aiCostReport.items || [])" :key="'ai_' + idx" class="border-t">
+                                        <td class="p-2 whitespace-nowrap">{{ formatShanghaiTime(row.time_shanghai) }}</td>
+                                        <td class="p-2 font-mono">{{ row.source || '-' }}</td>
+                                        <td class="p-2 font-mono">{{ row.provider || '-' }}</td>
+                                        <td class="p-2 font-mono">{{ row.model || '-' }}</td>
+                                        <td class="p-2">{{ Number(row.prompt_tokens || 0) }}</td>
+                                        <td class="p-2">{{ Number(row.completion_tokens || 0) }}</td>
+                                        <td class="p-2">{{ Number(row.total_tokens || 0) }}</td>
+                                        <td class="p-2 text-red-600 font-semibold">{{ Number(row.cost_cny || 0).toFixed(6) }}</td>
+                                    </tr>
+                                    <tr v-if="!aiCostReport.items || aiCostReport.items.length === 0">
+                                        <td colspan="8" class="p-4 text-center text-gray-400">暂无成本明细</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+
+                        <div class="flex items-center justify-between text-sm border-t pt-3">
+                            <div>共 {{ aiCostPagination.total }} 条</div>
+                            <div class="flex items-center gap-2">
+                                <button @click="fetchAICostReport(aiCostPagination.page - 1)" :disabled="aiCostPagination.page <= 1" class="px-3 py-1 border rounded disabled:opacity-40">上一页</button>
+                                <span>第 {{ aiCostPagination.page }} / {{ Math.max(1, aiCostPagination.total_pages) }} 页</span>
+                                <button @click="fetchAICostReport(aiCostPagination.page + 1)" :disabled="aiCostPagination.page >= Math.max(1, aiCostPagination.total_pages)" class="px-3 py-1 border rounded disabled:opacity-40">下一页</button>
                             </div>
                         </div>
                     </div>
@@ -1583,6 +1844,25 @@
                             biying_cert_path: '',
                             biying_minute_limit: 3000
                         },
+                        ai_cost_config: {
+                            default: {
+                                input_per_million_cny: 2.0,
+                                output_per_million_cny: 3.0
+                            },
+                            models: {
+                                'deepseek-chat': {
+                                    provider: 'deepseek',
+                                    input_per_million_cny: 2.0,
+                                    output_per_million_cny: 3.0
+                                }
+                            },
+                            alert: {
+                                enabled: true,
+                                daily_threshold_cny: 100.0,
+                                step_cny: 100.0,
+                                cooldown_minutes: 60
+                            }
+                        },
                         community_config: {
                             qq_group_number: '',
                             qq_group_link: '',
@@ -1619,8 +1899,28 @@
                         user_keyword: ''
                     },
                     userOpsPagination: { page: 1, page_size: 50, total: 0, total_pages: 1 },
+                    securityLogs: [],
+                    securityFilter: {
+                        level: '',
+                        event: '',
+                        keyword: ''
+                    },
+                    securityPagination: { page: 1, page_size: 50, total: 0, total_pages: 1 },
                     aiCacheStats: {},
                     aiCacheDetail: null,
+                    aiCostReport: {
+                        items: [],
+                        totals: {},
+                        agg: { by_provider: [], by_model: [], by_source: [], by_day: [] }
+                    },
+                    aiCostFilter: {
+                        date_from: '',
+                        date_to: '',
+                        provider: '',
+                        model: '',
+                        source: ''
+                    },
+                    aiCostPagination: { page: 1, page_size: 50, total: 0, total_pages: 1 },
                     overviewToday: {},
                     providerTestRunning: false,
                     providerTestLogs: [],
@@ -1673,11 +1973,13 @@
                         schedule: '',
                         email: '',
                         api_keys: '',
+                        ai_cost: '',
                         data_provider: '',
                         pricing: '',
                         community_referral: '',
                         admin_path: ''
                     },
+                    aiCostModelRows: [],
                     _beforeUnloadHandler: null
                 }
             },
@@ -1742,11 +2044,15 @@
                         this.fetchNews(1);
                     }
                     if (val === 'logs') {
-                        if (!['system', 'user_ops', 'ai_cache', 'provider_test'].includes(this.activeLogTab)) {
+                        if (!['system', 'user_ops', 'security', 'ai_cache', 'ai_cost_report', 'provider_test'].includes(this.activeLogTab)) {
                             this.activeLogTab = 'system';
                         }
                         if (this.activeLogTab === 'provider_test') {
                             this.fetchProviderTestLogs(1);
+                        } else if (this.activeLogTab === 'security') {
+                            this.fetchSecurityLogs(1);
+                        } else if (this.activeLogTab === 'ai_cost_report') {
+                            this.fetchAICostReport(1);
                         } else {
                             this.fetchLogs(this.activeLogTab);
                         }
@@ -1799,6 +2105,21 @@
                     }
                     if (section === 'email') return this.config.email_config || {};
                     if (section === 'api_keys') return this.config.api_keys || {};
+                    if (section === 'ai_cost') {
+                        const aiCfg = this.normalizeAiCostConfig(this.config.ai_cost_config || {});
+                        const models = {};
+                        for (const row of (this.aiCostModelRows || [])) {
+                            const modelName = String((row || {}).model || '').trim();
+                            if (!modelName) continue;
+                            models[modelName] = {
+                                provider: String((row || {}).provider || 'deepseek').trim() || 'deepseek',
+                                input_per_million_cny: Number((row || {}).input_per_million_cny || 0),
+                                output_per_million_cny: Number((row || {}).output_per_million_cny || 0)
+                            };
+                        }
+                        aiCfg.models = models;
+                        return aiCfg;
+                    }
                     if (section === 'data_provider') return this.config.data_provider_config || {};
                     if (section === 'pricing') return this.config.pricing_config || {};
                     if (section === 'community_referral') {
@@ -1825,6 +2146,87 @@
                 hasUnsavedConfigChanges() {
                     return Object.keys(this.configSnapshots || {}).some((key) => this.isConfigDirty(key));
                 },
+                normalizeAiCostConfig(raw) {
+                    const cfg = (raw && typeof raw === 'object') ? raw : {};
+                    const def = (cfg.default && typeof cfg.default === 'object') ? cfg.default : {};
+                    const alert = (cfg.alert && typeof cfg.alert === 'object') ? cfg.alert : {};
+                    const modelsRaw = (cfg.models && typeof cfg.models === 'object') ? cfg.models : {};
+                    const models = {};
+                    for (const [modelName, val] of Object.entries(modelsRaw)) {
+                        if (!modelName) continue;
+                        const row = (val && typeof val === 'object') ? val : {};
+                        models[String(modelName)] = {
+                            provider: String(row.provider || 'deepseek').trim() || 'deepseek',
+                            input_per_million_cny: Number(row.input_per_million_cny || 0),
+                            output_per_million_cny: Number(row.output_per_million_cny || 0)
+                        };
+                    }
+                    return {
+                        default: {
+                            input_per_million_cny: Number(def.input_per_million_cny || 2.0),
+                            output_per_million_cny: Number(def.output_per_million_cny || 3.0)
+                        },
+                        models,
+                        alert: {
+                            enabled: alert.enabled === undefined ? true : !!alert.enabled,
+                            daily_threshold_cny: Number(alert.daily_threshold_cny || 100.0),
+                            step_cny: Number(alert.step_cny || 100.0),
+                            cooldown_minutes: Number(alert.cooldown_minutes || 60)
+                        }
+                    };
+                },
+                rebuildAiCostModelRows() {
+                    const cfg = this.normalizeAiCostConfig(this.config.ai_cost_config || {});
+                    const rows = [];
+                    for (const [modelName, row] of Object.entries(cfg.models || {})) {
+                        rows.push({
+                            model: String(modelName || '').trim(),
+                            provider: String((row || {}).provider || 'deepseek').trim() || 'deepseek',
+                            input_per_million_cny: Number((row || {}).input_per_million_cny || 0),
+                            output_per_million_cny: Number((row || {}).output_per_million_cny || 0)
+                        });
+                    }
+                    if (rows.length === 0) {
+                        rows.push({
+                            model: 'deepseek-chat',
+                            provider: 'deepseek',
+                            input_per_million_cny: 2.0,
+                            output_per_million_cny: 3.0
+                        });
+                    }
+                    this.aiCostModelRows = rows;
+                },
+                syncAiCostRowsToConfig() {
+                    const cfg = this.normalizeAiCostConfig(this.config.ai_cost_config || {});
+                    const models = {};
+                    for (const row of (this.aiCostModelRows || [])) {
+                        const modelName = String((row || {}).model || '').trim();
+                        if (!modelName) continue;
+                        models[modelName] = {
+                            provider: String((row || {}).provider || 'deepseek').trim() || 'deepseek',
+                            input_per_million_cny: Number((row || {}).input_per_million_cny || 0),
+                            output_per_million_cny: Number((row || {}).output_per_million_cny || 0)
+                        };
+                    }
+                    cfg.models = models;
+                    this.config.ai_cost_config = cfg;
+                },
+                addAiCostModelRow() {
+                    this.aiCostModelRows.push({
+                        model: '',
+                        provider: 'deepseek',
+                        input_per_million_cny: 0,
+                        output_per_million_cny: 0
+                    });
+                },
+                removeAiCostModelRow(index) {
+                    const i = Number(index);
+                    if (!Number.isFinite(i) || i < 0 || i >= this.aiCostModelRows.length) return;
+                    this.aiCostModelRows.splice(i, 1);
+                    if (this.aiCostModelRows.length === 0) {
+                        this.addAiCostModelRow();
+                    }
+                },
                 async switchView(nextView) {
                     if (!nextView || this.currentView === nextView) return;
                     if (this.currentView === 'config' && this.hasUnsavedConfigChanges()) {
@@ -1840,6 +2242,16 @@
                         if (view === 'provider_test') {
                             this.initialViewFromQuery = 'logs';
                             this.activeLogTab = 'provider_test';
+                            this.currentView = 'logs';
+                        }
+                        if (view === 'security_logs') {
+                            this.initialViewFromQuery = 'logs';
+                            this.activeLogTab = 'security';
+                            this.currentView = 'logs';
+                        }
+                        if (view === 'ai_cost_report') {
+                            this.initialViewFromQuery = 'logs';
+                            this.activeLogTab = 'ai_cost_report';
                             this.currentView = 'logs';
                         }
                         const allowed = new Set(['overview', 'config', 'users', 'watchlist', 'orders', 'referrals', 'news', 'lhb', 'logs']);
@@ -1910,6 +2322,67 @@
                         this.overviewToday = data || {};
                     } catch (e) {
                         this.showMsg(e.message || '今日统计加载失败', 'error');
+                    }
+                },
+                async fetchSecurityLogs(page = null) {
+                    try {
+                        const nextPage = Math.max(1, Number(page || this.securityPagination.page || 1));
+                        const pageSize = Math.max(10, Math.min(Number(this.securityPagination.page_size || 50), 200));
+                        const qs = new URLSearchParams({
+                            page: String(nextPage),
+                            page_size: String(pageSize),
+                            level: this.securityFilter.level || '',
+                            event: this.securityFilter.event || '',
+                            keyword: this.securityFilter.keyword || ''
+                        }).toString();
+                        const res = await fetch(API_BASE_URL + `/api/admin/logs/security?${qs}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '安全审计日志加载失败');
+                        this.securityLogs = Array.isArray(data.items) ? data.items : [];
+                        this.securityPagination = {
+                            ...this.securityPagination,
+                            page: Number(data.page || nextPage),
+                            page_size: Number(data.page_size || pageSize),
+                            total: Number(data.total || 0),
+                            total_pages: Number(data.total_pages || 1)
+                        };
+                    } catch (e) {
+                        this.showMsg(e.message || '安全审计日志加载失败', 'error');
+                    }
+                },
+                async fetchAICostReport(page = null) {
+                    try {
+                        const nextPage = Math.max(1, Number(page || this.aiCostPagination.page || 1));
+                        const pageSize = Math.max(10, Math.min(Number(this.aiCostPagination.page_size || 50), 200));
+                        const qs = new URLSearchParams({
+                            page: String(nextPage),
+                            page_size: String(pageSize),
+                            date_from: this.aiCostFilter.date_from || '',
+                            date_to: this.aiCostFilter.date_to || '',
+                            provider: this.aiCostFilter.provider || '',
+                            model: this.aiCostFilter.model || '',
+                            source: this.aiCostFilter.source || ''
+                        }).toString();
+                        const res = await fetch(API_BASE_URL + `/api/admin/monitor/ai_cost/report?${qs}`, { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || 'AI成本报表加载失败');
+                        this.aiCostReport = {
+                            items: Array.isArray(data.items) ? data.items : [],
+                            totals: data.totals || {},
+                            agg: data.agg || { by_provider: [], by_model: [], by_source: [], by_day: [] },
+                            pricing: data.pricing || {}
+                        };
+                        this.aiCostPagination = {
+                            ...this.aiCostPagination,
+                            page: Number(data.page || nextPage),
+                            page_size: Number(data.page_size || pageSize),
+                            total: Number(data.total || 0),
+                            total_pages: Number(data.total_pages || 1)
+                        };
+                    } catch (e) {
+                        this.showMsg(e.message || 'AI成本报表加载失败', 'error');
                     }
                 },
                 async fetchProviderTestLogs(page = null) {
@@ -2177,8 +2650,14 @@
                                 user_keyword: this.userOpsFilter.user_keyword || ''
                             });
                             url = `/api/admin/logs/user_ops?${qs.toString()}`;
+                        } else if (type === 'security') {
+                            await this.fetchSecurityLogs(page || 1);
+                            return;
                         } else if (type === 'ai_cache') {
                             url = '/api/admin/monitor/ai_cache';
+                        } else if (type === 'ai_cost_report') {
+                            await this.fetchAICostReport(page || 1);
+                            return;
                         } else if (type === 'provider_test') {
                             await this.fetchProviderTestLogs(page || 1);
                             return;
@@ -2227,10 +2706,12 @@
                             providerCfg.biying_minute_limit = Number.isFinite(legacy) && legacy > 0 ? legacy : 3000;
                         }
                         delete providerCfg.biying_daily_limit;
+                        const aiCostCfg = this.normalizeAiCostConfig(data.ai_cost_config || {});
 
                         this.config = {
                             ...data,
                             schedule_plan: Array.isArray(data.schedule_plan) ? data.schedule_plan : [],
+                            ai_cost_config: aiCostCfg,
                             data_provider_config: providerCfg,
                             community_config: {
                                 qq_group_number: '',
@@ -2246,6 +2727,7 @@
                                 ...(data.referral_config || {})
                             }
                         };
+                        this.rebuildAiCostModelRows();
                         this.snapshotAllConfigSections();
                     } catch(e) { 
                         console.error("Fetch Config Error:", e);
@@ -2350,6 +2832,9 @@
                             body = { email_config: this.config.email_config };
                         } else if (section === 'api_keys') {
                             body = { api_keys: this.config.api_keys };
+                        } else if (section === 'ai_cost') {
+                            this.syncAiCostRowsToConfig();
+                            body = { ai_cost_config: this.normalizeAiCostConfig(this.config.ai_cost_config || {}) };
                         } else if (section === 'data_provider') {
                             const providerCfg = { ...(this.config.data_provider_config || {}) };
                             const minuteLimit = Number(providerCfg.biying_minute_limit);
@@ -2383,7 +2868,7 @@
                 },
                 async saveConfig() {
                     let allOk = true;
-                    for (const section of ['schedule', 'email', 'api_keys', 'data_provider', 'pricing', 'community_referral']) {
+                    for (const section of ['schedule', 'email', 'api_keys', 'ai_cost', 'data_provider', 'pricing', 'community_referral']) {
                         if (this.isConfigDirty(section)) {
                             const ok = await this.saveConfigSection(section, true);
                             if (!ok) allOk = false;
