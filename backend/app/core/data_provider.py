@@ -1041,7 +1041,7 @@ class DataProvider:
         try:
             return self._fetch_quotes_sina(codes)
         except Exception as e:
-            self.log(f"[!] 鏂版氮琛屾儏鑾峰彇澶辫触: {e}")
+            self.log(f"[!] 新浪行情获取失败: {e}")
             
         return []
 
@@ -1087,7 +1087,7 @@ class DataProvider:
             return df[['day', 'close', 'volume']].rename(columns={'day': 'time'})
             
         except Exception as e:
-            self.log(f"鑾峰彇鍒嗘椂鏁版嵁澶辫触 {code}: {e}")
+            self.log(f"获取分时数据失败 {code}: {e}")
             return None
 
     def _fetch_quotes_sina(self, codes):
@@ -1103,7 +1103,7 @@ class DataProvider:
             try:
                 self.update_base_info()
             except Exception as e:
-                self.log(f"[!] fetch_quotes 鍐呮洿鏂板熀纭€淇℃伅澶辫触: {e}")
+                self.log(f"[!] fetch_quotes 内更新基础信息失败: {e}")
 
         # Prepare base info map for CircMV calculation
         base_map = {}
@@ -1200,7 +1200,7 @@ class DataProvider:
                         "circulation_value": circ_mv # Use standard key
                     })
             except Exception as e:
-                self.log(f"[!] 鎵归噺鎶撳彇澶辫触: {e}")
+                self.log(f"[!] 批量抓取失败: {e}")
                 continue
                 
         return stocks
@@ -1374,7 +1374,7 @@ class DataProvider:
             df = self._call_provider("akshare", lambda: ak.stock_zt_pool_em(date=date_str))
             return df
         except Exception as e:
-            self.log(f"[!] 娑ㄥ仠姹犳姄鍙栧け璐? {e}")
+            self.log(f"[!] 涨停池抓取失败: {e}")
             return None
 
     def fetch_broken_limit_pool(self):
@@ -1384,7 +1384,7 @@ class DataProvider:
             df = self._call_provider("akshare", lambda: ak.stock_zt_pool_zbgc_em(date=date_str))
             return df
         except Exception as e:
-            self.log(f"[!] 鐐告澘姹犳姄鍙栧け璐? {e}")
+            self.log(f"[!] 炸板池抓取失败: {e}")
             return None
 
     def fetch_indices(self):
@@ -1398,7 +1398,7 @@ class DataProvider:
                 resp = self._call_provider("sina", lambda: session.get(url, headers=headers, timeout=5))
             
             indices = []
-            indices_map = {"sh000001": "涓婅瘉鎸囨暟", "sz399001": "娣辫瘉鎴愭寚", "sz399006": "鍒涗笟鏉挎寚"}
+            indices_map = {"sh000001": "上证指数", "sz399001": "深证成指", "sz399006": "创业板指"}
             
             for line in resp.text.split('\n'):
                 if not line: continue
@@ -1428,7 +1428,7 @@ class DataProvider:
                 })
             return indices
         except Exception as e:
-            self.log(f"[!] 鎸囨暟鎶撳彇澶辫触: {e}")
+            self.log(f"[!] 指数抓取失败: {e}")
             return []
 
     def fetch_history_data(self, code, days=300):
@@ -1449,7 +1449,7 @@ class DataProvider:
             if isinstance(data, list) and len(data) > 0:
                 return data
         except Exception as e:
-            self.log(f"[!] 鍘嗗彶鏁版嵁鎶撳彇澶辫触 {code}: {e}")
+            self.log(f"[!] 历史数据抓取失败 {code}: {e}")
         
         return []
 
@@ -1493,7 +1493,7 @@ class DataProvider:
                     })
                 return results
         except Exception as e:
-            self.log(f"[!] 鎼滅储澶辫触: {e}")
+            self.log(f"[!] 搜索失败: {e}")
             
         return []
 
@@ -1995,7 +1995,7 @@ class DataProvider:
                 df[col] = 0.0
             return df
         except Exception as e:
-            self.log(f"[!] Tushare閿欒: {e}")
+            self.log(f"[!] Tushare错误: {e}")
             return None
 
 # Global instance
