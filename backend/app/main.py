@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends
+﻿from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -6,12 +6,14 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 import requests
 import json
+import hashlib
 import os
 import shutil
 import asyncio
 import time
 import copy
 import threading
+import socket
 import re
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -59,7 +61,7 @@ KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
-SERVER_VERSION = "v2.6.3"
+SERVER_VERSION = "v3.0.0"
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
@@ -119,10 +121,43 @@ API_DEVICE_AUTH_EXEMPT_PATHS = {
     "/api/auth/register",
     "/api/auth/login_user",
     "/api/admin/login",
+    "/api/status",
 }
 PRESENCE_HEARTBEAT_SECONDS = 15 * 60
 _presence_last_logged: dict = {}
 _presence_lock = threading.Lock()
+_bg_singleton_socket = None
+STATUS_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("STATUS_RATE_LIMIT_WINDOW_SECONDS", "10") or 10)
+STATUS_RATE_LIMIT_MAX_REQUESTS = int(os.getenv("STATUS_RATE_LIMIT_MAX_REQUESTS", "30") or 30)
+_status_rate_limit_hits: dict = {}
+_status_rate_limit_lock = threading.Lock()
+
+
+def _bool_env(name: str, default: bool = True) -> bool:
+    raw = str(os.getenv(name, "")).strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _acquire_background_singleton() -> bool:
+    global _bg_singleton_socket
+    if _bg_singleton_socket is not None:
+        return True
+    lock_port = int(os.getenv("BACKGROUND_SINGLETON_PORT", "39731") or 39731)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("127.0.0.1", lock_port))
+        sock.listen(1)
+        _bg_singleton_socket = sock
+        return True
+    except OSError:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        return False
 
 
 def _client_ip_from_request(request: Request) -> str:
@@ -132,6 +167,23 @@ def _client_ip_from_request(request: Request) -> str:
     if request.client and request.client.host:
         return request.client.host
     return ""
+
+
+def _is_status_rate_limited(request: Request) -> bool:
+    ip = _client_ip_from_request(request)
+    if ip in {"127.0.0.1", "::1", "localhost"}:
+        return False
+
+    now_ts = time.time()
+    with _status_rate_limit_lock:
+        hits = _status_rate_limit_hits.get(ip, [])
+        hits = [t for t in hits if now_ts - t <= STATUS_RATE_LIMIT_WINDOW_SECONDS]
+        if len(hits) >= STATUS_RATE_LIMIT_MAX_REQUESTS:
+            _status_rate_limit_hits[ip] = hits
+            return True
+        hits.append(now_ts)
+        _status_rate_limit_hits[ip] = hits
+    return False
 
 
 def _parse_device_os(user_agent: str, platform_hint: str, header_os: str) -> str:
@@ -418,8 +470,10 @@ async def user_operation_logger(request: Request, call_next):
     return response
 
 @app.get("/api/status")
-async def get_system_status():
+async def get_system_status(request: Request):
     """获取系统状态（交易日/时间）"""
+    if _is_status_rate_limited(request):
+        return JSONResponse(status_code=429, content={"detail": "Too many status requests"})
     return {
         "status": "success",
         "is_trading_time": is_trading_time(),
@@ -430,39 +484,11 @@ async def get_system_status():
 
 @app.get("/api/news_history/clear")
 async def clear_news_history(range: str = "all", user: models.User = Depends(check_data_permission)):
-    """清理新闻历史
-    range: all, before_today, before_3d, before_7d
-    """
-    history_file = DATA_DIR / "news_history.json"
-    if not history_file.exists():
-        return {"status": "success", "message": "No history to clear"}
-        
-    try:
-        if range == "all":
-            new_history = []
-        else:
-            with open(history_file, 'r', encoding='utf-8') as f:
-                history = json.load(f)
-            
-            now_ts = int(time.time())
-            if range == "before_today":
-                # Today 00:00:00
-                cutoff_ts = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-            elif range == "before_3d":
-                cutoff_ts = now_ts - (3 * 24 * 3600)
-            elif range == "before_7d":
-                cutoff_ts = now_ts - (7 * 24 * 3600)
-            else:
-                cutoff_ts = 0
-                
-            new_history = [item for item in history if item.get('timestamp', 0) >= cutoff_ts]
-            
-        with open(history_file, 'w', encoding='utf-8') as f:
-            json.dump(new_history, f, ensure_ascii=False, indent=2)
-            
-        return {"status": "success", "message": f"History cleared with range: {range}"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    """历史兼容接口：服务端新闻历史不再支持清理，仅允许客户端本地缓存清理。"""
+    return {
+        "status": "disabled",
+        "message": "服务器新闻历史已改为长期保留，不支持服务端清理；请清理客户端本地缓存。",
+    }
 
 def load_watchlist():
     """加载复盘生成的关注列表"""
@@ -621,6 +647,10 @@ indices_cache = []
 indices_cache_ts = 0.0
 market_sentiment_cache = {}
 market_sentiment_cache_ts = 0.0
+market_ws_last_stock_hash = ""
+market_ws_last_pool_hash = ""
+market_ws_last_sentiment_hash = ""
+market_ws_last_lhb_syncing = None
 day_kline_refresh_ts = {}
 day_kline_attempt_ts = {}
 kline_update_cursor = 0
@@ -983,16 +1013,6 @@ async def update_intraday_pool():
     pass 
     # Placeholder, actual logic is in endpoints or separate scanner calls
 
-@app.get("/api/status")
-async def get_status():
-    return {
-        "status": "success",
-        "is_trading": is_trading_time(),
-        "is_market_open_day": is_market_open_day(),
-        "server_time": datetime.now().strftime("%H:%M:%S"),
-        "server_version": SERVER_VERSION
-    }
-
 @app.get("/api/add_watchlist")
 async def add_to_watchlist_api(code: str, name: str, reason: str = "手动添加", user: models.User = Depends(check_data_permission)):
     global favorites_data, watchlist_map
@@ -1220,7 +1240,7 @@ def refresh_watchlist():
 async def websocket_endpoint(websocket: WebSocket):
     channel = (websocket.query_params.get("channel") or "logs").strip().lower()
     device_id = (websocket.query_params.get("device_id") or "").strip()
-    if channel not in ("logs", "notify"):
+    if channel not in ("logs", "notify", "market"):
         channel = "logs"
     if channel == "notify" and not device_id:
         channel = "logs"
@@ -1476,6 +1496,102 @@ async def log_broadcaster():
         except queue.Empty:
             await asyncio.sleep(0.1)
 
+
+def _market_hash_obj(value) -> str:
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        encoded = str(value)
+    return hashlib.md5(encoded.encode("utf-8")).hexdigest()
+
+
+def _compact_quote_ticks(rows):
+    compact = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("code", "")).strip()
+        if not code:
+            continue
+        compact.append({
+            "code": code,
+            "current": row.get("current", 0),
+            "change_percent": row.get("change_percent", 0),
+            "time": row.get("time", ""),
+        })
+    return compact
+
+
+async def market_event_broadcaster():
+    global market_ws_last_stock_hash, market_ws_last_pool_hash, market_ws_last_sentiment_hash, market_ws_last_lhb_syncing
+    while True:
+        try:
+            if not await ws_hub.has_market_subscribers():
+                market_ws_last_stock_hash = ""
+                market_ws_last_pool_hash = ""
+                market_ws_last_sentiment_hash = ""
+                market_ws_last_lhb_syncing = None
+                await asyncio.sleep(2)
+                continue
+
+            quotes = _get_stock_quotes_cache()
+            if quotes:
+                await ws_hub.broadcast_market_event({
+                    "event": "quotes_tick",
+                    "ts": int(time.time()),
+                    "quotes": _compact_quote_ticks(quotes),
+                })
+
+            refresh_targets = []
+
+            stocks_fingerprint = [
+                {
+                    "code": str(x.get("code", "")),
+                    "strategy": str(x.get("strategy", "")),
+                    "is_favorite": bool(x.get("is_favorite", False)),
+                }
+                for x in (quotes or [])
+                if isinstance(x, dict)
+            ]
+            stock_hash = _market_hash_obj(stocks_fingerprint)
+            if stock_hash != market_ws_last_stock_hash:
+                market_ws_last_stock_hash = stock_hash
+                refresh_targets.append("stocks")
+
+            pool_fingerprint = {
+                "limit_up": [str(x.get("code", "")) for x in (limit_up_pool_data or []) if isinstance(x, dict)],
+                "broken": [str(x.get("code", "")) for x in (broken_limit_pool_data or []) if isinstance(x, dict)],
+            }
+            pool_hash = _market_hash_obj(pool_fingerprint)
+            if pool_hash != market_ws_last_pool_hash:
+                market_ws_last_pool_hash = pool_hash
+                refresh_targets.append("limit_up_pool")
+
+            sentiment_payload = get_market_sentiment_cache() or {}
+            sentiment_hash = _market_hash_obj(sentiment_payload.get("stats", {}))
+            if sentiment_hash != market_ws_last_sentiment_hash:
+                market_ws_last_sentiment_hash = sentiment_hash
+                refresh_targets.append("market_sentiment")
+
+            lhb_syncing = bool(lhb_manager.is_syncing)
+            if lhb_syncing != market_ws_last_lhb_syncing:
+                market_ws_last_lhb_syncing = lhb_syncing
+                await ws_hub.broadcast_market_event({
+                    "event": "lhb_status",
+                    "is_syncing": lhb_syncing,
+                })
+
+            if refresh_targets:
+                await ws_hub.broadcast_market_event({
+                    "event": "market_refresh",
+                    "targets": refresh_targets,
+                    "ts": int(time.time()),
+                })
+        except Exception as e:
+            print(f"市场WS广播任务错误: {e}")
+
+        await asyncio.sleep(2)
+
 def update_limit_up_pool_task():
     """更新涨停股票池"""
     global limit_up_pool_data
@@ -1516,7 +1632,23 @@ def update_limit_up_pool_task():
 async def startup_event():
     # Load caches
     load_analysis_cache()
-    
+
+    # Always start lightweight websocket log broadcaster.
+    asyncio.create_task(log_broadcaster())
+    asyncio.create_task(market_event_broadcaster())
+
+    if not _bool_env("ENABLE_BACKGROUND_TASKS", True):
+        msg = "启动：已禁用后台任务（ENABLE_BACKGROUND_TASKS=0）"
+        print(msg)
+        add_runtime_log(msg)
+        return
+
+    if not _acquire_background_singleton():
+        msg = "启动：后台任务由其他 worker 持有，当前实例仅提供 API"
+        print(msg)
+        add_runtime_log(msg)
+        return
+
     # Update base info only during market trading session.
     if is_market_open_day() and is_trading_time():
         print("启动：正在更新股票基础信息...")
@@ -1525,12 +1657,12 @@ async def startup_event():
     else:
         print("启动：当前非交易时段，跳过基础信息更新。")
         add_runtime_log("启动：当前非交易时段，跳过基础信息更新。")
+
     # Warm core caches once at startup.
     await asyncio.to_thread(refresh_stock_quotes_cache)
     await asyncio.to_thread(refresh_indices_cache)
     await asyncio.to_thread(refresh_market_sentiment_cache)
-    
-    asyncio.create_task(log_broadcaster())
+
     # Start background scheduler
     asyncio.create_task(scheduler_loop())
     # Start centralized cache updater (all user APIs read these caches only)
@@ -1542,7 +1674,7 @@ async def startup_event():
     asyncio.create_task(update_intraday_pool_task())
     # Start periodic cleanup task
     asyncio.create_task(periodic_cleanup_task())
-    
+
     # 启动时立即执行一次盘中扫描，确保列表不为空。
     print("启动：正在执行首次盘中扫描...")
     add_runtime_log("启动：正在执行首次盘中扫描...")

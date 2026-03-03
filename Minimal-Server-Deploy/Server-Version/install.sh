@@ -19,6 +19,7 @@ INTERNAL_PORT="$DEFAULT_INTERNAL_PORT"
 DEFAULT_EXTERNAL_PORT="80"
 EXTERNAL_PORT="$DEFAULT_EXTERNAL_PORT"
 USER_IP=""
+WORKER_COUNT="2"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
 PYTHON_CMD=""
@@ -69,6 +70,24 @@ select_python_cmd() {
     log_info "使用 Python 解释器: $PYTHON_CMD"
 }
 
+calc_worker_count() {
+    local cpu_count="2"
+    if command -v nproc >/dev/null 2>&1; then
+        cpu_count="$(nproc 2>/dev/null || echo 2)"
+    fi
+    if ! [[ "$cpu_count" =~ ^[0-9]+$ ]] || [ "$cpu_count" -lt 1 ]; then
+        cpu_count="2"
+    fi
+
+    if [ "$cpu_count" -le 2 ]; then
+        WORKER_COUNT="2"
+    elif [ "$cpu_count" -le 4 ]; then
+        WORKER_COUNT="3"
+    else
+        WORKER_COUNT="4"
+    fi
+}
+
 is_valid_port() {
     local port="$1"
     [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ]
@@ -106,6 +125,27 @@ finally:
     s.close()
 sys.exit(1)
 PY
+}
+
+is_port_in_use_by_nginx() {
+    local port="$1"
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnp "sport = :$port" 2>/dev/null | grep -qi nginx
+        return
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -iTCP:"$port" -sTCP:LISTEN -n -P 2>/dev/null | grep -qi nginx
+        return
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -ltnp 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | grep -qi nginx
+        return
+    fi
+
+    return 1
 }
 
 resolve_internal_port() {
@@ -162,8 +202,12 @@ configure_ports() {
         fi
 
         if is_port_in_use "$EXTERNAL_PORT"; then
-            log_warn "端口 $EXTERNAL_PORT 已被占用，请更换"
-            continue
+            if is_port_in_use_by_nginx "$EXTERNAL_PORT"; then
+                log_warn "端口 $EXTERNAL_PORT 当前由 Nginx 占用，将复用该端口并覆盖站点配置"
+            else
+                log_warn "端口 $EXTERNAL_PORT 已被占用，请更换"
+                continue
+            fi
         fi
 
         break
@@ -324,6 +368,33 @@ EOF
 }
 EOF
     log_info "后台路径已重置为默认: /admin"
+
+    USER_ACCOUNTS_FILE="$DATA_DIR/user_accounts.json"
+    TRIAL_FP_FILE="$DATA_DIR/trial_fingerprints.json"
+    REFERRAL_RECORDS_FILE="$DATA_DIR/referral_records.json"
+    USER_OP_LOG_FILE="$DATA_DIR/user_operation_logs.jsonl"
+
+    if [ ! -f "$USER_ACCOUNTS_FILE" ]; then
+        echo '{}' > "$USER_ACCOUNTS_FILE"
+        log_info "已初始化 user_accounts.json"
+    fi
+
+    if [ ! -f "$TRIAL_FP_FILE" ]; then
+        echo '{}' > "$TRIAL_FP_FILE"
+        log_info "已初始化 trial_fingerprints.json"
+    fi
+
+    if [ ! -f "$REFERRAL_RECORDS_FILE" ]; then
+        cat > "$REFERRAL_RECORDS_FILE" <<'EOF'
+{
+  "order_invites": {},
+  "rewarded_invitees": {}
+}
+EOF
+        log_info "已初始化 referral_records.json"
+    fi
+
+    touch "$USER_OP_LOG_FILE"
 }
 
 ensure_lhb_data_files() {
@@ -576,7 +647,9 @@ Group=root
 WorkingDirectory=$APP_DIR/backend
 Environment="PATH=$APP_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="DEEPSEEK_API_KEY=$FINAL_DEEPSEEK_KEY"
-ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $INTERNAL_PORT --workers 1
+Environment="ENABLE_BACKGROUND_TASKS=1"
+Environment="BACKGROUND_SINGLETON_PORT=39731"
+ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $INTERNAL_PORT --workers $WORKER_COUNT
 Restart=always
 RestartSec=5
 
@@ -642,6 +715,41 @@ EOF
     systemctl restart nginx
 }
 
+verify_deployment_health() {
+    log_warn "[健康检查] 校验服务与接口状态..."
+
+    if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+        log_error "[错误] 服务未处于 active 状态: $SERVICE_NAME"
+        log_error "请执行: sudo journalctl -u ${SERVICE_NAME} -n 120 --no-pager"
+        exit 1
+    fi
+
+    local internal_health_url="http://127.0.0.1:${INTERNAL_PORT}/api/status"
+    local internal_ok="false"
+    local i
+    for i in $(seq 1 20); do
+        if curl -fsS "$internal_health_url" >/dev/null 2>&1; then
+            internal_ok="true"
+            break
+        fi
+        sleep 1
+    done
+
+    if [ "$internal_ok" != "true" ]; then
+        log_error "[错误] 内部健康检查失败: $internal_health_url"
+        log_error "请执行: sudo journalctl -u ${SERVICE_NAME} -n 120 --no-pager"
+        exit 1
+    fi
+
+    local external_health_url="http://127.0.0.1:${EXTERNAL_PORT}/api/status"
+    if ! curl -fsS "$external_health_url" >/dev/null 2>&1; then
+        log_warn "[警告] Nginx 转发健康检查失败: $external_health_url"
+        log_warn "请检查 Nginx: sudo nginx -t && sudo systemctl status nginx"
+    fi
+
+    log_info "健康检查通过"
+}
+
 show_result() {
     ADMIN_HINT="已保留服务器现有管理员账号配置（用户名默认为 admin）"
     if [ ! -f "$APP_DIR/backend/data/admin_credentials.json" ]; then
@@ -677,6 +785,7 @@ main() {
 
     require_root
     detect_os
+    calc_worker_count
     check_source_tree
 
     log_info "检测到源码目录: $SOURCE_ROOT"
@@ -693,6 +802,7 @@ main() {
     setup_python_venv
     setup_systemd
     setup_nginx
+    verify_deployment_health
     show_result
     cleanup_temp
 }

@@ -1,5 +1,7 @@
 import json
 import threading
+import atexit
+import queue
 from collections import deque
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +15,55 @@ USER_OP_LOG_FILE = DATA_DIR / "user_operation_logs.jsonl"
 
 _log_lock = threading.Lock()
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+_log_queue: "queue.Queue[str]" = queue.Queue(maxsize=10000)
+_writer_thread: Optional[threading.Thread] = None
+_writer_stop = threading.Event()
+
+
+def _writer_loop():
+    pending: List[str] = []
+    while not _writer_stop.is_set() or not _log_queue.empty() or pending:
+        try:
+            line = _log_queue.get(timeout=0.5)
+            pending.append(line)
+            while len(pending) < 200:
+                pending.append(_log_queue.get_nowait())
+        except queue.Empty:
+            pass
+
+        if not pending:
+            continue
+
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            with _log_lock:
+                with open(USER_OP_LOG_FILE, "a", encoding="utf-8") as f:
+                    f.write("\n".join(pending) + "\n")
+            pending.clear()
+        except Exception:
+            pending.clear()
+
+
+def _ensure_writer_started():
+    global _writer_thread
+    if _writer_thread and _writer_thread.is_alive():
+        return
+    with _log_lock:
+        if _writer_thread and _writer_thread.is_alive():
+            return
+        _writer_stop.clear()
+        _writer_thread = threading.Thread(target=_writer_loop, name="user-op-log-writer", daemon=True)
+        _writer_thread.start()
+
+
+def _shutdown_writer():
+    _writer_stop.set()
+    thread = _writer_thread
+    if thread and thread.is_alive():
+        thread.join(timeout=2.0)
+
+
+atexit.register(_shutdown_writer)
 
 
 def _safe_text(value: Any, max_len: int = 300) -> str:
@@ -58,11 +109,11 @@ def log_user_operation(
         entry["extra"] = safe_extra
 
     try:
-        DATA_DIR.mkdir(parents=True, exist_ok=True)
+        _ensure_writer_started()
         line = json.dumps(entry, ensure_ascii=False)
-        with _log_lock:
-            with open(USER_OP_LOG_FILE, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
+        _log_queue.put_nowait(line)
+    except queue.Full:
+        pass
     except Exception:
         pass
 

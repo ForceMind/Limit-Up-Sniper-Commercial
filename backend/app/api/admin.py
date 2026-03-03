@@ -1035,37 +1035,20 @@ async def approve_order(
     user = order.user
     now = datetime.utcnow()
 
-    base_prices = {
-        "trial": 0,
-        "basic": 58,
-        "advanced": 128,
-        "flagship": 298,
-    }
-
-    current_value_remaining = 0
-    if user.expires_at and user.expires_at > now and user.version != "trial":
-        remaining_minutes = (user.expires_at - now).total_seconds() / 60
-        price_per_month = base_prices.get(user.version, 0)
-        price_per_minute = price_per_month / (30 * 24 * 60)
-        current_value_remaining = remaining_minutes * price_per_minute
-
-    new_duration_days = order.duration_days
-    target_price_per_month = base_prices.get(order.target_version, 0)
-    target_price_per_minute = target_price_per_month / (30 * 24 * 60)
-
-    converted_minutes = 0
-    if target_price_per_minute > 0:
-        converted_minutes = current_value_remaining / target_price_per_minute
-
-    total_new_minutes = (new_duration_days * 24 * 60) + converted_minutes
-
-    # 续费加送：同版本续费即可生效（不区分是否已到期）
-    is_same_version_renewal = user.version != "trial" and (user.version == order.target_version)
-    bonus_days = purchase_manager.get_renewal_bonus_days(order.duration_days) if is_same_version_renewal else 0
-    bonus_minutes = bonus_days * 24 * 60
+    extension = purchase_manager.calculate_membership_extension(
+        current_version=user.version,
+        current_expires_at=user.expires_at,
+        target_version=order.target_version,
+        purchased_days=int(order.duration_days or 0),
+        order_amount=float(order.amount or 0.0),
+        now=now,
+    )
+    converted_days = float(extension.get("converted_days", 0.0) or 0.0)
+    bonus_days = int(extension.get("bonus_days", 0) or 0)
+    total_new_minutes = float(extension.get("total_granted_minutes", 0.0) or 0.0)
 
     user.version = order.target_version
-    user.expires_at = now + timedelta(minutes=total_new_minutes + bonus_minutes)
+    user.expires_at = now + timedelta(minutes=total_new_minutes)
 
     order.status = "completed"
     db.commit()
@@ -1122,7 +1105,9 @@ async def approve_order(
         "status": "completed",
         "version": user.version,
         "expires_at": user.expires_at.isoformat() if user.expires_at else None,
+        "converted_days": round(converted_days, 2),
         "bonus_days": int(bonus_days),
+        "upgrade_bonus_days": int(extension.get("upgrade_bonus_days", 0) or 0),
         "referral_bonus_token": referral_reward_info["bonus_token"] if referral_reward_info else "",
         "referral_bonus_days": int(referral_reward_info["reward_days"]) if referral_reward_info else 0,
         "message": "会员审批已通过，权益已生效。",
@@ -1131,7 +1116,9 @@ async def approve_order(
     return {
         "status": "success",
         "new_expiry": user.expires_at,
+        "converted_days": round(converted_days, 2),
         "bonus_days": bonus_days,
+        "upgrade_bonus_days": int(extension.get("upgrade_bonus_days", 0) or 0),
         "referral_reward": referral_reward_info,
     }
 
@@ -2775,6 +2762,9 @@ def _ensure_today_network_baseline(date_text: str, current_net: Dict[str, int]) 
             "last_probe_ts": now_ts,
             "last_rx_bytes": int(current_net.get("rx_bytes", 0) or 0),
             "last_tx_bytes": int(current_net.get("tx_bytes", 0) or 0),
+            "peak_rx_bps": 0.0,
+            "peak_tx_bps": 0.0,
+            "peak_total_bps": 0.0,
             "updated_at": datetime.utcnow().replace(microsecond=0).isoformat(),
         }
         _save_metrics_baseline(baseline)
@@ -2792,6 +2782,15 @@ def _ensure_today_network_baseline(date_text: str, current_net: Dict[str, int]) 
         changed = True
     if "last_tx_bytes" not in baseline:
         baseline["last_tx_bytes"] = int(current_net.get("tx_bytes", 0) or 0)
+        changed = True
+    if "peak_rx_bps" not in baseline:
+        baseline["peak_rx_bps"] = 0.0
+        changed = True
+    if "peak_tx_bps" not in baseline:
+        baseline["peak_tx_bps"] = 0.0
+        changed = True
+    if "peak_total_bps" not in baseline:
+        baseline["peak_total_bps"] = 0.0
         changed = True
     if changed:
         baseline["updated_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
@@ -2835,6 +2834,11 @@ def _collect_system_runtime_metrics(date_text: str) -> Dict[str, Any]:
         delta_tx = max(0, int(net.get("tx_bytes", 0) or 0) - last_tx)
         rx_bps_current = round(float(delta_rx) / delta_sec, 2)
         tx_bps_current = round(float(delta_tx) / delta_sec, 2)
+    total_bps_current = round(rx_bps_current + tx_bps_current, 2)
+
+    peak_rx_bps = max(_safe_float(baseline.get("peak_rx_bps", 0.0), 0.0), rx_bps_current)
+    peak_tx_bps = max(_safe_float(baseline.get("peak_tx_bps", 0.0), 0.0), tx_bps_current)
+    peak_total_bps = max(_safe_float(baseline.get("peak_total_bps", 0.0), 0.0), total_bps_current)
 
     day_start_ts = _safe_float(baseline.get("day_start_ts", now_ts), now_ts)
     elapsed_today_sec = max(1.0, now_ts - day_start_ts)
@@ -2844,6 +2848,9 @@ def _collect_system_runtime_metrics(date_text: str) -> Dict[str, Any]:
     baseline["last_probe_ts"] = now_ts
     baseline["last_rx_bytes"] = int(net.get("rx_bytes", 0) or 0)
     baseline["last_tx_bytes"] = int(net.get("tx_bytes", 0) or 0)
+    baseline["peak_rx_bps"] = float(round(peak_rx_bps, 2))
+    baseline["peak_tx_bps"] = float(round(peak_tx_bps, 2))
+    baseline["peak_total_bps"] = float(round(peak_total_bps, 2))
     baseline["updated_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
     _save_metrics_baseline(baseline)
 
@@ -2879,7 +2886,10 @@ def _collect_system_runtime_metrics(date_text: str) -> Dict[str, Any]:
             "total_bytes_today": int(rx_today + tx_today),
             "rx_bps_current": float(rx_bps_current),
             "tx_bps_current": float(tx_bps_current),
-            "total_bps_current": float(round(rx_bps_current + tx_bps_current, 2)),
+            "total_bps_current": float(total_bps_current),
+            "rx_bps_peak": float(round(peak_rx_bps, 2)),
+            "tx_bps_peak": float(round(peak_tx_bps, 2)),
+            "total_bps_peak": float(round(peak_total_bps, 2)),
             "rx_bps_today_avg": float(rx_bps_today_avg),
             "tx_bps_today_avg": float(tx_bps_today_avg),
             "total_bps_today_avg": float(round(rx_bps_today_avg + tx_bps_today_avg, 2)),
@@ -3459,17 +3469,15 @@ async def delete_news_items(
 
 @router.post("/news/clear")
 async def clear_news_items(authorized: bool = Depends(verify_admin)):
-    save_news_history([])
-    save_news_analysis_records([])
     log_user_operation(
         "clear_news_items",
-        status="success",
+        status="blocked",
         actor="admin",
         method="POST",
         path="/api/admin/news/clear",
-        detail="all_news_cleared",
+        detail="server_news_retention_enabled",
     )
-    return {"status": "success", "removed": "all"}
+    raise HTTPException(status_code=400, detail="服务器新闻历史已改为长期保留，不支持清空。")
 
 
 # --- LHB Admin ---

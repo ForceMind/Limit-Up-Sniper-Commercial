@@ -76,8 +76,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_minimal_deploy.ps1 -Kee
     ```
 3. **克隆并安装**：
     ```bash
-    git clone https://github.com/ForceMind/Limit-Up-Sniper.git
-    cd Limit-Up-Sniper
+    git clone https://github.com/ForceMind/Limit-Up-Sniper-Commercial.git
+    cd Limit-Up-Sniper-Commercial
     pip install -r requirements.txt
     ```
 4. **运行**：
@@ -149,8 +149,8 @@ If you truly want "local computation" on Android (no PC required), you can use *
     ```
 3.  **Clone & Install**:
     ```bash
-    git clone https://github.com/ForceMind/Limit-Up-Sniper.git
-    cd Limit-Up-Sniper
+    git clone https://github.com/ForceMind/Limit-Up-Sniper-Commercial.git
+    cd Limit-Up-Sniper-Commercial
     pip install -r requirements.txt
     ```
 4.  **Run**:

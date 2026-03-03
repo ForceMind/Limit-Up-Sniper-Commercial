@@ -207,9 +207,11 @@ async def register(data: dict = Body(...), db: Session = Depends(get_db)):
     if len(username) < 3 or len(password) < 6:
         raise HTTPException(status_code=400, detail="用户名至少3位，密码至少6位")
 
-    accounts = _load_accounts()
-    if username in accounts:
+    existing_account = account_store.get_account_by_username(username)
+    if existing_account:
         raise HTTPException(status_code=400, detail="用户名已存在")
+
+    accounts = _load_accounts()
 
     salt = os.urandom(8).hex()
     password_hash = _hash_password(password, salt)
@@ -266,8 +268,7 @@ async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
     if not username or not password:
         raise HTTPException(status_code=400, detail="请输入用户名和密码")
 
-    accounts = _load_accounts()
-    account = accounts.get(username)
+    account = account_store.get_account_by_username(username)
     if not account:
         log_user_operation(
             "user_login",
@@ -280,7 +281,7 @@ async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
         )
         raise HTTPException(status_code=404, detail="用户不存在，请先注册")
 
-    account_store.ensure_device_not_banned(str(account.get("device_id", "")).strip(), accounts=accounts)
+    account_store.ensure_device_not_banned(str(account.get("device_id", "")).strip())
 
     if _hash_password(password, account.get("salt", "")) != account.get("password_hash"):
         log_user_operation(
@@ -323,8 +324,7 @@ async def account_meta(x_device_id: str = Header(None), db: Session = Depends(ge
         raise HTTPException(status_code=400, detail="Missing Device ID")
 
     account_store.ensure_device_not_banned(x_device_id)
-    accounts = _load_accounts()
-    username, matched = account_store.get_account_by_device_id(x_device_id, accounts=accounts)
+    username, matched = account_store.get_account_by_device_id(x_device_id)
 
     if not matched or not username:
         return {
@@ -333,8 +333,9 @@ async def account_meta(x_device_id: str = Header(None), db: Session = Depends(ge
             "can_apply_trial": False,
         }
 
-    invite_code = account_store.ensure_account_invite_code(username, accounts)
-    _save_accounts(accounts)
+    invite_code = account_store.ensure_invite_code_for_username(username)
+    if invite_code:
+        matched = account_store.get_account_by_username(username) or matched
     user = user_service.get_or_create_user(db, x_device_id)
     return {
         "is_registered": True,
@@ -351,13 +352,11 @@ async def invite_info(request: Request, x_device_id: str = Header(None, alias="X
         raise HTTPException(status_code=400, detail="Missing Device ID")
 
     account_store.ensure_device_not_banned(x_device_id)
-    accounts = _load_accounts()
-    username, account = account_store.get_account_by_device_id(x_device_id, accounts=accounts)
+    username, account = account_store.get_account_by_device_id(x_device_id)
     if not username or not account:
         raise HTTPException(status_code=403, detail="请先注册账号后再使用邀请功能")
 
-    invite_code = account_store.ensure_account_invite_code(username, accounts)
-    _save_accounts(accounts)
+    invite_code = account_store.ensure_invite_code_for_username(username)
 
     referral_cfg = _referral_config()
     try:
@@ -396,22 +395,21 @@ async def apply_trial(
     if not fingerprint_id:
         raise HTTPException(status_code=400, detail="缺少设备标识")
 
-    accounts = _load_accounts()
-    account_key = None
-    for username, account in accounts.items():
-        if account.get("device_id") == x_device_id:
-            account_key = username
-            break
+    account_key, matched_account = account_store.get_account_by_device_id(x_device_id)
 
-    if not account_key:
+    if not account_key or not matched_account:
         raise HTTPException(status_code=403, detail="请先注册并登录后再申请体验")
+
+    accounts = _load_accounts()
+    if account_key not in accounts:
+        accounts[account_key] = matched_account
 
     user = user_service.get_or_create_user(db, x_device_id)
     if user.version in PAID_VERSIONS:
         raise HTTPException(status_code=400, detail="会员账号不支持申请10分钟体验")
 
-    account = accounts[account_key]
-    if account.get("trial_applied"):
+    account = account_store.get_account_by_username(account_key) or accounts[account_key]
+    if bool(account.get("trial_applied")):
         raise HTTPException(status_code=400, detail="当前账号已申请过10分钟体验")
 
     fp_used = _load_trial_fingerprints()
@@ -424,10 +422,13 @@ async def apply_trial(
     }
     _save_trial_fingerprints(fp_used)
 
-    account["trial_applied"] = True
-    account["trial_applied_at"] = datetime.utcnow().isoformat()
-    accounts[account_key] = account
-    _save_accounts(accounts)
+    account_store.update_account_fields(
+        account_key,
+        {
+            "trial_applied": True,
+            "trial_applied_at": datetime.utcnow().isoformat(),
+        },
+    )
 
     user.version = "trial"
     user.expires_at = datetime.utcnow() + timedelta(minutes=10)

@@ -75,3 +75,22 @@ class AccessLog(Base):
     limit_type = Column(String) # ai_analysis, intraday, etc.
     timestamp = Column(DateTime(timezone=True), server_default=func.now())
     status = Column(String) # allow, deny
+
+
+class AccountCredential(Base):
+    __tablename__ = "account_credentials"
+
+    id = Column(Integer, primary_key=True, index=True)
+    username = Column(String, unique=True, index=True, nullable=False)
+    salt = Column(String, nullable=False)
+    password_hash = Column(String, nullable=False)
+    device_id = Column(String, unique=True, index=True, nullable=False)
+    invite_code = Column(String, unique=True, index=True, nullable=True)
+    trial_applied = Column(Boolean, default=False)
+    trial_applied_at = Column(DateTime, nullable=True)
+    is_banned = Column(Boolean, default=False)
+    banned_reason = Column(String, nullable=True)
+    banned_at = Column(DateTime, nullable=True)
+    unbanned_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    invite_code_updated_at = Column(DateTime, nullable=True)

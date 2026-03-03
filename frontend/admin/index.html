@@ -121,6 +121,7 @@
                             <div class="text-2xl font-bold mt-1">{{ (((overviewToday.runtime || {}).ws || {}).total_connections || 0) }}</div>
                             <div class="text-xs text-gray-500 mt-2">实时用户数 {{ (((overviewToday.runtime || {}).ws || {}).active_devices || 0) }}</div>
                             <div class="text-xs text-gray-500">日志连接 {{ (((overviewToday.runtime || {}).ws || {}).log_connections || 0) }}（后台日志WS） · 通知连接 {{ (((overviewToday.runtime || {}).ws || {}).notify_connections || 0) }}（用户通知WS）</div>
+                            <div class="text-xs text-gray-500">行情连接 {{ (((overviewToday.runtime || {}).ws || {}).market_connections || 0) }}（行情WS）</div>
                             <div class="text-xs text-gray-500">在线设备(5分钟) {{ ((overviewToday.runtime || {}).online_recent_devices_5m || 0) }}</div>
                         </div>
                         <div class="bg-white border rounded p-4">
@@ -134,6 +135,8 @@
                             <div class="text-xs text-gray-500">带宽与流量</div>
                             <div class="text-sm mt-2">当前总带宽 <span class="font-bold">{{ formatSpeed((((overviewToday.runtime || {}).network || {}).total_bps_current || 0)) }}</span></div>
                             <div class="text-xs text-gray-500">下行 {{ formatSpeed((((overviewToday.runtime || {}).network || {}).rx_bps_current || 0)) }} · 上行 {{ formatSpeed((((overviewToday.runtime || {}).network || {}).tx_bps_current || 0)) }}</div>
+                            <div class="text-xs text-gray-500 mt-2">峰值总带宽 {{ formatSpeed((((overviewToday.runtime || {}).network || {}).total_bps_peak || 0)) }}</div>
+                            <div class="text-xs text-gray-500">峰值下行 {{ formatSpeed((((overviewToday.runtime || {}).network || {}).rx_bps_peak || 0)) }} · 峰值上行 {{ formatSpeed((((overviewToday.runtime || {}).network || {}).tx_bps_peak || 0)) }}</div>
                             <div class="text-xs text-gray-500 mt-2">今日平均 {{ formatSpeed((((overviewToday.runtime || {}).network || {}).total_bps_today_avg || 0)) }}</div>
                             <div class="text-sm mt-2">今日总流量 <span class="font-bold">{{ formatBytes((((overviewToday.runtime || {}).network || {}).total_bytes_today || 0)) }}</span></div>
                             <div class="text-xs text-gray-500">下行 {{ formatBytes((((overviewToday.runtime || {}).network || {}).rx_bytes_today || 0)) }} · 上行 {{ formatBytes((((overviewToday.runtime || {}).network || {}).tx_bytes_today || 0)) }}</div>
@@ -1499,7 +1502,7 @@
                         <h2 class="text-2xl font-bold">新闻管理</h2>
                         <div class="flex items-center gap-2">
                             <button @click="fetchNews(1)" class="text-blue-500 hover:text-blue-700">刷新</button>
-                            <button @click="clearAllNews" class="text-red-600 hover:text-red-700">清空全部</button>
+                            <button @click="clearAllNews" class="text-gray-400 cursor-not-allowed" title="服务器新闻已改为长期保留">清空全部（已禁用）</button>
                         </div>
                     </div>
                     <div class="bg-white rounded shadow overflow-hidden">
@@ -3349,21 +3352,7 @@
                     }
                 },
                 async clearAllNews() {
-                    const confirmed = await this.showConfirm('确认清空所有新闻与关联分析记录吗？');
-                    if (!confirmed) return;
-                    try {
-                        const res = await fetch(API_BASE_URL + '/api/admin/news/clear', {
-                            method: 'POST',
-                            headers: this.getHeaders()
-                        });
-                        if (res.status === 403) { this.clearAuth(true); return; }
-                        const data = await res.json();
-                        if (!res.ok) throw new Error(data.detail || '清空新闻失败');
-                        this.showMsg('新闻记录已清空', 'success');
-                        this.fetchNews(1);
-                    } catch (e) {
-                        this.showMsg(e.message || '清空新闻失败', 'error');
-                    }
+                    this.showMsg('服务器新闻历史已改为长期保留，不支持清空。', 'info');
                 },
                 async resetUserPassword(user) {
                     if (!user || !user.id) return;

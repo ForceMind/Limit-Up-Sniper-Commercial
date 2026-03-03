@@ -2,11 +2,15 @@ import hashlib
 import json
 import re
 import secrets
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 from fastapi import HTTPException
+from sqlalchemy.orm import Session
+
+from app.db import database, models
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -15,6 +19,8 @@ REFERRAL_RECORDS_FILE = DATA_DIR / "referral_records.json"
 
 INVITE_CODE_RE = re.compile(r"^[A-Z0-9]{6,20}$")
 INVITE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+_account_table_ready = False
+_account_table_lock = threading.Lock()
 
 
 def _ensure_data_dir():
@@ -37,13 +43,229 @@ def _save_json(path: Path, data):
         json.dump(data, f, ensure_ascii=False, indent=2)
 
 
+def _as_utc_naive(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        if value.tzinfo is not None:
+            return value.replace(tzinfo=None)
+        return value
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        dt = datetime.fromisoformat(text)
+        if dt.tzinfo is not None:
+            return dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        return None
+
+
+def _ensure_account_table():
+    global _account_table_ready
+    if _account_table_ready:
+        return
+    with _account_table_lock:
+        if _account_table_ready:
+            return
+        database.Base.metadata.create_all(
+            bind=database.engine,
+            tables=[models.AccountCredential.__table__],
+        )
+        _account_table_ready = True
+
+
+def _row_to_account_dict(row: models.AccountCredential) -> Dict[str, Any]:
+    return {
+        "username": str(row.username or "").strip(),
+        "salt": str(row.salt or "").strip(),
+        "password_hash": str(row.password_hash or "").strip(),
+        "device_id": str(row.device_id or "").strip(),
+        "created_at": row.created_at.isoformat() if row.created_at else "",
+        "trial_applied": bool(row.trial_applied),
+        "trial_applied_at": row.trial_applied_at.isoformat() if row.trial_applied_at else "",
+        "is_banned": bool(row.is_banned),
+        "banned_reason": str(row.banned_reason or "").strip(),
+        "banned_at": row.banned_at.isoformat() if row.banned_at else "",
+        "unbanned_at": row.unbanned_at.isoformat() if row.unbanned_at else "",
+        "invite_code": str(row.invite_code or "").strip(),
+        "invite_code_updated_at": row.invite_code_updated_at.isoformat() if row.invite_code_updated_at else "",
+    }
+
+
+def _load_accounts_from_db() -> Dict[str, dict]:
+    _ensure_account_table()
+    db: Session = database.SessionLocal()
+    try:
+        rows = db.query(models.AccountCredential).all()
+        data: Dict[str, dict] = {}
+        for row in rows:
+            item = _row_to_account_dict(row)
+            username = item.get("username", "")
+            if username:
+                data[username] = item
+        return data
+    finally:
+        db.close()
+
+
+def _sync_accounts_to_db(data: Dict[str, dict]):
+    _ensure_account_table()
+    db: Session = database.SessionLocal()
+    try:
+        existing_rows = db.query(models.AccountCredential).all()
+        existing_by_username = {str(row.username or "").strip(): row for row in existing_rows}
+        incoming_usernames = set()
+
+        for username, account in data.items():
+            uname = str(username or "").strip()
+            if not uname or not isinstance(account, dict):
+                continue
+            incoming_usernames.add(uname)
+
+            row = existing_by_username.get(uname)
+            if row is None:
+                row = models.AccountCredential(username=uname)
+                db.add(row)
+
+            row.salt = str(account.get("salt", "")).strip()
+            row.password_hash = str(account.get("password_hash", "")).strip()
+            row.device_id = str(account.get("device_id", "")).strip()
+            row.invite_code = normalize_invite_code(account.get("invite_code", "")) or None
+            row.trial_applied = bool(account.get("trial_applied", False))
+            row.trial_applied_at = _as_utc_naive(account.get("trial_applied_at"))
+            row.is_banned = bool(account.get("is_banned", False))
+            row.banned_reason = str(account.get("banned_reason", "")).strip() or None
+            row.banned_at = _as_utc_naive(account.get("banned_at"))
+            row.unbanned_at = _as_utc_naive(account.get("unbanned_at"))
+            row.created_at = _as_utc_naive(account.get("created_at")) or datetime.utcnow()
+            row.invite_code_updated_at = _as_utc_naive(account.get("invite_code_updated_at"))
+
+        for uname, row in existing_by_username.items():
+            if uname not in incoming_usernames:
+                db.delete(row)
+
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _upsert_account_in_db(username: str, account: Dict[str, Any]):
+    _ensure_account_table()
+    uname = str(username or "").strip()
+    if not uname:
+        raise ValueError("username required")
+    db: Session = database.SessionLocal()
+    try:
+        row = db.query(models.AccountCredential).filter(models.AccountCredential.username == uname).first()
+        if row is None:
+            row = models.AccountCredential(username=uname)
+            db.add(row)
+        row.salt = str(account.get("salt", "")).strip()
+        row.password_hash = str(account.get("password_hash", "")).strip()
+        row.device_id = str(account.get("device_id", "")).strip()
+        row.invite_code = normalize_invite_code(account.get("invite_code", "")) or None
+        row.trial_applied = bool(account.get("trial_applied", False))
+        row.trial_applied_at = _as_utc_naive(account.get("trial_applied_at"))
+        row.is_banned = bool(account.get("is_banned", False))
+        row.banned_reason = str(account.get("banned_reason", "")).strip() or None
+        row.banned_at = _as_utc_naive(account.get("banned_at"))
+        row.unbanned_at = _as_utc_naive(account.get("unbanned_at"))
+        row.created_at = _as_utc_naive(account.get("created_at")) or datetime.utcnow()
+        row.invite_code_updated_at = _as_utc_naive(account.get("invite_code_updated_at"))
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise
+    finally:
+        db.close()
+
+
+def _dump_accounts_snapshot(data: Dict[str, dict]):
+    _save_json(USER_ACCOUNTS_FILE, data)
+
+
 def load_accounts() -> Dict[str, dict]:
+    try:
+        data = _load_accounts_from_db()
+        if data:
+            return data
+    except Exception:
+        pass
+
     data = _load_json(USER_ACCOUNTS_FILE, {})
-    return data if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+
+    try:
+        _sync_accounts_to_db(data)
+    except Exception:
+        pass
+    return data
 
 
 def save_accounts(data: Dict[str, dict]):
-    _save_json(USER_ACCOUNTS_FILE, data)
+    safe = data if isinstance(data, dict) else {}
+    _sync_accounts_to_db(safe)
+    _dump_accounts_snapshot(safe)
+
+
+def update_account_fields(
+    username: str,
+    updates: Dict[str, Any],
+    *,
+    accounts: Optional[Dict[str, dict]] = None,
+) -> Dict[str, Any]:
+    uname = str(username or "").strip()
+    if not uname:
+        raise ValueError("Account not found")
+
+    data = accounts if isinstance(accounts, dict) else load_accounts()
+    account = data.get(uname)
+    if not isinstance(account, dict):
+        raise ValueError("Account not found")
+
+    safe_updates = updates if isinstance(updates, dict) else {}
+    for key, value in safe_updates.items():
+        account[str(key)] = value
+
+    data[uname] = account
+    if isinstance(accounts, dict):
+        _upsert_account_in_db(uname, account)
+        _dump_accounts_snapshot(data)
+    else:
+        save_accounts(data)
+    return account
+
+
+def get_account_by_username(
+    username: str,
+    accounts: Optional[Dict[str, dict]] = None,
+) -> Optional[dict]:
+    uname = str(username or "").strip()
+    if not uname:
+        return None
+    if isinstance(accounts, dict):
+        item = accounts.get(uname)
+        return item if isinstance(item, dict) else None
+
+    try:
+        _ensure_account_table()
+        db: Session = database.SessionLocal()
+        try:
+            row = db.query(models.AccountCredential).filter(models.AccountCredential.username == uname).first()
+            if row:
+                return _row_to_account_dict(row)
+        finally:
+            db.close()
+    except Exception:
+        pass
+
+    data = load_accounts()
+    item = data.get(uname)
+    return item if isinstance(item, dict) else None
 
 
 def hash_password(password: str, salt: str) -> str:
@@ -58,10 +280,25 @@ def get_account_by_device_id(
     device_id: str,
     accounts: Optional[Dict[str, dict]] = None,
 ) -> Tuple[Optional[str], Optional[dict]]:
-    data = accounts if isinstance(accounts, dict) else load_accounts()
     did = str(device_id or "").strip()
     if not did:
         return None, None
+
+    if not isinstance(accounts, dict):
+        try:
+            _ensure_account_table()
+            db: Session = database.SessionLocal()
+            try:
+                row = db.query(models.AccountCredential).filter(models.AccountCredential.device_id == did).first()
+                if row:
+                    item = _row_to_account_dict(row)
+                    return item.get("username"), item
+            finally:
+                db.close()
+        except Exception:
+            pass
+
+    data = accounts if isinstance(accounts, dict) else load_accounts()
     for username, account in data.items():
         if not isinstance(account, dict):
             continue
@@ -131,13 +368,35 @@ def ensure_account_invite_code(username: str, accounts: Dict[str, dict]) -> str:
 
 
 def ensure_invite_code_for_device(device_id: str) -> Tuple[str, str]:
-    accounts = load_accounts()
-    username, account = get_account_by_device_id(device_id, accounts=accounts)
+    username, account = get_account_by_device_id(device_id)
     if not username or not account:
         return "", ""
+    accounts = load_accounts()
+    if username not in accounts:
+        accounts[username] = account
     code = ensure_account_invite_code(username, accounts)
     save_accounts(accounts)
     return username, code
+
+
+def ensure_invite_code_for_username(username: str) -> str:
+    uname = str(username or "").strip()
+    if not uname:
+        return ""
+    account = get_account_by_username(uname)
+    if not isinstance(account, dict):
+        return ""
+
+    current = normalize_invite_code(account.get("invite_code", ""))
+    if current and INVITE_CODE_RE.fullmatch(current):
+        return current
+
+    accounts = load_accounts()
+    if uname not in accounts:
+        accounts[uname] = account
+    code = ensure_account_invite_code(uname, accounts)
+    save_accounts(accounts)
+    return code
 
 
 def find_account_by_invite_code(
@@ -147,6 +406,20 @@ def find_account_by_invite_code(
     normalized = normalize_invite_code(invite_code)
     if not normalized:
         return None, None, ""
+    if not isinstance(accounts, dict):
+        try:
+            _ensure_account_table()
+            db: Session = database.SessionLocal()
+            try:
+                row = db.query(models.AccountCredential).filter(models.AccountCredential.invite_code == normalized).first()
+                if row:
+                    item = _row_to_account_dict(row)
+                    return item.get("username"), item, normalized
+            finally:
+                db.close()
+        except Exception:
+            pass
+
     data = accounts if isinstance(accounts, dict) else load_accounts()
     for username, account in data.items():
         if not isinstance(account, dict):
@@ -158,7 +431,26 @@ def find_account_by_invite_code(
 
 
 def is_device_banned(device_id: str, accounts: Optional[Dict[str, dict]] = None) -> Tuple[bool, str]:
-    _, account = get_account_by_device_id(device_id, accounts=accounts)
+    did = str(device_id or "").strip()
+    if not did:
+        return False, ""
+
+    if not isinstance(accounts, dict):
+        try:
+            _ensure_account_table()
+            db: Session = database.SessionLocal()
+            try:
+                row = db.query(models.AccountCredential).filter(models.AccountCredential.device_id == did).first()
+                if row:
+                    if not bool(row.is_banned):
+                        return False, ""
+                    return True, str(row.banned_reason or "").strip()
+            finally:
+                db.close()
+        except Exception:
+            pass
+
+    _, account = get_account_by_device_id(did, accounts=accounts)
     if not account:
         return False, ""
     if not bool(account.get("is_banned")):
@@ -195,7 +487,11 @@ def set_account_ban_status(
         account["banned_reason"] = ""
         account["unbanned_at"] = datetime.utcnow().isoformat()
     data[username] = account
-    save_accounts(data)
+    if isinstance(accounts, dict):
+        _upsert_account_in_db(username, account)
+        _dump_accounts_snapshot(data)
+    else:
+        save_accounts(data)
     return account
 
 

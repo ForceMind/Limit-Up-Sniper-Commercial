@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>涨停狙击手 (Limit-Up Sniper) v2.6.3</title>
+    <title>涨停狙击手 (Limit-Up Sniper) v3.0.0</title>
     <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <link rel="manifest" href="static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -113,7 +113,7 @@
                     </div>
 
                 <!-- Settings Button (Merged Filter & Config) -->
-                <button v-if="!isSearchFocused || !isMobile" @click.stop="showSettingsModal = true" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors z-10 relative" title="过滤设置">
+                <button v-if="!isSearchFocused || !isMobile" @click.stop="showSettingsModal = true" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors z-10 relative" title="打开设置">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
                     </svg>
@@ -903,7 +903,7 @@
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-md flex flex-col max-h-[90vh]">
                 <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
                     <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 flex items-center gap-2">
-                        🛠️ 过滤器配置
+                        🛠️ 系统设置
                     </h3>
                     <button @click="showSettingsModal = false" class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -912,7 +912,15 @@
                     </button>
                 </div>
                 
-                <div class="p-6 overflow-y-auto space-y-6">
+                <div class="p-6 overflow-y-auto space-y-4">
+                    <div class="rounded border border-gray-200 dark:border-gray-700">
+                        <button @click="settingsSectionCommonOpen = !settingsSectionCommonOpen" class="w-full px-3 py-2 flex items-center justify-between text-sm font-bold text-gray-800 dark:text-gray-100">
+                            <span>⚙️ 常用设置</span>
+                            <span>{{ settingsSectionCommonOpen ? '收起' : '展开' }}</span>
+                        </button>
+                    </div>
+
+                    <template v-if="settingsSectionCommonOpen">
                     <!-- 0. User Profile (Mobile Only) -->
                     <div class="md:hidden p-4 bg-gray-50 dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700 text-center cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition" @click="openSubscription()">
                         <div class="font-bold text-lg mb-1" :class="{
@@ -937,7 +945,7 @@
                         </div>
                         <div class="mt-3 text-xs text-blue-600 dark:text-blue-400 font-bold flex items-center justify-center gap-1">
                             <span>💳</span>
-                            <span>{{ userInfo.version === 'trial' ? '申请体验 / 升级' : '查看会员详情 / 续费' }}</span>
+                            <span>{{ userInfo.version === 'trial' ? '申请体验 / 升级' : '查看会员详情 / 续费与升级' }}</span>
                         </div>
                     </div>
 
@@ -957,7 +965,7 @@
                                 <button v-if="!isRegisteredAccount" @click="showSettingsModal = false; showLoginModal = true" class="py-2 rounded bg-blue-600 text-white text-sm font-bold">登录/注册</button>
                                 <button v-else @click="logout" class="py-2 rounded border border-gray-300 text-sm font-bold">退出登录</button>
                                 <button @click="openSubscription()" class="py-2 rounded bg-red-600 text-white text-sm font-bold">
-                                    {{ isRegisteredAccount ? '会员中心 / 续费' : '查看会员方案' }}
+                                    {{ isRegisteredAccount ? '会员中心 / 续费与升级' : '查看会员方案' }}
                                 </button>
                             </div>
                         </div>
@@ -999,6 +1007,16 @@
                             </div>
                         </div>
                     </div>
+                    </template>
+
+                    <div class="rounded border border-gray-200 dark:border-gray-700">
+                        <button @click="settingsSectionAdvancedOpen = !settingsSectionAdvancedOpen" class="w-full px-3 py-2 flex items-center justify-between text-sm font-bold text-gray-800 dark:text-gray-100">
+                            <span>🧩 高级设置</span>
+                            <span>{{ settingsSectionAdvancedOpen ? '收起' : '展开' }}</span>
+                        </button>
+                    </div>
+
+                    <template v-if="settingsSectionAdvancedOpen">
 
                     <!-- 3. System Info (Read Only) -->
                     <div class="pt-4 border-t border-gray-100 dark:border-gray-700">
@@ -1049,6 +1067,7 @@
                             <button @click="openQQGroupLink" :disabled="!qqInviteInfo.qq_group_link" class="py-1.5 rounded bg-emerald-600 text-white text-xs disabled:opacity-40">一键加群</button>
                         </div>
                     </div>
+                    </template>
 
                 </div>
 
@@ -1169,7 +1188,15 @@
                     </div>
                     <div>
                         <label class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">密码</label>
-                        <input type="password" v-model="loginForm.password" class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white" placeholder="请输入密码">
+                        <div class="relative">
+                            <input :type="showPasswordInLogin ? 'text' : 'password'" v-model="loginForm.password" class="w-full border rounded p-2 pr-16 text-sm focus:ring-2 focus:ring-blue-500 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white" placeholder="请输入密码">
+                            <button type="button" @click="showPasswordInLogin = !showPasswordInLogin" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-300 dark:hover:text-gray-100">
+                                {{ showPasswordInLogin ? '隐藏' : '显示' }}
+                            </button>
+                        </div>
+                    </div>
+                    <div class="text-[11px] text-amber-600 dark:text-amber-400 leading-5">
+                        注册提醒：本站不提供修改密码和忘记密码服务。账号和密码是唯一标识，请务必自行妥善保存。
                     </div>
                 </div>
                 
@@ -1195,6 +1222,24 @@
                 <div class="text-xs text-gray-400 text-center mt-2">
                     {{ isRegisteredAccount ? '已登录后可在会员中心购买或续费。' : '游客仅可浏览，需注册后申请体验或购买会员。' }}
                 </div>
+            </div>
+        </div>
+
+        <div v-if="registerCredentialModal.show" class="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" @click.self="registerCredentialModal.show = false">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-sm p-6">
+                <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 mb-2">请保存你的注册信息</h3>
+                <p class="text-xs text-amber-600 dark:text-amber-400 mb-3 leading-5">
+                    本站不提供修改密码和忘记密码服务。账号和密码是唯一标识，请务必妥善保管。
+                </p>
+                <div class="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded p-3 text-sm space-y-2 mb-4">
+                    <div>账号：<span class="font-mono font-bold">{{ registerCredentialModal.username }}</span></div>
+                    <div>密码：<span class="font-mono font-bold text-red-600 dark:text-red-400">{{ registerCredentialModal.password }}</span></div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <button @click="copyText(registerCredentialModal.username, '账号已复制')" class="py-2 rounded border border-gray-300 text-sm">复制账号</button>
+                    <button @click="copyText(registerCredentialModal.password, '密码已复制')" class="py-2 rounded bg-blue-600 text-white text-sm font-bold">复制密码</button>
+                </div>
+                <button @click="registerCredentialModal.show = false" class="w-full mt-3 py-2 rounded bg-emerald-600 text-white text-sm font-bold">我已保存</button>
             </div>
         </div>
 
@@ -1241,7 +1286,7 @@
                 <!-- Header -->
                 <div class="flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-700">
                     <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">
-                        {{ purchaseStep === 1 ? (isRenewOnlyMode ? '会员续费' : '升级会员') : (purchaseStep === 2 ? '支付订单' : '等待验证') }}
+                        {{ purchaseStep === 1 ? selectedPurchaseStepTitle : (purchaseStep === 2 ? '支付订单' : '等待验证') }}
                     </h3>
                     <button @click="showSubscriptionModal = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
                         <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -1389,7 +1434,7 @@
                                 当前会员版本：{{ selectedVersion === 'basic' ? '初级版' : (selectedVersion === 'advanced' ? '高级版' : '旗舰版') }}
                             </div>
                             <div class="mb-1">会员到期时间：{{ membershipExpiryText.replace('到期时间：', '') }}</div>
-                            <div>当前页面仅支持同版本续费。如需降级，请等待当前会员到期后再选择其他版本。</div>
+                            <div>当前已是最高版本，仅支持同版本续费。如需降级，请等待当前会员到期后再选择其他版本。</div>
                         </div>
 
                         <div class="flex gap-2 mb-4 overflow-x-auto pb-2" v-else-if="purchaseableVersions.length > 0">
@@ -1418,16 +1463,27 @@
                                     :class="selectedDuration === key ? 'border-red-500 bg-red-50 dark:bg-red-900/10' : 'border-gray-200 dark:border-gray-700'">
                                     <div class="text-xs">{{ opt.label }}</div>
                                     <div class="text-red-600 font-bold">¥{{ opt.price }}</div>
-                                    <div v-if="opt.bonus_days" class="text-[10px] text-emerald-600">续费加赠{{ opt.bonus_days }}天</div>
+                                    <div v-if="opt.bonus_days" class="text-[10px] text-emerald-600">基础加赠{{ opt.bonus_days }}天</div>
                                 </button>
                             </div>
                         </div>
-                        <div class="mb-4 text-[11px] text-emerald-600 dark:text-emerald-400">
-                            续费加赠：1个月送3天，3个月送10天，6个月送20天，12个月送30天。
+                        <div class="mb-2 text-[11px] text-emerald-600 dark:text-emerald-400">
+                            续费基础加赠：1个月送3天，3个月送10天，6个月送20天，12个月送30天。
+                        </div>
+                        <div class="mb-4 rounded border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 p-3 text-[11px] text-blue-700 dark:text-blue-300 leading-5">
+                            <template v-if="selectedPurchaseMode === 'upgrade'">
+                                升级规则：剩余时长先折算，再加本次时长与加赠；金额越高，升级加赠越多。审核通过后到账。
+                            </template>
+                            <template v-else-if="selectedPurchaseMode === 'renew'">
+                                续费规则：到账 = 本次时长 + 续费加赠。审核通过后到账。
+                            </template>
+                            <template v-else>
+                                购买规则：到账 = 本次时长 + 续费加赠。审核通过后到账。
+                            </template>
                         </div>
 
                         <button @click="createOrder" :disabled="purchaseLoading" class="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded font-bold shadow-lg disabled:opacity-50">
-                            {{ purchaseLoading ? '处理中...' : ((isRenewOnlyMode ? '立即续费 ¥' : '立即购买 ¥') + (pricingOptions[selectedVersion]?.[selectedDuration]?.price || '...')) }}
+                            {{ purchaseLoading ? '处理中...' : (selectedPurchaseButtonPrefix + (pricingOptions[selectedVersion]?.[selectedDuration]?.price || '...')) }}
                         </button>
                     </div>
                 </div>
@@ -1445,6 +1501,23 @@
 
                     <div v-if="currentOrder?.invite_bonus_token" class="w-full bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded p-3 mb-4 text-xs text-left">
                         邀请奖励口令：<span class="font-mono font-bold">{{ currentOrder.invite_bonus_token }}</span>
+                    </div>
+
+                    <div v-if="(Number(currentOrder?.converted_days || 0) > 0) || (Number(currentOrder?.bonus_days || 0) > 0)" class="w-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded p-3 mb-4 text-xs text-left leading-5">
+                        <div>
+                            当前{{ membershipName(userInfo.version) }}剩余：
+                            <span class="font-bold">{{ formatDaysToDayHour(currentOrder?.converted_days || 0) }}</span>
+                            （折算 <span class="font-bold">{{ Number(currentOrder?.converted_days || 0).toFixed(2) }}</span> 天）
+                        </div>
+                        <div>
+                            此次{{ orderActionLabel(currentOrder) }}时长：
+                            <span class="font-bold">{{ Number(currentOrder?.duration_days || 0) }}</span> 天，
+                            续费加赠 <span class="font-bold text-emerald-600 dark:text-emerald-400">{{ orderBaseBonusDays(currentOrder) }}</span> 天
+                            <span v-if="orderUpgradeBonusDays(currentOrder) > 0">，升级加赠 <span class="font-bold text-violet-600 dark:text-violet-400">{{ orderUpgradeBonusDays(currentOrder) }}</span> 天</span>
+                        </div>
+                        <div>
+                            预计新增到账：<span class="font-bold">{{ Number(currentOrder?.total_granted_days || 0).toFixed(2) }}</span> 天（审核通过后到账）
+                        </div>
                     </div>
                     
                     <div class="text-xs text-gray-400 mb-6">
@@ -1663,14 +1736,34 @@
                     newStockCode: '',
                     logs: [],
                     wsConnected: false,
+                    wsConnecting: false,
+                    wsReconnectTimer: null,
+                    logSocket: null,
                     notifyWsConnected: false,
+                    notifyWsConnecting: false,
+                    notifyReconnectTimer: null,
                     notifySocket: null,
+                    marketWsConnected: false,
+                    marketWsConnecting: false,
+                    marketReconnectTimer: null,
+                    marketSocket: null,
+                    wsRefreshLastTs: {},
+                    marketFallbackFastTimer: null,
+                    marketFallbackSlowTimer: null,
+                    lhbStatusPollTimer: null,
+                    configPollTimer: null,
+                    clockTimer: null,
+                    lhbStatusLastCheckTs: 0,
                     globalAuthErrorHandler: null,
                     currentTime: new Date(),
                     searchQuery: '',
                     searchResults: [],
                     searchTimeout: null,
                     isMobile: window.innerWidth < 768,
+                    isFetchingStocks: false,
+                    isFetchingIndices: false,
+                    isFetchingLimitUpPool: false,
+                    isFetchingSentiment: false,
                     marketSentiment: {
                         indices: [],
                         stats: {
@@ -1708,6 +1801,8 @@
                     activePoolTab: 'limit_up', // 'limit_up' or 'broken'
                     // Settings
                     showSettingsModal: false,
+                    settingsSectionCommonOpen: true,
+                    settingsSectionAdvancedOpen: false,
                     isSearchFocused: false,
 
                     apiKey: '', // Store API Key
@@ -1742,11 +1837,13 @@
                     showGuestReminderModal: false,
                     showQQInviteModal: false,
                     loginForm: { username: '', password: '' },
+                    showPasswordInLogin: false,
+                    registerCredentialModal: { show: false, username: '', password: '' },
                     displayUsername: '',
                     isRegisteredAccount: false,
                     accountCanApplyTrial: false,
                     fingerprintId: '',
-                    frontendVersion: 'v2.6.3',
+                    frontendVersion: 'v3.0.0',
                     serverVersion: '获取中...',
                     loginLoading: false,
                     loadingChart: false,
@@ -1865,11 +1962,43 @@
                 isPaidMember() {
                     return ['basic', 'advanced', 'flagship'].includes(this.userInfo.version);
                 },
+                selectedPurchaseMode() {
+                    const rank = { trial: 0, basic: 1, advanced: 2, flagship: 3 };
+                    const selectedRank = rank[this.selectedVersion] || 0;
+                    const currentVersion = this.userInfo?.version;
+                    const currentRank = rank[currentVersion] || 0;
+                    const activePaid = this.isRegisteredAccount
+                        && ['basic', 'advanced', 'flagship'].includes(currentVersion)
+                        && !this.userInfo?.is_expired;
+                    if (activePaid) {
+                        return selectedRank > currentRank ? 'upgrade' : 'renew';
+                    }
+                    return 'open';
+                },
+                selectedPurchaseButtonPrefix() {
+                    if (this.selectedPurchaseMode === 'upgrade') return '立即升级 ¥';
+                    if (this.selectedPurchaseMode === 'renew') return '立即续费 ¥';
+                    return '立即升级/续费 ¥';
+                },
+                selectedPurchaseStepTitle() {
+                    if (this.selectedPurchaseMode === 'upgrade') return '升级会员';
+                    if (this.selectedPurchaseMode === 'renew') return '会员续费';
+                    return '会员升级/续费';
+                },
                 isRenewOnlyMode() {
-                    return this.isRegisteredAccount && ['basic', 'advanced', 'flagship'].includes(this.userInfo.version);
+                    return this.isRegisteredAccount
+                        && this.purchaseableVersions.length === 1
+                        && this.purchaseableVersions[0] === this.userInfo.version;
                 },
                 purchaseableVersions() {
-                    return Object.keys(this.pricingOptions || {}).filter(ver => ver !== 'trial');
+                    const rank = { trial: 0, basic: 1, advanced: 2, flagship: 3 };
+                    const all = Object.keys(this.pricingOptions || {}).filter(ver => ver !== 'trial');
+                    if (!this.isRegisteredAccount) return all;
+                    const currentVersion = this.userInfo?.version;
+                    if (!['basic', 'advanced', 'flagship'].includes(currentVersion)) return all;
+                    if (this.userInfo?.is_expired) return all;
+                    const currentRank = rank[currentVersion] || 0;
+                    return all.filter(ver => (rank[ver] || 0) >= currentRank);
                 },
                 canShowTenMinuteTrialOption() {
                     return this.isRegisteredAccount && !this.isPaidMember && this.userInfo.version === 'trial' && this.accountCanApplyTrial;
@@ -1977,10 +2106,34 @@
                 if(this.trialTimer) clearTimeout(this.trialTimer);
                 if(this.expiryTimer) clearInterval(this.expiryTimer);
                 if(this.msgTimer) clearTimeout(this.msgTimer);
+                if (this.logSocket) {
+                    try { this.logSocket.close(); } catch (e) {}
+                    this.logSocket = null;
+                }
                 if (this.notifySocket) {
                     try { this.notifySocket.close(); } catch (e) {}
                     this.notifySocket = null;
                 }
+                if (this.marketSocket) {
+                    try { this.marketSocket.close(); } catch (e) {}
+                    this.marketSocket = null;
+                }
+                if (this.marketFallbackFastTimer) clearInterval(this.marketFallbackFastTimer);
+                if (this.marketFallbackSlowTimer) clearInterval(this.marketFallbackSlowTimer);
+                if (this.lhbStatusPollTimer) clearInterval(this.lhbStatusPollTimer);
+                if (this.configPollTimer) clearInterval(this.configPollTimer);
+                if (this.clockTimer) clearInterval(this.clockTimer);
+                if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer);
+                if (this.notifyReconnectTimer) clearTimeout(this.notifyReconnectTimer);
+                if (this.marketReconnectTimer) clearTimeout(this.marketReconnectTimer);
+                this.marketFallbackFastTimer = null;
+                this.marketFallbackSlowTimer = null;
+                this.lhbStatusPollTimer = null;
+                this.configPollTimer = null;
+                this.clockTimer = null;
+                this.wsReconnectTimer = null;
+                this.notifyReconnectTimer = null;
+                this.marketReconnectTimer = null;
                 if (this.globalAuthErrorHandler) {
                     window.removeEventListener('auth-error', this.globalAuthErrorHandler);
                     this.globalAuthErrorHandler = null;
@@ -1994,6 +2147,29 @@
                     if (v === 'advanced') return '高级版';
                     if (v === 'flagship') return '旗舰版';
                     return String(version || '-');
+                },
+                formatDaysToDayHour(days) {
+                    const safeDays = Math.max(0, Number(days || 0));
+                    const totalHours = Math.round(safeDays * 24);
+                    const dayPart = Math.floor(totalHours / 24);
+                    const hourPart = totalHours % 24;
+                    return `${dayPart}天${hourPart}小时`;
+                },
+                orderActionLabel(order) {
+                    if (!order || !order.target_version) return '续费';
+                    const rank = { trial: 0, basic: 1, advanced: 2, flagship: 3 };
+                    const currentRank = rank[String(this.userInfo?.version || '').toLowerCase()] || 0;
+                    const targetRank = rank[String(order.target_version || '').toLowerCase()] || 0;
+                    if (targetRank > currentRank) return '升级';
+                    return '续费';
+                },
+                orderUpgradeBonusDays(order) {
+                    return Math.max(0, Number(order?.upgrade_bonus_days || 0));
+                },
+                orderBaseBonusDays(order) {
+                    const totalBonus = Math.max(0, Number(order?.bonus_days || 0));
+                    const upgradeBonus = this.orderUpgradeBonusDays(order);
+                    return Math.max(0, totalBonus - upgradeBonus);
                 },
                 encodeAuthText(value) {
                     try {
@@ -2103,6 +2279,7 @@
                     const key = this.getOnboardingStorageKey();
                     if (key) localStorage.setItem(key, '1');
                     this.showOnboardingModal = false;
+                    this.activeTab = 'pre';
                 },
                 normalizeInviteCode(code) {
                     return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20);
@@ -2479,8 +2656,15 @@
                             const metaRes = await fetch(`${API_BASE_URL}/api/auth/account_meta`);
                             const meta = await metaRes.json();
 
-                            if (!metaRes.ok || !meta.is_registered) {
-                                throw new Error('Registered account metadata not found');
+                            if (!metaRes.ok) {
+                                throw new Error(meta.detail || 'Account metadata request failed');
+                            }
+                            if (!meta.is_registered) {
+                                console.warn('Session restore skipped: registered account metadata missing, fallback to guest session');
+                                localStorage.removeItem('sniper_token');
+                                localStorage.removeItem('sniper_username');
+                                await this.ensureGuestSession();
+                                return;
                             }
 
                             this.isRegisteredAccount = true;
@@ -2529,11 +2713,18 @@
                         return;
                     }
 
+                    const username = (this.loginForm.username || '').trim();
+                    const password = this.loginForm.password || '';
+                    if (mode === 'register') {
+                        const confirmed = await this.showConfirm(
+                            `请确认并保存以下注册信息：\n\n账号：${username}\n密码：${password}\n\n本站不提供修改密码和忘记密码服务。\n账号和密码是唯一标识，请务必妥善保管。\n\n确认继续注册吗？`
+                        );
+                        if (!confirmed) return;
+                    }
+
                     this.loginLoading = true;
                     try {
                         const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login_user';
-                        const username = (this.loginForm.username || '').trim();
-                        const password = this.loginForm.password || '';
                         const res = await fetch(`${API_BASE_URL}${endpoint}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
@@ -2561,14 +2752,14 @@
                         this.showLoginModal = false;
                         this.showSettingsModal = false;
                         if (this.hasDataAccess) {
-                            this.initialDataLoading = true;
-                            this.fetchData();
-                            this.fetchLimitUpPool();
-                            this.fetchMarketSentiment();
-                            this.fetchIndices();
-                            if (!this.wsConnected) this.connectWebSocket();
+                            this.refreshMarketSnapshots(true);
                         }
                         if (mode === 'register') {
+                            this.registerCredentialModal = {
+                                show: true,
+                                username: data.username || username,
+                                password: password,
+                            };
                             this.qqInviteInfo = {
                                 qq_group_number: (data.qq_group_number || '').trim(),
                                 qq_group_link: (data.qq_group_link || '').trim(),
@@ -2626,12 +2817,7 @@
                         localStorage.setItem('sniper_device_id', token);
                         this.accountCanApplyTrial = false;
                         if (this.hasDataAccess) {
-                            this.initialDataLoading = true;
-                            this.fetchData();
-                            this.fetchLimitUpPool();
-                            this.fetchMarketSentiment();
-                            this.fetchIndices();
-                            if (!this.wsConnected) this.connectWebSocket();
+                            this.refreshMarketSnapshots(true);
                         }
                         this.showMsg('体验申请已通过，资格已开通', 'success');
                     } catch (e) {
@@ -2869,10 +3055,6 @@
                         return;
                     }
 
-                    if (this.isRenewOnlyMode) {
-                        this.selectedVersion = this.userInfo.version;
-                    }
-
                     if (!this.selectedVersion || !this.pricingOptions[this.selectedVersion]) {
                         this.showMsg('请先选择会员版本', 'error');
                         return;
@@ -2884,15 +3066,17 @@
                         this.showMsg('该版本暂无定价信息', 'error');
                         return;
                     }
-                    this.purchaseLoading = true;
                     // Improved duration mapping
                     let dm = 1;
                     if (this.selectedDuration.endsWith('d')) dm = 0; // Days
                     else if (this.selectedDuration.endsWith('m')) dm = parseInt(this.selectedDuration); // Months
                     else if (this.selectedDuration.endsWith('y')) dm = parseInt(this.selectedDuration) * 12; // Years
 
+                    const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
+
+                    this.purchaseLoading = true;
+
                     try {
-                        const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
                         const appliedInviteCode = this.normalizeInviteCode(this.inviteInputCode);
                         const res = await fetch(`${API_BASE_URL}/api/payment/create_order`, {
                             method: 'POST',
@@ -2912,6 +3096,9 @@
                             this.currentOrder = data;
                             this.currentOpenOrder = data;
                             this.purchaseStep = 2;
+                            if (data.upgrade_preview_message) {
+                                this.showMsg(data.upgrade_preview_message, 'info');
+                            }
                             if (appliedInviteCode) {
                                 this.rememberInviteCode(appliedInviteCode);
                                 localStorage.removeItem('sniper_pending_invite_code');
@@ -2921,7 +3108,14 @@
                             }
                             await this.fetchPaymentOrders(true);
                             if (this.currentOpenOrder) {
-                                this.currentOrder = { ...this.currentOpenOrder };
+                                this.currentOrder = {
+                                    ...this.currentOpenOrder,
+                                    converted_days: data.converted_days,
+                                    bonus_days: data.bonus_days,
+                                    upgrade_bonus_days: data.upgrade_bonus_days,
+                                    total_granted_days: data.total_granted_days,
+                                    upgrade_preview_message: data.upgrade_preview_message,
+                                };
                             }
                         } else {
                             this.showMsg(data.detail || '创建订单失败', 'error');
@@ -3150,15 +3344,36 @@
                     const confirmed = await this.showConfirm(`确定要清空 ${labels[range] || range} 的新闻历史吗？`);
                     if (!confirmed) return;
                     try {
-                        const res = await fetch(API_BASE_URL + `/api/news_history/clear?range=${range}`);
-                        const data = await res.json();
-                        if (data.status === 'success') {
-                            this.newsRawItems = [];
-                            this.newsList = [];
-                            this.newsLastTimestamp = 0;
-                            this.saveNewsCache();
-                            await this.fetchNewsHistoryIncremental(true);
+                        const nowTs = Math.floor(Date.now() / 1000);
+                        const startOfToday = new Date();
+                        startOfToday.setHours(0, 0, 0, 0);
+                        const startOfTodayTs = Math.floor(startOfToday.getTime() / 1000);
+
+                        let filtered = Array.isArray(this.newsRawItems) ? [...this.newsRawItems] : [];
+                        if (range === 'all') {
+                            filtered = [];
+                            this.newsLastTimestamp = nowTs;
+                        } else if (range === 'before_today') {
+                            filtered = filtered.filter(item => Number(item?.timestamp || 0) >= startOfTodayTs);
+                        } else if (range === 'before_3d') {
+                            const cutoff = nowTs - 3 * 24 * 60 * 60;
+                            filtered = filtered.filter(item => Number(item?.timestamp || 0) >= cutoff);
+                        } else if (range === 'before_7d') {
+                            const cutoff = nowTs - 7 * 24 * 60 * 60;
+                            filtered = filtered.filter(item => Number(item?.timestamp || 0) >= cutoff);
                         }
+
+                        this.newsRawItems = filtered.sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0));
+                        if (range !== 'all') {
+                            if (this.newsRawItems.length > 0) {
+                                this.newsLastTimestamp = Number(this.newsRawItems[0]?.timestamp || this.newsLastTimestamp || nowTs);
+                            } else {
+                                this.newsLastTimestamp = nowTs;
+                            }
+                        }
+                        this.rebuildNewsList();
+                        this.saveNewsCache();
+                        this.showMsg('已清空本地新闻缓存，不会影响服务器新闻数据。', 'success');
                     } catch (e) {
                         console.error("Failed to clear news history", e);
                     }
@@ -3256,19 +3471,59 @@
                     } catch (e) {
                         this.showMsg('同步请求失败', 'error');
                     } finally {
-                        // Don't set false immediately, let polling handle it or just timeout
-                        // Actually, for better UX, we should poll status
-                        this.checkLHBStatus();
+                        // 仅做一次状态刷新，后续依赖 WS 事件更新
+                        this.checkLHBStatus(true);
                     }
                 },
-                async checkLHBStatus() {
+                async checkLHBStatus(force = false) {
                     if (!this.hasDataAccess) return;
+                    const now = Date.now();
+                    if (!force && !this.isSyncingLHB) return;
+                    if (!force && this.lhbStatusLastCheckTs && (now - this.lhbStatusLastCheckTs < 12000)) return;
                     try {
+                        this.lhbStatusLastCheckTs = now;
                         const response = await fetch(API_BASE_URL + '/api/lhb/status');
                         const data = await response.json();
                         this.isSyncingLHB = data.is_syncing;
+                        if (!this.isSyncingLHB) {
+                            this.stopLhbStatusPolling();
+                        }
                     } catch (e) {
                         console.error(e);
+                    }
+                },
+                startLhbStatusPolling() {
+                    // 关闭轮询：龙虎榜状态仅在页面打开/手动触发时请求一次，后续由 WS 推送。
+                    return;
+                },
+                stopLhbStatusPolling() {
+                    if (this.lhbStatusPollTimer) {
+                        clearInterval(this.lhbStatusPollTimer);
+                        this.lhbStatusPollTimer = null;
+                    }
+                },
+                startMarketFallbackPolling() {
+                    if (this.marketFallbackFastTimer || this.marketFallbackSlowTimer) return;
+                    this.marketFallbackFastTimer = setInterval(() => {
+                        if (!this.hasDataAccess || this.marketWsConnected) return;
+                        this.fetchData();
+                        this.fetchIndices();
+                    }, 15000);
+
+                    this.marketFallbackSlowTimer = setInterval(() => {
+                        if (!this.hasDataAccess || this.marketWsConnected) return;
+                        this.fetchLimitUpPool();
+                        this.fetchMarketSentiment();
+                    }, 45000);
+                },
+                stopMarketFallbackPolling() {
+                    if (this.marketFallbackFastTimer) {
+                        clearInterval(this.marketFallbackFastTimer);
+                        this.marketFallbackFastTimer = null;
+                    }
+                    if (this.marketFallbackSlowTimer) {
+                        clearInterval(this.marketFallbackSlowTimer);
+                        this.marketFallbackSlowTimer = null;
                     }
                 },
                 async fetchConfig() {
@@ -3416,6 +3671,10 @@
                 
                 connectWebSocket() {
                     if (!this.hasDataAccess) return;
+                    if (this.wsConnected || this.wsConnecting) return;
+                    if (this.logSocket && (this.logSocket.readyState === WebSocket.OPEN || this.logSocket.readyState === WebSocket.CONNECTING)) {
+                        return;
+                    }
                     // Use API_BASE_URL to determine WS URL
                     let wsBase = API_BASE_URL.replace(/^http/, 'ws');
                     // Handle case where API_BASE_URL has no protocol (e.g. relative path, though unlikely in this setup)
@@ -3423,8 +3682,15 @@
                     
                     const wsUrl = `${wsBase}/ws/logs`;
                     const ws = new WebSocket(wsUrl);
+                    this.logSocket = ws;
+                    this.wsConnecting = true;
                     
                     ws.onopen = () => {
+                        this.wsConnecting = false;
+                        if (this.wsReconnectTimer) {
+                            clearTimeout(this.wsReconnectTimer);
+                            this.wsReconnectTimer = null;
+                        }
                         this.wsConnected = true;
                         this.addLog('系统连接成功');
                     };
@@ -3435,8 +3701,14 @@
                     
                     ws.onclose = () => {
                         this.wsConnected = false;
+                        this.wsConnecting = false;
+                        this.logSocket = null;
                         if (this.hasDataAccess) {
-                            setTimeout(() => this.connectWebSocket(), 3000); // Reconnect
+                            if (this.wsReconnectTimer) return;
+                            this.wsReconnectTimer = setTimeout(() => {
+                                this.wsReconnectTimer = null;
+                                this.connectWebSocket();
+                            }, 3000);
                         }
                     };
                 },
@@ -3461,6 +3733,10 @@
                 },
                 connectNotifyWebSocket() {
                     if (!this.deviceId) return;
+                    if (this.notifyWsConnected || this.notifyWsConnecting) return;
+                    if (this.notifySocket && (this.notifySocket.readyState === WebSocket.OPEN || this.notifySocket.readyState === WebSocket.CONNECTING)) {
+                        return;
+                    }
                     if (this.notifySocket) {
                         try { this.notifySocket.close(); } catch (e) {}
                         this.notifySocket = null;
@@ -3470,8 +3746,14 @@
                     const wsUrl = `${wsBase}/ws/logs?channel=notify&device_id=${encodeURIComponent(this.deviceId)}`;
                     const ws = new WebSocket(wsUrl);
                     this.notifySocket = ws;
+                    this.notifyWsConnecting = true;
 
                     ws.onopen = () => {
+                        this.notifyWsConnecting = false;
+                        if (this.notifyReconnectTimer) {
+                            clearTimeout(this.notifyReconnectTimer);
+                            this.notifyReconnectTimer = null;
+                        }
                         this.notifyWsConnected = true;
                     };
 
@@ -3495,12 +3777,7 @@
                             }
                             await this.refreshCurrentUserInfo();
                             if (this.hasDataAccess) {
-                                this.initialDataLoading = true;
-                                if (!this.wsConnected) this.connectWebSocket();
-                                this.fetchData();
-                                this.fetchLimitUpPool();
-                                this.fetchMarketSentiment();
-                                this.fetchIndices();
+                                this.refreshMarketSnapshots(true);
                             }
                             if (this.showSubscriptionModal && this.purchaseStep === 3) {
                                 this.showSubscriptionModal = false;
@@ -3513,11 +3790,135 @@
 
                     ws.onclose = () => {
                         this.notifyWsConnected = false;
+                        this.notifyWsConnecting = false;
                         this.notifySocket = null;
                         if (this.deviceId) {
-                            setTimeout(() => this.connectNotifyWebSocket(), 3000);
+                            if (this.notifyReconnectTimer) return;
+                            this.notifyReconnectTimer = setTimeout(() => {
+                                this.notifyReconnectTimer = null;
+                                this.connectNotifyWebSocket();
+                            }, 3000);
                         }
                     };
+                },
+                connectMarketWebSocket() {
+                    if (!this.hasDataAccess) return;
+                    if (this.marketWsConnected || this.marketWsConnecting) return;
+                    if (this.marketSocket && (this.marketSocket.readyState === WebSocket.OPEN || this.marketSocket.readyState === WebSocket.CONNECTING)) {
+                        return;
+                    }
+                    if (this.marketSocket) {
+                        try { this.marketSocket.close(); } catch (e) {}
+                        this.marketSocket = null;
+                    }
+                    let wsBase = API_BASE_URL.replace(/^http/, 'ws');
+                    if (wsBase.startsWith('//')) wsBase = 'ws:' + wsBase;
+                    const wsUrl = `${wsBase}/ws/logs?channel=market`;
+                    const ws = new WebSocket(wsUrl);
+                    this.marketSocket = ws;
+                    this.marketWsConnecting = true;
+
+                    ws.onopen = () => {
+                        this.marketWsConnecting = false;
+                        if (this.marketReconnectTimer) {
+                            clearTimeout(this.marketReconnectTimer);
+                            this.marketReconnectTimer = null;
+                        }
+                        this.marketWsConnected = true;
+                        this.stopMarketFallbackPolling();
+                    };
+
+                    ws.onmessage = (event) => {
+                        let payload = null;
+                        try {
+                            payload = JSON.parse(event.data);
+                        } catch (e) {
+                            return;
+                        }
+                        if (!payload || !payload.event) return;
+
+                        if (payload.event === 'quotes_tick') {
+                            this.applyQuoteTick(payload.quotes || []);
+                            return;
+                        }
+                        if (payload.event === 'market_refresh') {
+                            this.triggerRefreshByTargets(payload.targets || []);
+                            return;
+                        }
+                        if (payload.event === 'lhb_status') {
+                            this.isSyncingLHB = !!payload.is_syncing;
+                        }
+                    };
+
+                    ws.onclose = () => {
+                        this.marketWsConnected = false;
+                        this.marketWsConnecting = false;
+                        this.marketSocket = null;
+                        this.startMarketFallbackPolling();
+                        if (this.hasDataAccess) {
+                            if (this.marketReconnectTimer) return;
+                            this.marketReconnectTimer = setTimeout(() => {
+                                this.marketReconnectTimer = null;
+                                this.connectMarketWebSocket();
+                            }, 3000);
+                        }
+                    };
+                },
+                _shouldThrottleWsRefresh(key, intervalMs) {
+                    const now = Date.now();
+                    const last = Number(this.wsRefreshLastTs[key] || 0);
+                    if (last && now - last < intervalMs) return true;
+                    this.wsRefreshLastTs[key] = now;
+                    return false;
+                },
+                triggerRefreshByTargets(targets) {
+                    const list = Array.isArray(targets) ? targets : [];
+                    if (!list.length) return;
+                    if (list.includes('stocks') && !this._shouldThrottleWsRefresh('stocks', 3000)) {
+                        this.fetchData();
+                        this.fetchIndices();
+                    }
+                    if (list.includes('limit_up_pool') && !this._shouldThrottleWsRefresh('limit_up_pool', 5000)) {
+                        this.fetchLimitUpPool();
+                    }
+                    if (list.includes('market_sentiment') && !this._shouldThrottleWsRefresh('market_sentiment', 8000)) {
+                        this.fetchMarketSentiment();
+                    }
+                },
+                applyQuoteTick(quotes) {
+                    const rows = Array.isArray(quotes) ? quotes : [];
+                    if (!rows.length) return;
+                    const tickMap = {};
+                    rows.forEach((item) => {
+                        if (!item || !item.code) return;
+                        tickMap[String(item.code)] = item;
+                    });
+
+                    if (Array.isArray(this.stocks) && this.stocks.length) {
+                        this.stocks = this.stocks.map((stock) => {
+                            const tick = tickMap[String(stock.code || '')];
+                            if (!tick) return stock;
+                            return {
+                                ...stock,
+                                current: Number(tick.current ?? stock.current ?? 0),
+                                change_percent: Number(tick.change_percent ?? stock.change_percent ?? 0),
+                                time: tick.time || stock.time || ''
+                            };
+                        });
+                    }
+
+                    if (Array.isArray(this.localFavoriteQuotes) && this.localFavoriteQuotes.length) {
+                        this.localFavoriteQuotes = this.localFavoriteQuotes.map((stock) => {
+                            const tick = tickMap[String(stock.code || '')];
+                            if (!tick) return stock;
+                            return {
+                                ...stock,
+                                current: Number(tick.current ?? stock.current ?? 0),
+                                change_percent: Number(tick.change_percent ?? stock.change_percent ?? 0),
+                                time: tick.time || stock.time || ''
+                            };
+                        });
+                    }
                 },
                 addLog(msg) {
                     const time = new Date().toLocaleTimeString();
@@ -3585,6 +3986,8 @@
                         this.initialDataLoading = false;
                         return;
                     }
+                    if (this.isFetchingStocks) return;
+                    this.isFetchingStocks = true;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/stocks');
                         const data = await response.json();
@@ -3615,11 +4018,14 @@
                     } catch (error) {
                         console.error('Data fetch failed:', error);
                     } finally {
+                        this.isFetchingStocks = false;
                         this.initialDataLoading = false;
                     }
                 },
                 async fetchIndices() {
                     if (!this.hasDataAccess) return;
+                    if (this.isFetchingIndices) return;
+                    this.isFetchingIndices = true;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/indices');
                         const data = await response.json();
@@ -3630,10 +4036,14 @@
                         }
                     } catch (error) {
                         console.error('Indices fetch failed:', error);
+                    } finally {
+                        this.isFetchingIndices = false;
                     }
                 },
                 async fetchLimitUpPool() {
                     if (!this.hasDataAccess) return;
+                    if (this.isFetchingLimitUpPool) return;
+                    this.isFetchingLimitUpPool = true;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/limit_up_pool');
                         const data = await response.json();
@@ -3646,20 +4056,63 @@
                         }
                     } catch (error) {
                         console.error('Limit Up Pool fetch failed:', error);
+                    } finally {
+                        this.isFetchingLimitUpPool = false;
                     }
                 },
                 async fetchMarketSentiment() {
                     if (!this.hasDataAccess) return;
+                    if (this.isFetchingSentiment) return;
+                    this.isFetchingSentiment = true;
                     this.sentimentLoading = true;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/market_sentiment');
-                        this.marketSentiment = await response.json();
+                        const payload = await response.json();
+                        if (!response.ok) {
+                            throw new Error(payload.detail || '市场情绪接口请求失败');
+                        }
+
+                        const defaultStats = {
+                            limit_up_count: 0,
+                            broken_count: 0,
+                            limit_down_count: 0,
+                            up_count: 0,
+                            down_count: 0,
+                            total_volume: 0,
+                            sentiment: 'Neutral',
+                            suggestion: '等待数据'
+                        };
+
+                        const nextStats = (payload && typeof payload.stats === 'object' && payload.stats)
+                            ? payload.stats
+                            : {};
+
+                        this.marketSentiment = {
+                            indices: Array.isArray(payload?.indices) ? payload.indices : (Array.isArray(this.marketSentiment?.indices) ? this.marketSentiment.indices : []),
+                            stats: {
+                                ...defaultStats,
+                                ...nextStats
+                            }
+                        };
                         this.sentimentLastUpdate = new Date().toLocaleTimeString();
                     } catch (error) {
                         console.error('Market Sentiment fetch failed:', error);
                     } finally {
+                        this.isFetchingSentiment = false;
                         this.sentimentLoading = false;
                     }
+                },
+                refreshMarketSnapshots(setLoading = true) {
+                    if (!this.hasDataAccess) return;
+                    if (setLoading) {
+                        this.initialDataLoading = true;
+                    }
+                    this.fetchData();
+                    this.fetchLimitUpPool();
+                    this.fetchMarketSentiment();
+                    this.fetchIndices();
+                    if (!this.wsConnected) this.connectWebSocket();
+                    if (!this.marketWsConnected) this.connectMarketWebSocket();
                 },
                 getSeatName(stock) {
                     if (stock.likely_seats && stock.likely_seats.length > 0) {
@@ -4633,12 +5086,7 @@
                         this.connectNotifyWebSocket();
                     }
                     if (this.hasDataAccess) {
-                        this.initialDataLoading = true;
-                        this.fetchData();
-                        this.fetchLimitUpPool();
-                        this.fetchMarketSentiment();
-                        this.fetchIndices();
-                        this.connectWebSocket();
+                        this.refreshMarketSnapshots(true);
                     }
                     if (localStorage.getItem('sniper_open_subscription') === '1') {
                         localStorage.removeItem('sniper_open_subscription');
@@ -4653,7 +5101,7 @@
                 // --- Existing Logic ---
                 this.fetchConfig();
                 this.fetchLHBConfig();
-                setInterval(this.fetchConfig, 10000); // Poll config every 10s
+                this.configPollTimer = setInterval(this.fetchConfig, 60000); // Poll config every 60s
                 
                 // Initialize Theme
                 const savedTheme = localStorage.getItem('theme');
@@ -4701,7 +5149,7 @@
                 fetch(API_BASE_URL + '/api/status')
                     .then(res => res.json())
                     .then(data => {
-                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.6.3';
+                        this.serverVersion = data.server_version || data.version || data.app_version || 'v3.0.0';
                         if (data.status === 'success') {
                             const isMarketOpenDay = data.is_market_open_day;
                             
@@ -4738,60 +5186,8 @@
                         }
                     });
 
-                // Intelligent Polling
-                setInterval(() => {
-                    if (!this.hasDataAccess) return;
-                    const now = new Date();
-                    const day = now.getDay();
-                    // Weekend check (0=Sun, 6=Sat)
-                    if (day === 0 || day === 6) return;
-
-                    const h = now.getHours();
-                    const m = now.getMinutes();
-                    const timeVal = h * 100 + m;
-                    const isTrading = (timeVal >= 915 && timeVal <= 1130) || (timeVal >= 1300 && timeVal <= 1500);
-                    
-                    // 1. Stocks Data & Indices: 3s during trading
-                    if (isTrading) {
-                        this.fetchData();
-                        this.fetchIndices(); // Fast update for indices
-                    }
-                }, 3000);
-
-                // Poll LHB Status
-                setInterval(() => {
-                    if (!this.hasDataAccess) return;
-                    this.checkLHBStatus();
-                }, 5000);
-
-                setInterval(() => {
-                    if (!this.hasDataAccess) return;
-                    const now = new Date();
-                    const day = now.getDay();
-                    if (day === 0 || day === 6) return;
-
-                    const h = now.getHours();
-                    const m = now.getMinutes();
-                    const timeVal = h * 100 + m;
-                    const isTrading = (timeVal >= 915 && timeVal <= 1130) || (timeVal >= 1300 && timeVal <= 1500);
-
-                    // 2. Limit Up Pool: 10s during trading
-                    if (isTrading) {
-                        this.fetchLimitUpPool();
-                    } else {
-                        // if (now.getSeconds() < 10) this.fetchLimitUpPool();
-                    }
-                }, 10000);
-
-                // 3. Market Sentiment: 60s always (or just trading?)
-                // User said "1 minute refresh is fine"
-                setInterval(() => {
-                    if (!this.hasDataAccess) return;
-                    this.fetchMarketSentiment();
-                }, 60000); 
-
                 // Update time every second for trial countdown / visibility logic
-                setInterval(() => {
+                this.clockTimer = setInterval(() => {
                     this.currentTime = new Date();
                 }, 1000);
                 

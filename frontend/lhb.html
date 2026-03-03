@@ -271,7 +271,9 @@
                         today_has_data: false,
                         before_sync_time: false,
                         message: ''
-                    }
+                    },
+                    awaitingLhbRefresh: false,
+                    lhbRefreshTimer: null
                 }
             },
             computed: {
@@ -398,6 +400,7 @@
                 },
                 async fetchLHB() {
                     this.fetchingLHB = true;
+                    this.awaitingLhbRefresh = true;
                     this.showLogPanel = true; 
                     try {
                         const res = await fetch(API_BASE_URL + '/api/lhb/fetch', { method: 'POST' });
@@ -411,6 +414,16 @@
                         this.fetchingLHB = false;
                     }
                 },
+                scheduleDatesRefresh(delay = 800) {
+                    if (this.lhbRefreshTimer) {
+                        clearTimeout(this.lhbRefreshTimer);
+                        this.lhbRefreshTimer = null;
+                    }
+                    this.lhbRefreshTimer = setTimeout(() => {
+                        this.lhbRefreshTimer = null;
+                        this.fetchDates();
+                    }, delay);
+                },
                 connectWebSocket() {
                     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
                     const wsUrl = `${protocol}//${window.location.host}/ws/logs`;
@@ -423,9 +436,15 @@
                     
                     ws.onmessage = (event) => {
                         this.addLog(event.data);
-                        // If log contains "完成", refresh dates
-                        if (event.data.includes('完成') || event.data.includes('同步已完成') || event.data.includes('画像构建完成')) {
-                            this.fetchDates();
+                        const msg = String(event.data || '');
+                        const isLhbFinished = (
+                            (msg.includes('龙虎榜') && (msg.includes('完成') || msg.includes('同步'))) ||
+                            msg.includes('同步已完成') ||
+                            msg.includes('画像构建完成')
+                        );
+                        if (this.awaitingLhbRefresh && isLhbFinished) {
+                            this.awaitingLhbRefresh = false;
+                            this.scheduleDatesRefresh();
                         }
                     };
                     
@@ -497,6 +516,10 @@
                 if (this.authErrorHandler) {
                     window.removeEventListener('auth-error', this.authErrorHandler);
                     this.authErrorHandler = null;
+                }
+                if (this.lhbRefreshTimer) {
+                    clearTimeout(this.lhbRefreshTimer);
+                    this.lhbRefreshTimer = null;
                 }
             }
         }).mount('#app')
