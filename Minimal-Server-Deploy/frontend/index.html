@@ -1241,7 +1241,7 @@
                 <!-- Header -->
                 <div class="flex justify-between items-center p-4 border-b border-gray-100 dark:border-gray-700">
                     <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">
-                        {{ purchaseStep === 1 ? (isRenewOnlyMode ? '会员续费' : '升级会员') : (purchaseStep === 2 ? '支付订单' : '等待验证') }}
+                        {{ purchaseStep === 1 ? selectedPurchaseStepTitle : (purchaseStep === 2 ? '支付订单' : '等待验证') }}
                     </h3>
                     <button @click="showSubscriptionModal = false" class="text-gray-400 hover:text-gray-600 dark:hover:text-gray-200">
                         <svg class="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -1418,16 +1418,27 @@
                                     :class="selectedDuration === key ? 'border-red-500 bg-red-50 dark:bg-red-900/10' : 'border-gray-200 dark:border-gray-700'">
                                     <div class="text-xs">{{ opt.label }}</div>
                                     <div class="text-red-600 font-bold">¥{{ opt.price }}</div>
-                                    <div v-if="opt.bonus_days" class="text-[10px] text-emerald-600">续费加赠{{ opt.bonus_days }}天</div>
+                                    <div v-if="opt.bonus_days" class="text-[10px] text-emerald-600">基础加赠{{ opt.bonus_days }}天</div>
                                 </button>
                             </div>
                         </div>
-                        <div class="mb-4 text-[11px] text-emerald-600 dark:text-emerald-400">
-                            续费加赠：1个月送3天，3个月送10天，6个月送20天，12个月送30天。
+                        <div class="mb-2 text-[11px] text-emerald-600 dark:text-emerald-400">
+                            基础加赠：1个月送3天，3个月送10天，6个月送20天，12个月送30天。
+                        </div>
+                        <div class="mb-4 rounded border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 p-3 text-[11px] text-blue-700 dark:text-blue-300 leading-5">
+                            <template v-if="selectedPurchaseMode === 'upgrade'">
+                                升级说明：按当前版本价格与时长下单，原会员剩余时长会折算到新版本；升级金额越高，额外加赠越多。下单前会展示折算/加赠预估，审核通过后到账。
+                            </template>
+                            <template v-else-if="selectedPurchaseMode === 'renew'">
+                                续费说明：同版本续费，按所选时长到账并叠加加赠天数；下单前会展示预估，审核通过后到账。
+                            </template>
+                            <template v-else>
+                                开通说明：按所选版本和时长开通权益；下单前会展示预计到账信息，审核通过后到账。
+                            </template>
                         </div>
 
                         <button @click="createOrder" :disabled="purchaseLoading" class="w-full bg-red-600 hover:bg-red-700 text-white py-3 rounded font-bold shadow-lg disabled:opacity-50">
-                            {{ purchaseLoading ? '处理中...' : ((isRenewOnlyMode ? '立即续费 ¥' : '立即购买 ¥') + (pricingOptions[selectedVersion]?.[selectedDuration]?.price || '...')) }}
+                            {{ purchaseLoading ? '处理中...' : (selectedPurchaseButtonPrefix + (pricingOptions[selectedVersion]?.[selectedDuration]?.price || '...')) }}
                         </button>
                     </div>
                 </div>
@@ -1890,6 +1901,29 @@
                 },
                 isPaidMember() {
                     return ['basic', 'advanced', 'flagship'].includes(this.userInfo.version);
+                },
+                selectedPurchaseMode() {
+                    const rank = { trial: 0, basic: 1, advanced: 2, flagship: 3 };
+                    const selectedRank = rank[this.selectedVersion] || 0;
+                    const currentVersion = this.userInfo?.version;
+                    const currentRank = rank[currentVersion] || 0;
+                    const activePaid = this.isRegisteredAccount
+                        && ['basic', 'advanced', 'flagship'].includes(currentVersion)
+                        && !this.userInfo?.is_expired;
+                    if (activePaid) {
+                        return selectedRank > currentRank ? 'upgrade' : 'renew';
+                    }
+                    return 'open';
+                },
+                selectedPurchaseButtonPrefix() {
+                    if (this.selectedPurchaseMode === 'upgrade') return '立即升级 ¥';
+                    if (this.selectedPurchaseMode === 'renew') return '立即续费 ¥';
+                    return '立即开通 ¥';
+                },
+                selectedPurchaseStepTitle() {
+                    if (this.selectedPurchaseMode === 'upgrade') return '升级会员';
+                    if (this.selectedPurchaseMode === 'renew') return '会员续费';
+                    return '开通会员';
                 },
                 isRenewOnlyMode() {
                     return this.isRegisteredAccount
