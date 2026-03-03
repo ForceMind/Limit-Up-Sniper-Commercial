@@ -1171,6 +1171,9 @@
                         <label class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">密码</label>
                         <input type="password" v-model="loginForm.password" class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white" placeholder="请输入密码">
                     </div>
+                    <div class="text-[11px] text-amber-600 dark:text-amber-400 leading-5">
+                        注册提醒：本站不提供修改密码和忘记密码服务。账号和密码是唯一标识，请务必自行妥善保存。
+                    </div>
                 </div>
                 
                 <div class="flex gap-3 mt-2">
@@ -2664,11 +2667,18 @@
                         return;
                     }
 
+                    const username = (this.loginForm.username || '').trim();
+                    const password = this.loginForm.password || '';
+                    if (mode === 'register') {
+                        const confirmed = await this.showConfirm(
+                            `请确认并保存以下注册信息：\n\n账号：${username}\n密码：${password}\n\n本站不提供修改密码和忘记密码服务。\n账号和密码是唯一标识，请务必妥善保管。\n\n确认继续注册吗？`
+                        );
+                        if (!confirmed) return;
+                    }
+
                     this.loginLoading = true;
                     try {
                         const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login_user';
-                        const username = (this.loginForm.username || '').trim();
-                        const password = this.loginForm.password || '';
                         const res = await fetch(`${API_BASE_URL}${endpoint}`, {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
