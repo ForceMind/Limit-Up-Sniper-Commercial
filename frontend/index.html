@@ -2479,8 +2479,15 @@
                             const metaRes = await fetch(`${API_BASE_URL}/api/auth/account_meta`);
                             const meta = await metaRes.json();
 
-                            if (!metaRes.ok || !meta.is_registered) {
-                                throw new Error('Registered account metadata not found');
+                            if (!metaRes.ok) {
+                                throw new Error(meta.detail || 'Account metadata request failed');
+                            }
+                            if (!meta.is_registered) {
+                                console.warn('Session restore skipped: registered account metadata missing, fallback to guest session');
+                                localStorage.removeItem('sniper_token');
+                                localStorage.removeItem('sniper_username');
+                                await this.ensureGuestSession();
+                                return;
                             }
 
                             this.isRegisteredAccount = true;
@@ -3653,7 +3660,33 @@
                     this.sentimentLoading = true;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/market_sentiment');
-                        this.marketSentiment = await response.json();
+                        const payload = await response.json();
+                        if (!response.ok) {
+                            throw new Error(payload.detail || '市场情绪接口请求失败');
+                        }
+
+                        const defaultStats = {
+                            limit_up_count: 0,
+                            broken_count: 0,
+                            limit_down_count: 0,
+                            up_count: 0,
+                            down_count: 0,
+                            total_volume: 0,
+                            sentiment: 'Neutral',
+                            suggestion: '等待数据'
+                        };
+
+                        const nextStats = (payload && typeof payload.stats === 'object' && payload.stats)
+                            ? payload.stats
+                            : {};
+
+                        this.marketSentiment = {
+                            indices: Array.isArray(payload?.indices) ? payload.indices : (Array.isArray(this.marketSentiment?.indices) ? this.marketSentiment.indices : []),
+                            stats: {
+                                ...defaultStats,
+                                ...nextStats
+                            }
+                        };
                         this.sentimentLastUpdate = new Date().toLocaleTimeString();
                     } catch (error) {
                         console.error('Market Sentiment fetch failed:', error);

@@ -341,6 +341,33 @@ EOF
 }
 EOF
     log_info "后台路径已重置为默认: /admin"
+
+    USER_ACCOUNTS_FILE="$DATA_DIR/user_accounts.json"
+    TRIAL_FP_FILE="$DATA_DIR/trial_fingerprints.json"
+    REFERRAL_RECORDS_FILE="$DATA_DIR/referral_records.json"
+    USER_OP_LOG_FILE="$DATA_DIR/user_operation_logs.jsonl"
+
+    if [ ! -f "$USER_ACCOUNTS_FILE" ]; then
+        echo '{}' > "$USER_ACCOUNTS_FILE"
+        log_info "已初始化 user_accounts.json"
+    fi
+
+    if [ ! -f "$TRIAL_FP_FILE" ]; then
+        echo '{}' > "$TRIAL_FP_FILE"
+        log_info "已初始化 trial_fingerprints.json"
+    fi
+
+    if [ ! -f "$REFERRAL_RECORDS_FILE" ]; then
+        cat > "$REFERRAL_RECORDS_FILE" <<'EOF'
+{
+  "order_invites": {},
+  "rewarded_invitees": {}
+}
+EOF
+        log_info "已初始化 referral_records.json"
+    fi
+
+    touch "$USER_OP_LOG_FILE"
 }
 
 ensure_lhb_data_files() {
