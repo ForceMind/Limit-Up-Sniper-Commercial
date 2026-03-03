@@ -50,7 +50,7 @@ if %GIT_EXIT_CODE% neq 0 (
         echo.
         echo 已取消。正在还原数据...
         if exist "._data_backup" (
-            xcopy /E /I /Q /Y "._data_backup" "..\data" >nul
+            xcopy /E /I /Q /Y "._data_backup" "..\backend\data" >nul
             rd /s /q "._data_backup"
         )
         pause
@@ -60,7 +60,7 @@ if %GIT_EXIT_CODE% neq 0 (
     :: 正常拉取成功，仍还原数据以确保保留本地配置（如果它们被覆盖了）
     if exist "._data_backup" (
         echo 正在还原数据...
-        xcopy /E /I /Q /Y "._data_backup" "..\data" >nul
+        xcopy /E /I /Q /Y "._data_backup" "..\backend\data" >nul
     )
 )
 
@@ -71,7 +71,21 @@ if exist "._data_backup" rd /s /q "._data_backup"
 echo [3/3] 正在更新依赖项...
 if exist "venv" (
     call venv\Scripts\activate
-    pip install -r ..\requirements.txt
+    venv\Scripts\python.exe -m pip install --upgrade pip
+    venv\Scripts\python.exe -m pip install -r ..\backend\requirements.txt -i https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org
+    if !errorlevel! neq 0 (
+        echo [警告] 官方 PyPI 安装失败，正在尝试清华镜像...
+        venv\Scripts\python.exe -m pip install -r ..\backend\requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+    )
+    if !errorlevel! neq 0 (
+        echo [警告] 清华镜像安装失败，正在尝试阿里云镜像...
+        venv\Scripts\python.exe -m pip install -r ..\backend\requirements.txt -i http://mirrors.cloud.aliyuncs.com/pypi/simple/ --trusted-host mirrors.cloud.aliyuncs.com
+    )
+    if !errorlevel! neq 0 (
+        echo [错误] 依赖更新失败，请检查网络或代理设置后重试。
+        pause
+        exit /b 1
+    )
 ) else (
     echo [警告] 未找到虚拟环境。
 )

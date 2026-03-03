@@ -14,6 +14,12 @@ if %errorlevel% neq 0 (
     pause
     exit /b 1
 )
+python -c "import sys; raise SystemExit(0 if sys.version_info >= (3, 8) else 1)" >nul 2>&1
+if %errorlevel% neq 0 (
+    echo [错误] 当前 Python 版本低于 3.8，请升级后重试。
+    pause
+    exit /b 1
+)
 
 :: 2. 创建虚拟环境
 if not exist "venv" (
@@ -26,8 +32,21 @@ if not exist "venv" (
 :: 3. 安装依赖
 echo [2/3] 正在安装依赖项...
 call venv\Scripts\activate
-pip install --upgrade pip
-pip install -r ..\backend\requirements.txt
+venv\Scripts\python.exe -m pip install --upgrade pip
+venv\Scripts\python.exe -m pip install -r ..\backend\requirements.txt -i https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org
+if %errorlevel% neq 0 (
+    echo [警告] 官方 PyPI 安装失败，正在尝试清华镜像...
+    venv\Scripts\python.exe -m pip install -r ..\backend\requirements.txt -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn
+)
+if %errorlevel% neq 0 (
+    echo [警告] 清华镜像安装失败，正在尝试阿里云镜像...
+    venv\Scripts\python.exe -m pip install -r ..\backend\requirements.txt -i http://mirrors.cloud.aliyuncs.com/pypi/simple/ --trusted-host mirrors.cloud.aliyuncs.com
+)
+if %errorlevel% neq 0 (
+    echo [错误] 依赖安装失败，请检查网络或代理设置后重试。
+    pause
+    exit /b 1
+)
 
 :: 4. 设置 API 密钥
 echo [3/3] 正在配置 API 密钥...

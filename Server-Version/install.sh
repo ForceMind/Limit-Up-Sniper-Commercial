@@ -22,6 +22,7 @@ USER_IP=""
 WORKER_COUNT="2"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
+PYTHON_CMD=""
 
 log_info() { echo -e "${GREEN}$1${NC}"; }
 log_warn() { echo -e "${YELLOW}$1${NC}"; }
@@ -41,6 +42,32 @@ detect_os() {
     else
         OS_NAME="Unknown"
     fi
+}
+
+is_python_compatible() {
+    local cmd="$1"
+    "$cmd" - <<'PY' >/dev/null 2>&1
+import sys
+sys.exit(0 if sys.version_info >= (3, 8) else 1)
+PY
+}
+
+select_python_cmd() {
+    local candidates=(python3.12 python3.11 python3.10 python3.9 python3.8 python3 python)
+    local cmd
+    for cmd in "${candidates[@]}"; do
+        if command -v "$cmd" >/dev/null 2>&1 && is_python_compatible "$cmd"; then
+            PYTHON_CMD="$(command -v "$cmd")"
+            break
+        fi
+    done
+
+    if [ -z "$PYTHON_CMD" ]; then
+        log_error "[错误] 未找到 Python 3.8+ 解释器。请先安装 Python 3.8 及以上版本后重试。"
+        exit 1
+    fi
+
+    log_info "使用 Python 解释器: $PYTHON_CMD"
 }
 
 calc_worker_count() {
@@ -84,7 +111,7 @@ is_port_in_use() {
         return
     fi
 
-    python3 - "$port" <<'PY' >/dev/null 2>&1
+    "$PYTHON_CMD" - "$port" <<'PY' >/dev/null 2>&1
 import socket
 import sys
 
@@ -400,7 +427,7 @@ ensure_lhb_data_files() {
 read_existing_config_values() {
     CONFIG_FILE="$APP_DIR/backend/data/config.json"
 
-    eval "$(python3 - "$CONFIG_FILE" <<'PY'
+    eval "$("$PYTHON_CMD" - "$CONFIG_FILE" <<'PY'
 import json
 import shlex
 import sys
@@ -485,7 +512,7 @@ prompt_keys_and_merge_config() {
         BIYING_MINUTE_LIMIT=3000
     fi
 
-    python3 - "$CONFIG_FILE" "$API_KEY" "$BIYING_ENABLED" "$BIYING_LICENSE_KEY" "$BIYING_ENDPOINT" "$BIYING_CERT_PATH" "$BIYING_MINUTE_LIMIT" <<'PY'
+    "$PYTHON_CMD" - "$CONFIG_FILE" "$API_KEY" "$BIYING_ENABLED" "$BIYING_LICENSE_KEY" "$BIYING_ENDPOINT" "$BIYING_CERT_PATH" "$BIYING_MINUTE_LIMIT" <<'PY'
 import json
 import sys
 
@@ -561,7 +588,7 @@ with open(path, 'w', encoding='utf-8') as f:
     json.dump(cfg, f, ensure_ascii=False, indent=2)
 PY
 
-    FINAL_DEEPSEEK_KEY="$(python3 - "$CONFIG_FILE" <<'PY'
+    FINAL_DEEPSEEK_KEY="$("$PYTHON_CMD" - "$CONFIG_FILE" <<'PY'
 import json
 import sys
 try:
@@ -581,14 +608,29 @@ setup_python_venv() {
     mkdir -p "$APP_DIR"
     cd "$APP_DIR/backend"
 
-    if [ ! -d "$APP_DIR/venv" ]; then
-        python3 -m venv "$APP_DIR/venv"
+    if [ -d "$APP_DIR/venv" ] && [ -x "$APP_DIR/venv/bin/python" ]; then
+        if ! "$APP_DIR/venv/bin/python" - <<'PY' >/dev/null 2>&1
+import sys
+sys.exit(0 if sys.version_info >= (3, 8) else 1)
+PY
+        then
+            log_warn "检测到旧版虚拟环境（<3.8），正在重建..."
+            rm -rf "$APP_DIR/venv"
+        fi
     fi
 
-    # shellcheck disable=SC1091
-    source "$APP_DIR/venv/bin/activate"
-    pip install --upgrade pip -q
-    pip install -r requirements.txt --no-cache-dir
+    if [ ! -d "$APP_DIR/venv" ]; then
+        "$PYTHON_CMD" -m venv "$APP_DIR/venv"
+    fi
+
+    "$APP_DIR/venv/bin/python" -m pip install --upgrade pip -q
+    if ! "$APP_DIR/venv/bin/python" -m pip install -r requirements.txt --no-cache-dir -i https://pypi.org/simple --trusted-host pypi.org --trusted-host files.pythonhosted.org; then
+        log_warn "官方 PyPI 安装失败，尝试清华镜像..."
+        if ! "$APP_DIR/venv/bin/python" -m pip install -r requirements.txt --no-cache-dir -i https://pypi.tuna.tsinghua.edu.cn/simple --trusted-host pypi.tuna.tsinghua.edu.cn; then
+            log_warn "清华镜像安装失败，尝试阿里云镜像..."
+            "$APP_DIR/venv/bin/python" -m pip install -r requirements.txt --no-cache-dir -i http://mirrors.cloud.aliyuncs.com/pypi/simple/ --trusted-host mirrors.cloud.aliyuncs.com
+        fi
+    fi
 }
 
 setup_systemd() {
@@ -749,6 +791,7 @@ main() {
     log_info "检测到源码目录: $SOURCE_ROOT"
 
     install_deps
+    select_python_cmd
     prepare_backup_dirs
     deploy_code_only
     ensure_runtime_files

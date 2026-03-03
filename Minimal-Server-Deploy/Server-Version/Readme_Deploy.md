@@ -1,100 +1,91 @@
-# Limit-Up Sniper Commercial Deployment Guide
-# 涨停狙击手商业版 - 服务器部署指南
+# Limit-Up-Sniper Commercial（最小包）服务器部署说明
 
-## 1. 准备工作 (Prerequisites)
+本目录脚本用于在 Linux 服务器部署与维护商业版服务，默认部署目录与 systemd 服务名如下：
 
-- **服务器**: 一台云服务器 (阿里云/腾讯云/AWS等)
-- **操作系统**: 推荐 Ubuntu 20.04/22.04 LTS 或 CentOS 7/8 (Alibaba Cloud Linux 3)
-- **最低配置**: 1核 CPU, 2GB 内存 (建议 2核 4GB 以获得更好性能)
-- **开放端口**: 确保安全组开放 **80 (HTTP)** 和 **22 (SSH)** 端口
+- 部署目录：`/opt/limit-up-sniper-commercial`
+- 服务名：`limit-up-sniper-commercial`
 
-## 2. 上传代码 (Upload Code)
+## 脚本说明
 
-使用 SFTP 工具 (如 WinSCP, FileZilla) 或 `scp` 命令将整个项目上传到服务器的 `~` (主目录) 或 `/tmp` 目录。
-推荐上传除了 `.venv` 和 `__pycache__` 以外的所有文件。
+- `install.sh`：首次安装（安装依赖、创建 venv、部署 systemd/nginx、初始化数据目录）。
+- `update.sh`：在保留现有环境与数据前提下更新代码与前端静态资源。
+- `uninstall.sh`：卸载服务与 nginx 配置（默认不会删除业务数据，需按脚本提示确认）。
+- `fix_server.sh`：常见环境问题一键修复。
 
-示例 (在本地终端执行):
-```bash
-# 假设你的服务器IP是 1.2.3.4，用户是 root
-scp -r Limit-Up-Sniper-Commercial root@1.2.3.4:/root/
-```
+## 快速开始
 
-## 3. 执行安装 (Run Installation)
-
-SSH 登录到服务器，进入上传的项目目录，给予脚本执行权限并运行。
+1. 进入脚本目录：
 
 ```bash
-# 1. 进入目录
-cd /root/Limit-Up-Sniper-Commercial
-
-# 2. 赋予脚本执行权限
-chmod +x Server-Version/install.sh
-
-# 3. 运行安装脚本 (必须使用 sudo 或 root)
-# 脚本会自动识别您的系统 (Ubuntu/CentOS/Aliyun) 并安装 Python, Nginx 等依赖
-sudo ./Server-Version/install.sh
+cd Server-Version
 ```
 
-**安装过程中:**
-- 脚本会自动安装系统依赖 (git, python3, nginx等)。
-- 脚本会自动配置 Python 虚拟环境并安装依赖。
-- **提示**: 脚本会询问您的服务器 IP 或域名，直接回车使用自动检测的 IP 即可。
-- **注意**: 如果您已经有 Nginx 在运行，脚本会通过反向代理配置覆盖 `/etc/nginx/sites-enabled/limit-up-sniper`，通常不会影响其他站点，除非端口冲突。
+2. 首次安装：
 
-## 4. 验证部署 (Verify)
-
-安装完成后，脚本会输出访问地址。
-
-- **前台地址**: `http://你的服务器IP/`
-- **后台管理**: `http://你的服务器IP/admin/index.html`
-
-如果无法访问，请检查云服务器的安全组设置，确保 **80 端口** 已对外开放。
-
-## 5. 日后维护 (Maintenance)
-
-### 查看日志
 ```bash
-# 查看后端服务实时日志
-sudo journalctl -u limit-up-sniper -f
+sudo bash install.sh
 ```
 
-### 更新代码
-如果本地修改了代码，重新上传覆盖后，运行更新脚本：
+3. 查看服务状态：
+
 ```bash
-# 赋予更新脚本权限
-chmod +x /opt/limit-up-sniper/scripts/update.sh
-
-# 运行更新 (指向你的源码目录)
-sudo /opt/limit-up-sniper/scripts/update.sh /root/Limit-Up-Sniper-Commercial
+systemctl status limit-up-sniper-commercial --no-pager
 ```
 
-### 重启服务
+## 日常更新
+
+在应用目录执行更新脚本：
+
 ```bash
-sudo systemctl restart limit-up-sniper
+cd /opt/limit-up-sniper-commercial/Server-Version
+sudo bash update.sh
 ```
 
-### 卸载服务
-如需仅卸载 systemd 服务与 Nginx 站点配置（保留业务数据）：
+更新后可检查：
+
 ```bash
-chmod +x /opt/limit-up-sniper-commercial/scripts/uninstall.sh
-sudo /opt/limit-up-sniper-commercial/scripts/uninstall.sh
+systemctl status limit-up-sniper-commercial --no-pager
+journalctl -u limit-up-sniper-commercial -n 100 --no-pager
 ```
 
-如需连同应用目录一起删除（会删除运行数据）：
+## 配置与数据
+
+- 后端配置：`/opt/limit-up-sniper-commercial/backend/data/config.json`
+- nginx 配置：`/etc/nginx/sites-available/limit-up-sniper-commercial`
+- systemd 配置：`/etc/systemd/system/limit-up-sniper-commercial.service`
+
+## 合并冲突处理原则（install/update）
+
+当 `install.sh` 或 `update.sh` 出现分支冲突时，使用**功能并集**策略，不做二选一：
+
+- Python 兼容检测：保留 `is_python_compatible` + `select_python_cmd`
+- worker 自适应：保留 `calc_worker_count`
+- 更新健壮性：保留 `validate_existing_install` + `ensure_venv`
+- 兼容清理：移除 legacy 停服语句 `systemctl stop limit-up-sniper || true`，避免误停旧服务名
+
+## 冲突合并后快速验收
+
 ```bash
-sudo /opt/limit-up-sniper-commercial/scripts/uninstall.sh --remove-app
+grep -R -nE '^(<<<<<<<|=======|>>>>>>>)' install.sh update.sh
+bash -n install.sh
+bash -n update.sh
 ```
 
-## 常见问题 (FAQ)
+若你同时维护主版与最小包，建议再做一致性校验：
 
-**Q: 为什么日志显示 "ModuleNotFoundError"?**
-A: 可能是依赖包未安装完全。尝试手动进入环境安装:
 ```bash
-cd /opt/limit-up-sniper
-source venv/bin/activate
-pip install -r backend/requirements.txt
-sudo systemctl restart limit-up-sniper
+python3 - << 'PY'
+import hashlib, pathlib
+pairs = [
+    (pathlib.Path('/opt/limit-up-sniper-commercial/Server-Version/install.sh'), pathlib.Path('/opt/limit-up-sniper-commercial/Minimal-Server-Deploy/Server-Version/install.sh')),
+    (pathlib.Path('/opt/limit-up-sniper-commercial/Server-Version/update.sh'), pathlib.Path('/opt/limit-up-sniper-commercial/Minimal-Server-Deploy/Server-Version/update.sh')),
+]
+for a,b in pairs:
+    if a.exists() and b.exists():
+        ha = hashlib.sha256(a.read_bytes()).hexdigest()
+        hb = hashlib.sha256(b.read_bytes()).hexdigest()
+        print(a.name, 'same=', ha==hb)
+    else:
+        print('missing:', a, b)
+PY
 ```
-
-**Q: Nginx 启动失败?**
-A: 检查 Nginx 配置: `sudo nginx -t`. 如果 80 端口被占用，请停止占用进程或修改 `/etc/nginx/conf.d/limit-up-sniper.conf` 中的端口。

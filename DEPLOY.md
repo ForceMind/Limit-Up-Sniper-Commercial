@@ -57,6 +57,23 @@ sudo bash Server-Version/update.sh
 sudo journalctl -u limit-up-sniper-commercial -f
 ```
 
+### 2.2) 脚本冲突合并原则（install/update）
+
+近期 `install.sh` / `update.sh` 分支合并时，建议保留以下两类能力（不是二选一）：
+
+- Python 兼容检测（`is_python_compatible` + `select_python_cmd`）
+	- 作用：确保使用 Python 3.8+，避免低版本导致依赖安装或运行失败。
+- worker 自适应（`calc_worker_count`）
+	- 作用：根据 CPU 自动设置 worker 数，兼顾低配机器稳定性与高配机器吞吐。
+
+二者职责不同：一个解决“能不能跑”，一个解决“跑得是否合理”，因此应同时保留。
+
+`update.sh` 还应保留：
+- 既有安装校验（`validate_existing_install`：目录 / service 文件 / venv）
+- 虚拟环境修复（`ensure_venv`）
+
+不建议保留 legacy 服务名兼容停止语句（例如 `systemctl stop limit-up-sniper`），以免误停错误实例。
+
 ### 2.1) 更新前兼容性自检（强烈建议）
 
 ```bash
@@ -73,6 +90,21 @@ ls -l /opt/limit-up-sniper-commercial/backend/data/{user_accounts.json,trial_fin
 # 4) 核对服务与 nginx 状态
 sudo systemctl status limit-up-sniper-commercial --no-pager | head -n 12
 sudo nginx -t
+```
+
+### 2.3) 冲突合并后快速验收
+
+```bash
+# 1) 确认无冲突标记
+grep -R -nE '^(<<<<<<<|=======|>>>>>>>)' Server-Version/install.sh Server-Version/update.sh
+
+# 2) 脚本语法检查（在 Linux 服务器执行）
+bash -n Server-Version/install.sh
+bash -n Server-Version/update.sh
+
+# 3) 最小包脚本同步校验（可选）
+sha256sum Server-Version/install.sh Minimal-Server-Deploy/Server-Version/install.sh
+sha256sum Server-Version/update.sh Minimal-Server-Deploy/Server-Version/update.sh
 ```
 
 说明：新版 `update.sh` 已固定为商业版路径与服务名，不再自动切换 legacy 服务，避免更新到错误实例。
