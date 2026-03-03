@@ -121,6 +121,7 @@ API_DEVICE_AUTH_EXEMPT_PATHS = {
     "/api/auth/register",
     "/api/auth/login_user",
     "/api/admin/login",
+    "/api/status",
 }
 PRESENCE_HEARTBEAT_SECONDS = 15 * 60
 _presence_last_logged: dict = {}
