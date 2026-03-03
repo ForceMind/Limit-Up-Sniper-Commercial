@@ -3364,10 +3364,8 @@
                     } catch (e) {
                         this.showMsg('同步请求失败', 'error');
                     } finally {
-                        // Don't set false immediately, let polling handle it or just timeout
-                        // Actually, for better UX, we should poll status
+                        // 仅做一次状态刷新，后续依赖 WS 事件更新
                         this.checkLHBStatus(true);
-                        this.startLhbStatusPolling();
                     }
                 },
                 async checkLHBStatus(force = false) {
@@ -3388,11 +3386,8 @@
                     }
                 },
                 startLhbStatusPolling() {
-                    if (this.lhbStatusPollTimer) return;
-                    this.lhbStatusPollTimer = setInterval(() => {
-                        if (!this.hasDataAccess || !this.isSyncingLHB) return;
-                        this.checkLHBStatus();
-                    }, 20000);
+                    // 关闭轮询：龙虎榜状态仅在页面打开/手动触发时请求一次，后续由 WS 推送。
+                    return;
                 },
                 stopLhbStatusPolling() {
                     if (this.lhbStatusPollTimer) {
@@ -3745,11 +3740,6 @@
                         }
                         if (payload.event === 'lhb_status') {
                             this.isSyncingLHB = !!payload.is_syncing;
-                            if (this.isSyncingLHB) {
-                                this.startLhbStatusPolling();
-                            } else {
-                                this.stopLhbStatusPolling();
-                            }
                         }
                     };
 
@@ -5088,8 +5078,6 @@
                             }
                         }
                     });
-
-                this.startMarketFallbackPolling();
 
                 // Update time every second for trial countdown / visibility logic
                 this.clockTimer = setInterval(() => {

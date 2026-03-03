@@ -2762,6 +2762,9 @@ def _ensure_today_network_baseline(date_text: str, current_net: Dict[str, int]) 
             "last_probe_ts": now_ts,
             "last_rx_bytes": int(current_net.get("rx_bytes", 0) or 0),
             "last_tx_bytes": int(current_net.get("tx_bytes", 0) or 0),
+            "peak_rx_bps": 0.0,
+            "peak_tx_bps": 0.0,
+            "peak_total_bps": 0.0,
             "updated_at": datetime.utcnow().replace(microsecond=0).isoformat(),
         }
         _save_metrics_baseline(baseline)
@@ -2779,6 +2782,15 @@ def _ensure_today_network_baseline(date_text: str, current_net: Dict[str, int]) 
         changed = True
     if "last_tx_bytes" not in baseline:
         baseline["last_tx_bytes"] = int(current_net.get("tx_bytes", 0) or 0)
+        changed = True
+    if "peak_rx_bps" not in baseline:
+        baseline["peak_rx_bps"] = 0.0
+        changed = True
+    if "peak_tx_bps" not in baseline:
+        baseline["peak_tx_bps"] = 0.0
+        changed = True
+    if "peak_total_bps" not in baseline:
+        baseline["peak_total_bps"] = 0.0
         changed = True
     if changed:
         baseline["updated_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
@@ -2822,6 +2834,11 @@ def _collect_system_runtime_metrics(date_text: str) -> Dict[str, Any]:
         delta_tx = max(0, int(net.get("tx_bytes", 0) or 0) - last_tx)
         rx_bps_current = round(float(delta_rx) / delta_sec, 2)
         tx_bps_current = round(float(delta_tx) / delta_sec, 2)
+    total_bps_current = round(rx_bps_current + tx_bps_current, 2)
+
+    peak_rx_bps = max(_safe_float(baseline.get("peak_rx_bps", 0.0), 0.0), rx_bps_current)
+    peak_tx_bps = max(_safe_float(baseline.get("peak_tx_bps", 0.0), 0.0), tx_bps_current)
+    peak_total_bps = max(_safe_float(baseline.get("peak_total_bps", 0.0), 0.0), total_bps_current)
 
     day_start_ts = _safe_float(baseline.get("day_start_ts", now_ts), now_ts)
     elapsed_today_sec = max(1.0, now_ts - day_start_ts)
@@ -2831,6 +2848,9 @@ def _collect_system_runtime_metrics(date_text: str) -> Dict[str, Any]:
     baseline["last_probe_ts"] = now_ts
     baseline["last_rx_bytes"] = int(net.get("rx_bytes", 0) or 0)
     baseline["last_tx_bytes"] = int(net.get("tx_bytes", 0) or 0)
+    baseline["peak_rx_bps"] = float(round(peak_rx_bps, 2))
+    baseline["peak_tx_bps"] = float(round(peak_tx_bps, 2))
+    baseline["peak_total_bps"] = float(round(peak_total_bps, 2))
     baseline["updated_at"] = datetime.utcnow().replace(microsecond=0).isoformat()
     _save_metrics_baseline(baseline)
 
@@ -2866,7 +2886,10 @@ def _collect_system_runtime_metrics(date_text: str) -> Dict[str, Any]:
             "total_bytes_today": int(rx_today + tx_today),
             "rx_bps_current": float(rx_bps_current),
             "tx_bps_current": float(tx_bps_current),
-            "total_bps_current": float(round(rx_bps_current + tx_bps_current, 2)),
+            "total_bps_current": float(total_bps_current),
+            "rx_bps_peak": float(round(peak_rx_bps, 2)),
+            "tx_bps_peak": float(round(peak_tx_bps, 2)),
+            "total_bps_peak": float(round(peak_total_bps, 2)),
             "rx_bps_today_avg": float(rx_bps_today_avg),
             "tx_bps_today_avg": float(tx_bps_today_avg),
             "total_bps_today_avg": float(round(rx_bps_today_avg + tx_bps_today_avg, 2)),
@@ -3446,17 +3469,15 @@ async def delete_news_items(
 
 @router.post("/news/clear")
 async def clear_news_items(authorized: bool = Depends(verify_admin)):
-    save_news_history([])
-    save_news_analysis_records([])
     log_user_operation(
         "clear_news_items",
-        status="success",
+        status="blocked",
         actor="admin",
         method="POST",
         path="/api/admin/news/clear",
-        detail="all_news_cleared",
+        detail="server_news_retention_enabled",
     )
-    return {"status": "success", "removed": "all"}
+    raise HTTPException(status_code=400, detail="服务器新闻历史已改为长期保留，不支持清空。")
 
 
 # --- LHB Admin ---

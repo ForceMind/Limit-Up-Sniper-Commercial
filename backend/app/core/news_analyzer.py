@@ -119,20 +119,7 @@ def get_market_data(logger=None):
 def save_news_history(news_items):
     """保存新闻历史记录到 data/news_history.json"""
     history_file = DATA_DIR / "news_history.json"
-    config_file = DATA_DIR / "config.json"
     history = []
-    
-    # Load config for auto-clean settings
-    auto_clean_enabled = True
-    auto_clean_days = 14
-    if config_file.exists():
-        try:
-            with open(config_file, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                auto_clean_enabled = config.get('news_auto_clean_enabled', True)
-                auto_clean_days = config.get('news_auto_clean_days', 14)
-        except:
-            pass
 
     # Load existing
     if history_file.exists():
@@ -160,15 +147,6 @@ def save_news_history(news_items):
             
     # Sort by timestamp desc
     history.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
-    
-    # Auto-clean logic
-    if auto_clean_enabled:
-        cutoff_ts = int(time.time()) - (auto_clean_days * 24 * 3600)
-        history = [item for item in history if item.get('timestamp', 0) > cutoff_ts]
-    
-    # Keep a reasonable maximum even if auto-clean is off (e.g. 1000 items)
-    if len(history) > 1000:
-        history = history[:1000]
     
     # Save
     try:

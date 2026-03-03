@@ -484,39 +484,11 @@ async def get_system_status(request: Request):
 
 @app.get("/api/news_history/clear")
 async def clear_news_history(range: str = "all", user: models.User = Depends(check_data_permission)):
-    """清理新闻历史
-    range: all, before_today, before_3d, before_7d
-    """
-    history_file = DATA_DIR / "news_history.json"
-    if not history_file.exists():
-        return {"status": "success", "message": "No history to clear"}
-        
-    try:
-        if range == "all":
-            new_history = []
-        else:
-            with open(history_file, 'r', encoding='utf-8') as f:
-                history = json.load(f)
-            
-            now_ts = int(time.time())
-            if range == "before_today":
-                # Today 00:00:00
-                cutoff_ts = int(datetime.now().replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-            elif range == "before_3d":
-                cutoff_ts = now_ts - (3 * 24 * 3600)
-            elif range == "before_7d":
-                cutoff_ts = now_ts - (7 * 24 * 3600)
-            else:
-                cutoff_ts = 0
-                
-            new_history = [item for item in history if item.get('timestamp', 0) >= cutoff_ts]
-            
-        with open(history_file, 'w', encoding='utf-8') as f:
-            json.dump(new_history, f, ensure_ascii=False, indent=2)
-            
-        return {"status": "success", "message": f"History cleared with range: {range}"}
-    except Exception as e:
-        return {"status": "error", "message": str(e)}
+    """历史兼容接口：服务端新闻历史不再支持清理，仅允许客户端本地缓存清理。"""
+    return {
+        "status": "disabled",
+        "message": "服务器新闻历史已改为长期保留，不支持服务端清理；请清理客户端本地缓存。",
+    }
 
 def load_watchlist():
     """加载复盘生成的关注列表"""
@@ -1040,18 +1012,6 @@ async def update_intraday_pool():
     # ... (Implementation of scan)
     pass 
     # Placeholder, actual logic is in endpoints or separate scanner calls
-
-@app.get("/api/status")
-async def get_status(request: Request):
-    if _is_status_rate_limited(request):
-        return JSONResponse(status_code=429, content={"detail": "Too many status requests"})
-    return {
-        "status": "success",
-        "is_trading": is_trading_time(),
-        "is_market_open_day": is_market_open_day(),
-        "server_time": datetime.now().strftime("%H:%M:%S"),
-        "server_version": SERVER_VERSION
-    }
 
 @app.get("/api/add_watchlist")
 async def add_to_watchlist_api(code: str, name: str, reason: str = "手动添加", user: models.User = Depends(check_data_permission)):
