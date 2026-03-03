@@ -912,7 +912,15 @@
                     </button>
                 </div>
                 
-                <div class="p-6 overflow-y-auto space-y-6">
+                <div class="p-6 overflow-y-auto space-y-4">
+                    <div class="rounded border border-gray-200 dark:border-gray-700">
+                        <button @click="settingsSectionCommonOpen = !settingsSectionCommonOpen" class="w-full px-3 py-2 flex items-center justify-between text-sm font-bold text-gray-800 dark:text-gray-100">
+                            <span>⚙️ 常用设置</span>
+                            <span>{{ settingsSectionCommonOpen ? '收起' : '展开' }}</span>
+                        </button>
+                    </div>
+
+                    <template v-if="settingsSectionCommonOpen">
                     <!-- 0. User Profile (Mobile Only) -->
                     <div class="md:hidden p-4 bg-gray-50 dark:bg-gray-900 rounded border border-gray-200 dark:border-gray-700 text-center cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition" @click="openSubscription()">
                         <div class="font-bold text-lg mb-1" :class="{
@@ -999,6 +1007,16 @@
                             </div>
                         </div>
                     </div>
+                    </template>
+
+                    <div class="rounded border border-gray-200 dark:border-gray-700">
+                        <button @click="settingsSectionAdvancedOpen = !settingsSectionAdvancedOpen" class="w-full px-3 py-2 flex items-center justify-between text-sm font-bold text-gray-800 dark:text-gray-100">
+                            <span>🧩 高级设置</span>
+                            <span>{{ settingsSectionAdvancedOpen ? '收起' : '展开' }}</span>
+                        </button>
+                    </div>
+
+                    <template v-if="settingsSectionAdvancedOpen">
 
                     <!-- 3. System Info (Read Only) -->
                     <div class="pt-4 border-t border-gray-100 dark:border-gray-700">
@@ -1049,6 +1067,7 @@
                             <button @click="openQQGroupLink" :disabled="!qqInviteInfo.qq_group_link" class="py-1.5 rounded bg-emerald-600 text-white text-xs disabled:opacity-40">一键加群</button>
                         </div>
                     </div>
+                    </template>
 
                 </div>
 
@@ -1169,7 +1188,12 @@
                     </div>
                     <div>
                         <label class="block text-xs font-bold text-gray-700 dark:text-gray-300 mb-1">密码</label>
-                        <input type="password" v-model="loginForm.password" class="w-full border rounded p-2 text-sm focus:ring-2 focus:ring-blue-500 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white" placeholder="请输入密码">
+                        <div class="relative">
+                            <input :type="showPasswordInLogin ? 'text' : 'password'" v-model="loginForm.password" class="w-full border rounded p-2 pr-16 text-sm focus:ring-2 focus:ring-blue-500 outline-none dark:bg-gray-700 dark:border-gray-600 dark:text-white" placeholder="请输入密码">
+                            <button type="button" @click="showPasswordInLogin = !showPasswordInLogin" class="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-300 dark:hover:text-gray-100">
+                                {{ showPasswordInLogin ? '隐藏' : '显示' }}
+                            </button>
+                        </div>
                     </div>
                     <div class="text-[11px] text-amber-600 dark:text-amber-400 leading-5">
                         注册提醒：本站不提供修改密码和忘记密码服务。账号和密码是唯一标识，请务必自行妥善保存。
@@ -1198,6 +1222,24 @@
                 <div class="text-xs text-gray-400 text-center mt-2">
                     {{ isRegisteredAccount ? '已登录后可在会员中心购买或续费。' : '游客仅可浏览，需注册后申请体验或购买会员。' }}
                 </div>
+            </div>
+        </div>
+
+        <div v-if="registerCredentialModal.show" class="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm" @click.self="registerCredentialModal.show = false">
+            <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-sm p-6">
+                <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100 mb-2">请保存你的注册信息</h3>
+                <p class="text-xs text-amber-600 dark:text-amber-400 mb-3 leading-5">
+                    本站不提供修改密码和忘记密码服务。账号和密码是唯一标识，请务必妥善保管。
+                </p>
+                <div class="bg-gray-50 dark:bg-gray-900 border border-gray-200 dark:border-gray-700 rounded p-3 text-sm space-y-2 mb-4">
+                    <div>账号：<span class="font-mono font-bold">{{ registerCredentialModal.username }}</span></div>
+                    <div>密码：<span class="font-mono font-bold text-red-600 dark:text-red-400">{{ registerCredentialModal.password }}</span></div>
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <button @click="copyText(registerCredentialModal.username, '账号已复制')" class="py-2 rounded border border-gray-300 text-sm">复制账号</button>
+                    <button @click="copyText(registerCredentialModal.password, '密码已复制')" class="py-2 rounded bg-blue-600 text-white text-sm font-bold">复制密码</button>
+                </div>
+                <button @click="registerCredentialModal.show = false" class="w-full mt-3 py-2 rounded bg-emerald-600 text-white text-sm font-bold">我已保存</button>
             </div>
         </div>
 
@@ -1470,8 +1512,8 @@
                         <div>
                             此次{{ orderActionLabel(currentOrder) }}时长：
                             <span class="font-bold">{{ Number(currentOrder?.duration_days || 0) }}</span> 天，
-                            续费加赠 <span class="font-bold">{{ orderBaseBonusDays(currentOrder) }}</span> 天
-                            <span v-if="orderUpgradeBonusDays(currentOrder) > 0">，升级加赠 <span class="font-bold">{{ orderUpgradeBonusDays(currentOrder) }}</span> 天</span>
+                            续费加赠 <span class="font-bold text-emerald-600 dark:text-emerald-400">{{ orderBaseBonusDays(currentOrder) }}</span> 天
+                            <span v-if="orderUpgradeBonusDays(currentOrder) > 0">，升级加赠 <span class="font-bold text-violet-600 dark:text-violet-400">{{ orderUpgradeBonusDays(currentOrder) }}</span> 天</span>
                         </div>
                         <div>
                             预计新增到账：<span class="font-bold">{{ Number(currentOrder?.total_granted_days || 0).toFixed(2) }}</span> 天（审核通过后到账）
@@ -1759,6 +1801,8 @@
                     activePoolTab: 'limit_up', // 'limit_up' or 'broken'
                     // Settings
                     showSettingsModal: false,
+                    settingsSectionCommonOpen: true,
+                    settingsSectionAdvancedOpen: false,
                     isSearchFocused: false,
 
                     apiKey: '', // Store API Key
@@ -1793,6 +1837,8 @@
                     showGuestReminderModal: false,
                     showQQInviteModal: false,
                     loginForm: { username: '', password: '' },
+                    showPasswordInLogin: false,
+                    registerCredentialModal: { show: false, username: '', password: '' },
                     displayUsername: '',
                     isRegisteredAccount: false,
                     accountCanApplyTrial: false,
@@ -2709,6 +2755,11 @@
                             this.refreshMarketSnapshots(true);
                         }
                         if (mode === 'register') {
+                            this.registerCredentialModal = {
+                                show: true,
+                                username: data.username || username,
+                                password: password,
+                            };
                             this.qqInviteInfo = {
                                 qq_group_number: (data.qq_group_number || '').trim(),
                                 qq_group_link: (data.qq_group_link || '').trim(),
