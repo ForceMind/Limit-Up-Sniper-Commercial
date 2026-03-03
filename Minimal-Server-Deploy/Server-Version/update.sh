@@ -148,6 +148,33 @@ restore_runtime_files() {
     fi
 }
 
+ensure_lhb_data_files() {
+    local target_data_dir="$APP_DIR/backend/data"
+    local source_data_dir="$SOURCE_ROOT/backend/data"
+
+    mkdir -p "$target_data_dir"
+
+    if [ ! -f "$target_data_dir/seat_mappings.json" ]; then
+        if [ -f "$source_data_dir/seat_mappings.json" ]; then
+            cp -a "$source_data_dir/seat_mappings.json" "$target_data_dir/seat_mappings.json"
+            log_info "已补齐 seat_mappings.json"
+        else
+            echo '{}' > "$target_data_dir/seat_mappings.json"
+            log_warn "未找到 seat_mappings.json 模板，已创建空映射文件"
+        fi
+    fi
+
+    if [ ! -f "$target_data_dir/vip_seats.json" ]; then
+        if [ -f "$source_data_dir/vip_seats.json" ]; then
+            cp -a "$source_data_dir/vip_seats.json" "$target_data_dir/vip_seats.json"
+            log_info "已补齐 vip_seats.json"
+        else
+            echo '[]' > "$target_data_dir/vip_seats.json"
+            log_warn "未找到 vip_seats.json 模板，已创建空 VIP 列表"
+        fi
+    fi
+}
+
 fix_runtime_permissions() {
     mkdir -p "$APP_DIR/backend/data"
     chmod -R 777 "$APP_DIR/backend/data" || true
@@ -182,6 +209,7 @@ main() {
     pull_latest_if_needed
     deploy_files
     restore_runtime_files
+    ensure_lhb_data_files
     fix_runtime_permissions
     install_dependencies
 
