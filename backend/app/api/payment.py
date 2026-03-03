@@ -602,17 +602,12 @@ async def create_order(
         if isinstance(referral_cfg, dict) and not bool(referral_cfg.get("enabled", True)):
             raise HTTPException(status_code=400, detail="当前未开启邀请码活动")
 
-        accounts = account_store.load_accounts()
-        invitee_username, invitee_account = account_store.get_account_by_device_id(
-            payload.x_device_id,
-            accounts=accounts,
-        )
+        invitee_username, invitee_account = account_store.get_account_by_device_id(payload.x_device_id)
         if not invitee_username or not invitee_account:
             raise HTTPException(status_code=403, detail="请先注册账号后再使用邀请码")
 
         inviter_username, inviter_account, normalized_invite_code = account_store.find_account_by_invite_code(
             normalized_invite_code,
-            accounts=accounts,
         )
         if not inviter_username or not inviter_account:
             raise HTTPException(status_code=400, detail="邀请码无效，请检查后重试")

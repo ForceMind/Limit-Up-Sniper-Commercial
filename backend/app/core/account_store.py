@@ -191,7 +191,6 @@ def load_accounts() -> Dict[str, dict]:
     try:
         data = _load_accounts_from_db()
         if data:
-            _dump_accounts_snapshot(data)
             return data
     except Exception:
         pass
@@ -211,6 +210,34 @@ def save_accounts(data: Dict[str, dict]):
     safe = data if isinstance(data, dict) else {}
     _sync_accounts_to_db(safe)
     _dump_accounts_snapshot(safe)
+
+
+def update_account_fields(
+    username: str,
+    updates: Dict[str, Any],
+    *,
+    accounts: Optional[Dict[str, dict]] = None,
+) -> Dict[str, Any]:
+    uname = str(username or "").strip()
+    if not uname:
+        raise ValueError("Account not found")
+
+    data = accounts if isinstance(accounts, dict) else load_accounts()
+    account = data.get(uname)
+    if not isinstance(account, dict):
+        raise ValueError("Account not found")
+
+    safe_updates = updates if isinstance(updates, dict) else {}
+    for key, value in safe_updates.items():
+        account[str(key)] = value
+
+    data[uname] = account
+    if isinstance(accounts, dict):
+        _upsert_account_in_db(uname, account)
+        _dump_accounts_snapshot(data)
+    else:
+        save_accounts(data)
+    return account
 
 
 def get_account_by_username(
@@ -350,6 +377,26 @@ def ensure_invite_code_for_device(device_id: str) -> Tuple[str, str]:
     code = ensure_account_invite_code(username, accounts)
     save_accounts(accounts)
     return username, code
+
+
+def ensure_invite_code_for_username(username: str) -> str:
+    uname = str(username or "").strip()
+    if not uname:
+        return ""
+    account = get_account_by_username(uname)
+    if not isinstance(account, dict):
+        return ""
+
+    current = normalize_invite_code(account.get("invite_code", ""))
+    if current and INVITE_CODE_RE.fullmatch(current):
+        return current
+
+    accounts = load_accounts()
+    if uname not in accounts:
+        accounts[uname] = account
+    code = ensure_account_invite_code(uname, accounts)
+    save_accounts(accounts)
+    return code
 
 
 def find_account_by_invite_code(
