@@ -305,7 +305,7 @@
                     const payload = (event && event.detail) ? event.detail : {};
                     const status = Number(payload.status || 0);
                     const detail = String(payload.detail || '');
-                    this.showErrorModal(status === 403 ? (detail || '当前功能需要会员权限，请先开通或续费会员。') : (detail || '登录状态失效，请先登录。'));
+                    this.showErrorModal(status === 403 ? (detail || '当前功能需要会员权限，请先购买会员。') : (detail || '登录状态失效，请先登录。'));
                     localStorage.setItem('sniper_open_subscription', '1');
                     setTimeout(() => {
                         window.location.href = 'index.html';

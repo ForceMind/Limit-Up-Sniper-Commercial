@@ -945,7 +945,7 @@
                         </div>
                         <div class="mt-3 text-xs text-blue-600 dark:text-blue-400 font-bold flex items-center justify-center gap-1">
                             <span>💳</span>
-                            <span>{{ userInfo.version === 'trial' ? '申请体验 / 升级' : '查看会员详情 / 续费与升级' }}</span>
+                            <span>{{ (isRegisteredAccount && isPaidMember && !userInfo.is_expired) ? '查看会员详情' : (canShowTenMinuteTrialOption ? '申请10分钟体验' : '立即购买会员') }}</span>
                         </div>
                     </div>
 
@@ -965,7 +965,7 @@
                                 <button v-if="!isRegisteredAccount" @click="showSettingsModal = false; showLoginModal = true" class="py-2 rounded bg-blue-600 text-white text-sm font-bold">登录/注册</button>
                                 <button v-else @click="logout" class="py-2 rounded border border-gray-300 text-sm font-bold">退出登录</button>
                                 <button @click="openSubscription()" class="py-2 rounded bg-red-600 text-white text-sm font-bold">
-                                    {{ isRegisteredAccount ? '会员中心 / 续费与升级' : '查看会员方案' }}
+                                    {{ isRegisteredAccount ? '会员中心' : '查看会员方案' }}
                                 </button>
                             </div>
                         </div>
@@ -1085,7 +1085,7 @@
         <div v-if="showGuestReminderModal" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-sm p-6">
                 <h3 class="text-lg font-bold mb-2 text-gray-900 dark:text-gray-100">首次使用提醒</h3>
-                <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">当前为游客账号，可浏览10分钟。使用权限功能请先注册账号，再申请体验或购买会员。</p>
+                <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">当前为游客账号，可浏览10分钟。使用权限功能请先注册账号并购买会员。</p>
                 <div class="flex gap-2">
                     <button @click="showGuestReminderModal = false" class="flex-1 py-2 border rounded text-sm">我知道了</button>
                     <button @click="showGuestReminderModal = false; showLoginModal = true" class="flex-1 py-2 bg-blue-600 text-white rounded text-sm">去注册</button>
@@ -1220,7 +1220,7 @@
                 <div class='text-xs text-center text-gray-400 mt-2 font-mono'>{{ serverVersion }}</div>
                 
                 <div class="text-xs text-gray-400 text-center mt-2">
-                    {{ isRegisteredAccount ? '已登录后可在会员中心购买或续费。' : '游客仅可浏览，需注册后申请体验或购买会员。' }}
+                    {{ isRegisteredAccount ? ((isPaidMember && !userInfo.is_expired) ? '已登录后可在会员中心管理会员。' : '已登录后可在会员中心立即购买会员。') : '游客仅可浏览，需注册后开通会员。' }}
                 </div>
             </div>
         </div>
@@ -1338,7 +1338,7 @@
                         <div v-else class="rounded border border-gray-200 dark:border-gray-700 p-4 text-sm text-gray-500 text-center">
                             当前没有进行中的订单
                             <div class="mt-3">
-                                <button @click="subscriptionTab = 'plans'" class="px-4 py-2 rounded bg-red-600 text-white text-xs font-bold">去开通/续费</button>
+                                <button @click="subscriptionTab = 'plans'" class="px-4 py-2 rounded bg-red-600 text-white text-xs font-bold">{{ (isPaidMember && !userInfo.is_expired) ? '去管理会员' : ((isPaidMember && userInfo.is_expired) ? '去续费会员' : '去购买会员') }}</button>
                             </div>
                         </div>
                     </div>
@@ -1478,7 +1478,7 @@
                                 续费规则：到账 = 本次时长 + 续费加赠。审核通过后到账。
                             </template>
                             <template v-else>
-                                购买规则：到账 = 本次时长 + 续费加赠。审核通过后到账。
+                                购买规则：到账 = 本次时长 + 基础加赠。审核通过后到账。
                             </template>
                         </div>
 
@@ -1978,12 +1978,12 @@
                 selectedPurchaseButtonPrefix() {
                     if (this.selectedPurchaseMode === 'upgrade') return '立即升级 ¥';
                     if (this.selectedPurchaseMode === 'renew') return '立即续费 ¥';
-                    return '立即升级/续费 ¥';
+                    return '立即购买 ¥';
                 },
                 selectedPurchaseStepTitle() {
                     if (this.selectedPurchaseMode === 'upgrade') return '升级会员';
                     if (this.selectedPurchaseMode === 'renew') return '会员续费';
-                    return '会员升级/续费';
+                    return '购买会员';
                 },
                 isRenewOnlyMode() {
                     return this.isRegisteredAccount
@@ -2156,10 +2156,14 @@
                     return `${dayPart}天${hourPart}小时`;
                 },
                 orderActionLabel(order) {
-                    if (!order || !order.target_version) return '续费';
+                    if (!order || !order.target_version) return '购买';
                     const rank = { trial: 0, basic: 1, advanced: 2, flagship: 3 };
                     const currentRank = rank[String(this.userInfo?.version || '').toLowerCase()] || 0;
                     const targetRank = rank[String(order.target_version || '').toLowerCase()] || 0;
+                    const activePaid = this.isRegisteredAccount
+                        && ['basic', 'advanced', 'flagship'].includes(String(this.userInfo?.version || '').toLowerCase())
+                        && !this.userInfo?.is_expired;
+                    if (!activePaid) return '购买';
                     if (targetRank > currentRank) return '升级';
                     return '续费';
                 },
@@ -2193,7 +2197,12 @@
                     );
 
                     if (isPermissionIssue) {
-                        this.showMsg('当前功能需要会员权限，请开通或续费后使用', 'info');
+                        const actionHint = detail.includes('upgrade')
+                            ? '请先升级会员后使用'
+                            : ((this.isPaidMember && this.userInfo?.is_expired)
+                                ? '请先续费会员后使用'
+                                : (this.canShowTenMinuteTrialOption ? '请先申请10分钟体验后使用' : '请先购买会员后使用'));
+                        this.showMsg(`当前功能需要会员权限，${actionHint}`, 'info');
                         this.openSubscription();
                         return;
                     }
@@ -2883,7 +2892,7 @@
                     // Global Block for expired users on advanced actions
                     if (expired) {
                         if (version === 'trial') {
-                            this.showMsg('请先申请体验或购买会员后使用该功能', 'info');
+                            this.showMsg(this.canShowTenMinuteTrialOption ? '请先申请10分钟体验后使用该功能' : '请先购买会员后使用该功能', 'info');
                         } else {
                             this.showMsg('会员已过期，请续费解锁完整功能', 'error');
                         }
@@ -2995,7 +3004,7 @@
 
                 async openSubscription(targetVer) {
                     if (!this.isRegisteredAccount) {
-                        this.showMsg('请先注册账号，再申请体验或购买会员', 'info');
+                        this.showMsg('请先注册账号后购买会员', 'info');
                         this.showLoginModal = true;
                         return;
                     }
@@ -3322,7 +3331,7 @@
                 },
                 async openNewsCenter() {
                     if (!this.hasDataAccess) {
-                        this.showMsg('当前无权限访问数据，请先开通或续费', 'error');
+                        this.showMsg((this.isPaidMember && this.userInfo?.is_expired) ? '当前无权限访问数据，请先续费会员' : '当前无权限访问数据，请先购买会员', 'error');
                         return;
                     }
                     this.showNewsModal = true;

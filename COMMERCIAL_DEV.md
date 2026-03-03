@@ -34,7 +34,7 @@
 5.  **人工审核**: 管理员在后台核对到账情况，点击“通过”。
 6.  **权益发放**: 系统自动计算过期时间 (当前时间/原过期时间 + 购买时长)。
 
-### 2.3 升级/续费逻辑 (Upgrade/Renewal)
+### 2.3 升级与续费逻辑 (Upgrade & Renewal)
 *   **场景**: 用户在有效期内购买更高版本 (如 Basic -> Advanced)。
 *   **折算算法**:
     1.  计算当前版本剩余价值 (`remaining_minutes * current_version_price_per_minute`)。
