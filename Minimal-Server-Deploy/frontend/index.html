@@ -1389,7 +1389,7 @@
                                 当前会员版本：{{ selectedVersion === 'basic' ? '初级版' : (selectedVersion === 'advanced' ? '高级版' : '旗舰版') }}
                             </div>
                             <div class="mb-1">会员到期时间：{{ membershipExpiryText.replace('到期时间：', '') }}</div>
-                            <div>当前页面仅支持同版本续费。如需降级，请等待当前会员到期后再选择其他版本。</div>
+                            <div>当前已是最高版本，仅支持同版本续费。如需降级，请等待当前会员到期后再选择其他版本。</div>
                         </div>
 
                         <div class="flex gap-2 mb-4 overflow-x-auto pb-2" v-else-if="purchaseableVersions.length > 0">
@@ -1892,10 +1892,19 @@
                     return ['basic', 'advanced', 'flagship'].includes(this.userInfo.version);
                 },
                 isRenewOnlyMode() {
-                    return this.isRegisteredAccount && ['basic', 'advanced', 'flagship'].includes(this.userInfo.version);
+                    return this.isRegisteredAccount
+                        && this.purchaseableVersions.length === 1
+                        && this.purchaseableVersions[0] === this.userInfo.version;
                 },
                 purchaseableVersions() {
-                    return Object.keys(this.pricingOptions || {}).filter(ver => ver !== 'trial');
+                    const rank = { trial: 0, basic: 1, advanced: 2, flagship: 3 };
+                    const all = Object.keys(this.pricingOptions || {}).filter(ver => ver !== 'trial');
+                    if (!this.isRegisteredAccount) return all;
+                    const currentVersion = this.userInfo?.version;
+                    if (!['basic', 'advanced', 'flagship'].includes(currentVersion)) return all;
+                    if (this.userInfo?.is_expired) return all;
+                    const currentRank = rank[currentVersion] || 0;
+                    return all.filter(ver => (rank[ver] || 0) >= currentRank);
                 },
                 canShowTenMinuteTrialOption() {
                     return this.isRegisteredAccount && !this.isPaidMember && this.userInfo.version === 'trial' && this.accountCanApplyTrial;
@@ -2915,10 +2924,6 @@
                         this.showSubscriptionModal = false;
                         this.showLoginModal = true;
                         return;
-                    }
-
-                    if (this.isRenewOnlyMode) {
-                        this.selectedVersion = this.userInfo.version;
                     }
 
                     if (!this.selectedVersion || !this.pricingOptions[this.selectedVersion]) {
