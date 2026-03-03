@@ -1,4 +1,4 @@
-﻿from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends
+﻿from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends, HTTPException
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -127,6 +127,10 @@ PRESENCE_HEARTBEAT_SECONDS = 15 * 60
 _presence_last_logged: dict = {}
 _presence_lock = threading.Lock()
 _bg_singleton_socket = None
+STATUS_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("STATUS_RATE_LIMIT_WINDOW_SECONDS", "10") or 10)
+STATUS_RATE_LIMIT_MAX_REQUESTS = int(os.getenv("STATUS_RATE_LIMIT_MAX_REQUESTS", "30") or 30)
+_status_rate_limit_hits: dict = {}
+_status_rate_limit_lock = threading.Lock()
 
 
 def _bool_env(name: str, default: bool = True) -> bool:
@@ -163,6 +167,23 @@ def _client_ip_from_request(request: Request) -> str:
     if request.client and request.client.host:
         return request.client.host
     return ""
+
+
+def _is_status_rate_limited(request: Request) -> bool:
+    ip = _client_ip_from_request(request)
+    if ip in {"127.0.0.1", "::1", "localhost"}:
+        return False
+
+    now_ts = time.time()
+    with _status_rate_limit_lock:
+        hits = _status_rate_limit_hits.get(ip, [])
+        hits = [t for t in hits if now_ts - t <= STATUS_RATE_LIMIT_WINDOW_SECONDS]
+        if len(hits) >= STATUS_RATE_LIMIT_MAX_REQUESTS:
+            _status_rate_limit_hits[ip] = hits
+            return True
+        hits.append(now_ts)
+        _status_rate_limit_hits[ip] = hits
+    return False
 
 
 def _parse_device_os(user_agent: str, platform_hint: str, header_os: str) -> str:
@@ -449,8 +470,10 @@ async def user_operation_logger(request: Request, call_next):
     return response
 
 @app.get("/api/status")
-async def get_system_status():
+async def get_system_status(request: Request):
     """获取系统状态（交易日/时间）"""
+    if _is_status_rate_limited(request):
+        return JSONResponse(status_code=429, content={"detail": "Too many status requests"})
     return {
         "status": "success",
         "is_trading_time": is_trading_time(),
@@ -1019,7 +1042,9 @@ async def update_intraday_pool():
     # Placeholder, actual logic is in endpoints or separate scanner calls
 
 @app.get("/api/status")
-async def get_status():
+async def get_status(request: Request):
+    if _is_status_rate_limited(request):
+        return JSONResponse(status_code=429, content={"detail": "Too many status requests"})
     return {
         "status": "success",
         "is_trading": is_trading_time(),
