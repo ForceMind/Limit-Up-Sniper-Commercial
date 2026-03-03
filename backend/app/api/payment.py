@@ -41,6 +41,12 @@ class CreateOrderRequest(BaseModel):
     invite_code: Optional[str] = None
 
 
+class OrderPreviewRequest(BaseModel):
+    target_version: str
+    duration_months: int
+    x_device_id: str
+
+
 def get_db():
     db = database.SessionLocal()
     try:
@@ -59,6 +65,14 @@ def _duration_key_from_months(duration_months: int) -> str:
     if duration_months == 12:
         return "12m"
     return "1m"
+
+
+def _build_upgrade_preview_message(converted_days: float, bonus_days: int, total_granted_days: float) -> str:
+    return (
+        f"权益预估：当前剩余时长可折算 {converted_days:.2f} 天，"
+        f"加赠 {int(bonus_days or 0)} 天，"
+        f"本次预计总新增 {total_granted_days:.2f} 天（以审核通过时为准）。"
+    )
 
 
 def _referral_reward_days() -> int:
@@ -582,6 +596,49 @@ async def get_pricing(
     return purchase_manager.get_pricing_options(used_trial_versions)
 
 
+@router.post("/order_preview")
+async def order_preview(
+    payload: OrderPreviewRequest,
+    db: Session = Depends(get_db),
+):
+    if not payload.x_device_id:
+        raise HTTPException(status_code=400, detail="Missing Device ID")
+    account_store.ensure_device_not_banned(payload.x_device_id)
+
+    user = db.query(models.User).filter(models.User.device_id == payload.x_device_id).first()
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid Device ID")
+
+    duration_key = _duration_key_from_months(payload.duration_months)
+    pricing = purchase_manager.calculate_price(payload.target_version, duration_key)
+    if not pricing:
+        raise HTTPException(status_code=400, detail="Invalid version or duration")
+
+    extension = purchase_manager.calculate_membership_extension(
+        current_version=user.version,
+        current_expires_at=user.expires_at,
+        target_version=payload.target_version,
+        purchased_days=int(pricing.get("days", 0) or 0),
+        order_amount=float(pricing.get("price", 0.0) or 0.0),
+        now=datetime.utcnow(),
+    )
+
+    converted_days = round(float(extension.get("converted_days", 0.0) or 0.0), 2)
+    bonus_days = int(extension.get("bonus_days", 0) or 0)
+    total_granted_days = round(float(extension.get("total_granted_days", 0.0) or 0.0), 2)
+
+    return {
+        "target_version": payload.target_version,
+        "duration_days": int(pricing.get("days", 0) or 0),
+        "amount": float(pricing.get("price", 0.0) or 0.0),
+        "converted_days": converted_days,
+        "bonus_days": bonus_days,
+        "upgrade_bonus_days": int(extension.get("upgrade_bonus_days", 0) or 0),
+        "total_granted_days": total_granted_days,
+        "upgrade_preview_message": _build_upgrade_preview_message(converted_days, bonus_days, total_granted_days),
+    }
+
+
 @router.post("/create_order", response_model=schemas.OrderResponse)
 async def create_order(
     payload: CreateOrderRequest,
@@ -675,6 +732,22 @@ async def create_order(
     db.commit()
     db.refresh(order)
 
+    extension = purchase_manager.calculate_membership_extension(
+        current_version=user.version,
+        current_expires_at=user.expires_at,
+        target_version=order.target_version,
+        purchased_days=int(order.duration_days or 0),
+        order_amount=float(order.amount or 0.0),
+        now=datetime.utcnow(),
+    )
+    converted_days = round(float(extension.get("converted_days", 0.0) or 0.0), 2)
+    bonus_days = int(extension.get("bonus_days", 0) or 0)
+    total_granted_days = round(float(extension.get("total_granted_days", 0.0) or 0.0), 2)
+
+    upgrade_preview_message = ""
+    if converted_days > 0 or bonus_days >= 0:
+        upgrade_preview_message = _build_upgrade_preview_message(converted_days, bonus_days, total_granted_days)
+
     add_runtime_log(
         f"[支付] 订单已创建: code={order.order_code}, device={user.device_id}, version={_version_label(order.target_version)}, days={order.duration_days}, amount={order.amount}"
     )
@@ -721,6 +794,13 @@ async def create_order(
         "order_code": order.order_code,
         "amount": order.amount,
         "status": order.status,
+        "target_version": order.target_version,
+        "duration_days": order.duration_days,
+        "converted_days": converted_days,
+        "bonus_days": bonus_days,
+        "upgrade_bonus_days": int(extension.get("upgrade_bonus_days", 0) or 0),
+        "total_granted_days": total_granted_days,
+        "upgrade_preview_message": upgrade_preview_message,
         "invite_bonus_token": invite_bonus_token,
         "invite_bonus_message": invite_bonus_message,
     }

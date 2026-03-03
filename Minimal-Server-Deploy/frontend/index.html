@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>涨停狙击手 (Limit-Up Sniper) v2.6.3</title>
+    <title>涨停狙击手 (Limit-Up Sniper) v3.0.0</title>
     <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <link rel="manifest" href="static/manifest.json">
     <script src="https://cdn.tailwindcss.com"></script>
@@ -1446,6 +1446,12 @@
                     <div v-if="currentOrder?.invite_bonus_token" class="w-full bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 rounded p-3 mb-4 text-xs text-left">
                         邀请奖励口令：<span class="font-mono font-bold">{{ currentOrder.invite_bonus_token }}</span>
                     </div>
+
+                    <div v-if="(Number(currentOrder?.converted_days || 0) > 0) || (Number(currentOrder?.bonus_days || 0) > 0)" class="w-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300 border border-blue-200 dark:border-blue-800 rounded p-3 mb-4 text-xs text-left">
+                        剩余可折算 <span class="font-bold">{{ Number(currentOrder?.converted_days || 0).toFixed(2) }}</span> 天，
+                        本单加赠 <span class="font-bold">{{ Number(currentOrder?.bonus_days || 0) }}</span> 天，
+                        合计预计新增 <span class="font-bold">{{ Number(currentOrder?.total_granted_days || 0).toFixed(2) }}</span> 天（以审核通过时为准）。
+                    </div>
                     
                     <div class="text-xs text-gray-400 mb-6">
                         请确保金额准确为 ¥{{ currentOrder?.amount }}，数量填 1 个。<br>否则无法自动验证。
@@ -1766,7 +1772,7 @@
                     isRegisteredAccount: false,
                     accountCanApplyTrial: false,
                     fingerprintId: '',
-                    frontendVersion: 'v2.6.3',
+                    frontendVersion: 'v3.0.0',
                     serverVersion: '获取中...',
                     loginLoading: false,
                     loadingChart: false,
@@ -2147,6 +2153,7 @@
                     const key = this.getOnboardingStorageKey();
                     if (key) localStorage.setItem(key, '1');
                     this.showOnboardingModal = false;
+                    this.activeTab = 'pre';
                 },
                 normalizeInviteCode(code) {
                     return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20);
@@ -2925,15 +2932,44 @@
                         this.showMsg('该版本暂无定价信息', 'error');
                         return;
                     }
-                    this.purchaseLoading = true;
                     // Improved duration mapping
                     let dm = 1;
                     if (this.selectedDuration.endsWith('d')) dm = 0; // Days
                     else if (this.selectedDuration.endsWith('m')) dm = parseInt(this.selectedDuration); // Months
                     else if (this.selectedDuration.endsWith('y')) dm = parseInt(this.selectedDuration) * 12; // Years
 
+                    const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
+                    const previewBody = {
+                        target_version: this.selectedVersion,
+                        duration_months: dm,
+                        x_device_id: deviceId
+                    };
+
+                    let previewText = `本次下单：${this.membershipName(this.selectedVersion)}，金额 ¥${Number(priceInfo.price || 0).toFixed(2)}。`;
                     try {
-                        const deviceId = this.deviceId || localStorage.getItem('sniper_token') || localStorage.getItem('sniper_device_id');
+                        const previewRes = await fetch(`${API_BASE_URL}/api/payment/order_preview`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                ...(deviceId ? { 'X-Device-ID': deviceId } : {})
+                            },
+                            body: JSON.stringify(previewBody)
+                        });
+                        const previewData = await previewRes.json();
+                        if (previewRes.ok && previewData) {
+                            const converted = Number(previewData.converted_days || 0);
+                            const bonus = Number(previewData.bonus_days || 0);
+                            const total = Number(previewData.total_granted_days || 0);
+                            previewText = `${previewData.upgrade_preview_message || ''}\n\n本次金额：¥${Number(previewData.amount || priceInfo.price || 0).toFixed(2)}\n折算：${converted.toFixed(2)} 天\n加赠：${bonus} 天\n预计新增：${total.toFixed(2)} 天`;
+                        }
+                    } catch (e) {}
+
+                    const confirmed = await this.showConfirm(`${previewText}\n\n确认创建订单并继续支付吗？`);
+                    if (!confirmed) return;
+
+                    this.purchaseLoading = true;
+
+                    try {
                         const appliedInviteCode = this.normalizeInviteCode(this.inviteInputCode);
                         const res = await fetch(`${API_BASE_URL}/api/payment/create_order`, {
                             method: 'POST',
@@ -2953,6 +2989,9 @@
                             this.currentOrder = data;
                             this.currentOpenOrder = data;
                             this.purchaseStep = 2;
+                            if (data.upgrade_preview_message) {
+                                this.showMsg(data.upgrade_preview_message, 'info');
+                            }
                             if (appliedInviteCode) {
                                 this.rememberInviteCode(appliedInviteCode);
                                 localStorage.removeItem('sniper_pending_invite_code');
@@ -2962,7 +3001,14 @@
                             }
                             await this.fetchPaymentOrders(true);
                             if (this.currentOpenOrder) {
-                                this.currentOrder = { ...this.currentOpenOrder };
+                                this.currentOrder = {
+                                    ...this.currentOpenOrder,
+                                    converted_days: data.converted_days,
+                                    bonus_days: data.bonus_days,
+                                    upgrade_bonus_days: data.upgrade_bonus_days,
+                                    total_granted_days: data.total_granted_days,
+                                    upgrade_preview_message: data.upgrade_preview_message,
+                                };
                             }
                         } else {
                             this.showMsg(data.detail || '创建订单失败', 'error');
@@ -3191,15 +3237,36 @@
                     const confirmed = await this.showConfirm(`确定要清空 ${labels[range] || range} 的新闻历史吗？`);
                     if (!confirmed) return;
                     try {
-                        const res = await fetch(API_BASE_URL + `/api/news_history/clear?range=${range}`);
-                        const data = await res.json();
-                        if (data.status === 'success') {
-                            this.newsRawItems = [];
-                            this.newsList = [];
-                            this.newsLastTimestamp = 0;
-                            this.saveNewsCache();
-                            await this.fetchNewsHistoryIncremental(true);
+                        const nowTs = Math.floor(Date.now() / 1000);
+                        const startOfToday = new Date();
+                        startOfToday.setHours(0, 0, 0, 0);
+                        const startOfTodayTs = Math.floor(startOfToday.getTime() / 1000);
+
+                        let filtered = Array.isArray(this.newsRawItems) ? [...this.newsRawItems] : [];
+                        if (range === 'all') {
+                            filtered = [];
+                            this.newsLastTimestamp = nowTs;
+                        } else if (range === 'before_today') {
+                            filtered = filtered.filter(item => Number(item?.timestamp || 0) >= startOfTodayTs);
+                        } else if (range === 'before_3d') {
+                            const cutoff = nowTs - 3 * 24 * 60 * 60;
+                            filtered = filtered.filter(item => Number(item?.timestamp || 0) >= cutoff);
+                        } else if (range === 'before_7d') {
+                            const cutoff = nowTs - 7 * 24 * 60 * 60;
+                            filtered = filtered.filter(item => Number(item?.timestamp || 0) >= cutoff);
                         }
+
+                        this.newsRawItems = filtered.sort((a, b) => Number(b?.timestamp || 0) - Number(a?.timestamp || 0));
+                        if (range !== 'all') {
+                            if (this.newsRawItems.length > 0) {
+                                this.newsLastTimestamp = Number(this.newsRawItems[0]?.timestamp || this.newsLastTimestamp || nowTs);
+                            } else {
+                                this.newsLastTimestamp = nowTs;
+                            }
+                        }
+                        this.rebuildNewsList();
+                        this.saveNewsCache();
+                        this.showMsg('已清空本地新闻缓存，不会影响服务器新闻数据。', 'success');
                     } catch (e) {
                         console.error("Failed to clear news history", e);
                     }
@@ -4985,7 +5052,7 @@
                 fetch(API_BASE_URL + '/api/status')
                     .then(res => res.json())
                     .then(data => {
-                        this.serverVersion = data.server_version || data.version || data.app_version || 'v2.6.3';
+                        this.serverVersion = data.server_version || data.version || data.app_version || 'v3.0.0';
                         if (data.status === 'success') {
                             const isMarketOpenDay = data.is_market_open_day;
                             

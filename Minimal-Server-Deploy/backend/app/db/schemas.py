@@ -49,6 +49,13 @@ class OrderResponse(BaseModel):
     order_code: str
     amount: float
     status: str
+    target_version: Optional[str] = None
+    duration_days: Optional[int] = None
+    converted_days: Optional[float] = None
+    bonus_days: Optional[int] = None
+    upgrade_bonus_days: Optional[int] = None
+    total_granted_days: Optional[float] = None
+    upgrade_preview_message: Optional[str] = None
     invite_bonus_token: Optional[str] = None
     invite_bonus_message: Optional[str] = None
 
