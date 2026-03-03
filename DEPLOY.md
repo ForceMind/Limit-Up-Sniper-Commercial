@@ -1,238 +1,168 @@
-# 🚀 部署指南 (Deployment Guide)
+# 🚀 部署指南 (Commercial)
 
-本指南将指导你如何在 **Windows** 和 **Linux** 环境下部署 **Limit-Up Sniper**。
-
----
-
-## 🖥️ Windows 部署 (本地运行)
-
-适用于个人电脑或 Windows 服务器。
-
-### 1. 环境准备
-*   确保已安装 [Python 3.8+](https://www.python.org/downloads/)。
-*   确保已安装 [Git](https://git-scm.com/downloads)。
-
-### 2. 获取代码
-打开 PowerShell 或 CMD：
-```bash
-git clone https://github.com/ForceMind/Limit-Up-Sniper.git
-cd Limit-Up-Sniper
-```
-
-### 3. 一键安装
-双击运行项目根目录下的 `install.bat`。
-*   脚本会自动创建虚拟环境。
-*   自动安装所有依赖。
-*   提示你输入 **Deepseek API Key** 并保存配置。
-
-### 4. 启动服务
-双击运行 `run.bat`。
-*   服务启动后，浏览器访问 [http://127.0.0.1:8000](http://127.0.0.1:8000)。
-
-### 5. 更新代码
-双击运行 `update.bat`。
-*   自动拉取最新代码并更新依赖。
-
-
-## 🐧 Linux 部署 (服务器)
-
-适用于 **Ubuntu 20.04/22.04 LTS**, **CentOS 7+**, **Alibaba Cloud Linux 3**。
-
-### ⚡ 一键部署 (推荐)
-
-我们提供了一个自动化脚本，可以帮你完成所有安装步骤 (Python, Nginx, Systemd)。
-
-1.  **下载代码**
-    ```bash
-    cd ~
-    git clone https://github.com/ForceMind/Limit-Up-Sniper.git limit-up-sniper
-    cd limit-up-sniper
-    ```
-
-2.  **运行安装脚本**
-    ```bash
-    sudo bash install.sh
-    ```
-
-3.  **按提示操作**
-    *   脚本会自动安装系统依赖。
-    *   当提示输入 **Deepseek API Key** 时，请粘贴你的密钥。
-    *   当提示输入 **IP 或域名** 时，确认即可。
-
-4.  **完成**
-    *   脚本运行结束后，直接访问显示的 URL 即可使用。
-
-### 🔄 如何更新 (Update)
-
-运行更新脚本，它会自动拉取最新代码、更新依赖并重启服务。
-
-```bash
-cd Limit-Up-Sniper
-sudo systemctl stop limit-up-sniper
-sudo bash update.sh
-sudo journalctl -u limit-up-sniper -f
-```
+本指南适用于当前仓库 `Limit-Up-Sniper-Commercial`。
 
 ---
 
-## 🛠️ 手动部署 (Linux Manual)
+## 🖥️ Windows（桌面版）
 
-如果你想手动控制每一个步骤，请参考以下流程。
+桌面启动脚本位于 `Desktop-Version/`。
 
-### 1. 环境准备
+1. 安装依赖与初始化
+
+```bat
+Desktop-Version\install.bat
+```
+
+2. 启动
+
+```bat
+Desktop-Version\run.bat
+```
+
+3. 更新
+
+```bat
+Desktop-Version\update.bat
+```
+
+默认访问地址：`http://127.0.0.1:8000`
+
+---
+
+## 🐧 Linux（服务器版，推荐）
+
+服务器脚本位于 `Server-Version/`。
+
+### 1) 一键安装
+
 ```bash
-sudo apt update
-sudo apt install python3 python3-pip python3-venv git nginx -y
+cd /opt
+sudo git clone https://github.com/ForceMind/Limit-Up-Sniper-Commercial.git limit-up-sniper-commercial
+cd limit-up-sniper-commercial
+sudo bash Server-Version/install.sh
 ```
 
-### 2. 配置 Python 环境
+安装脚本会完成：
+- Python 环境与依赖
+- systemd 服务创建
+- nginx 反向代理
+- 数据目录初始化（包含龙虎榜映射文件）
+
+### 2) 更新
+
 ```bash
-cd Limit-Up-Sniper
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
+cd /opt/limit-up-sniper-commercial
+sudo bash Server-Version/update.sh
+sudo journalctl -u limit-up-sniper-commercial -f
 ```
 
-### 3. 配置 Systemd 服务
-创建服务文件 `/etc/systemd/system/limit-up-sniper.service`：
+### 2.1) 更新前兼容性自检（强烈建议）
 
-```ini
-[Unit]
-Description=Limit-Up Sniper FastAPI Service
-After=network.target
-
-[Service]
-User=root
-WorkingDirectory=/root/limit-up-sniper
-Environment="PATH=/root/limit-up-sniper/venv/bin"
-Environment="DEEPSEEK_API_KEY=sk-你的密钥"
-ExecStart=/root/limit-up-sniper/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 1
-Restart=always
-
-[Install]
-WantedBy=multi-user.target
-```
-
-启动服务：
 ```bash
-sudo systemctl daemon-reload
-sudo systemctl enable limit-up-sniper
-sudo systemctl restart limit-up-sniper
-```
+# 1) 核对安装目录与服务文件
+test -d /opt/limit-up-sniper-commercial && echo "APP_DIR OK"
+test -f /etc/systemd/system/limit-up-sniper-commercial.service && echo "SERVICE FILE OK"
 
-### 4. 配置 Nginx 反向代理
-创建配置文件 `/etc/nginx/sites-available/limit-up-sniper`：
+# 2) 核对 Python 虚拟环境
+test -f /opt/limit-up-sniper-commercial/venv/bin/activate && echo "VENV OK"
 
-```nginx
-server {
-    listen 80;
-    server_name your_server_ip;
+# 3) 核对关键运行数据文件（缺失会影响登录/会员/日志）
+ls -l /opt/limit-up-sniper-commercial/backend/data/{user_accounts.json,trial_fingerprints.json,referral_records.json,user_operation_logs.jsonl,seat_mappings.json,vip_seats.json}
 
-    location / {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-    }
-
-    location /ws {
-        proxy_pass http://127.0.0.1:8000;
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade $http_upgrade;
-        proxy_set_header Connection "upgrade";
-    }
-}
-```
-
-启用配置：
-```bash
-sudo ln -sf /etc/nginx/sites-available/limit-up-sniper /etc/nginx/sites-enabled/
-sudo rm -f /etc/nginx/sites-enabled/default
+# 4) 核对服务与 nginx 状态
+sudo systemctl status limit-up-sniper-commercial --no-pager | head -n 12
 sudo nginx -t
-sudo systemctl restart nginx
 ```
-## 常用维护命令
 
-*   **查看应用日志**:
-    ```bash
-    sudo journalctl -u limit-up-sniper -f
-    ```
-*   **重启应用**:
-    ```bash
-    sudo systemctl restart limit-up-sniper
-    ```
-*   **停止应用**:
-    ```bash
-    sudo systemctl stop limit-up-sniper
-    ```
-*   **更新代码**:
-    ```bash
-    cd ~/limit-up-sniper
-    git pull
-    sudo systemctl restart limit-up-sniper
-    ```
+说明：新版 `update.sh` 已固定为商业版路径与服务名，不再自动切换 legacy 服务，避免更新到错误实例。
 
-## 2. 上传代码
-将整个 `Limit-Up-Sniper` 文件夹上传到服务器。
+### 3) 卸载
 
-## 3. 安装依赖
+仅卸载服务与 nginx 配置：
+
 ```bash
-cd Limit-Up-Sniper
-pip install -r requirements.txt
+cd /opt/limit-up-sniper-commercial
+sudo bash Server-Version/uninstall.sh
 ```
 
-## 4. 设置环境变量 (Deepseek Key)
+连同应用目录一起删除：
+
 ```bash
-export DEEPSEEK_API_KEY="your-key-here"
+cd /opt/limit-up-sniper-commercial
+sudo bash Server-Version/uninstall.sh --remove-app
 ```
 
-## 5. 后台运行 (使用 nohup)
-```bash
-nohup uvicorn app.main:app --host 0.0.0.0 --port 8000 > server.log 2>&1 &
-```
-
-## 6. 访问
-在浏览器访问 `http://服务器IP:8000`。
-
-## 7. (可选) 使用 Nginx 反向代理
-如果需要绑定域名或使用 80 端口，建议配置 Nginx。
-
-## 8. 停止服务
-如果使用 nohup 运行，请使用以下命令停止：
-```bash
-pkill -f uvicorn
-```
-或者先查找进程 ID 再停止：
-```bash
-ps -ef | grep uvicorn
-kill <PID>
-```
 ---
 
-## ❓ 常见问题 (FAQ)
+## 🧭 install / update / uninstall 怎么选
 
-### 1. 启动报错 "ModuleNotFoundError"
-*   **原因**: 依赖未安装或虚拟环境未激活。
-*   **解决**: 运行 `install.bat` (Windows) 或 `pip install -r requirements.txt` (Linux)。
+### 场景 A：首次部署（新服务器 / 新目录）
+- 使用：`install.sh`
+- 命令：`sudo bash Server-Version/install.sh`
+- 说明：会创建 venv、systemd、nginx、并初始化必须数据文件。
 
-### 2. 页面显示 "WebSocket Disconnected"
-*   **原因**: Nginx 未正确配置 WebSocket 转发，或服务未启动。
-*   **解决**: 检查 Nginx 配置中的 `/ws` 部分，或检查后端日志 `sudo journalctl -u limit-up-sniper -f`。
+### 场景 B：已是商业版目录 `/opt/limit-up-sniper-commercial`，仅升级代码
+- 使用：`update.sh`
+- 命令：`sudo bash Server-Version/update.sh`
+- 说明：会备份并恢复运行数据，保留现有配置与账号数据。
 
-### 3. 数据不更新
-*   **原因**: 可能是非交易时间，或新浪接口访问受限。
-*   **解决**: 检查服务器时间是否正确，或查看后台日志是否有报错。
+### 场景 C：系统状态混乱（服务文件缺失 / venv 损坏 / 启动失败反复）
+- 建议：先执行 `uninstall.sh`（不带 `--remove-app`），再重新 `install.sh`
+- 若需“彻底重装”并清空历史数据，再使用 `uninstall.sh --remove-app` 后安装。
 
+### 场景 D：未来新机器上线
+- 一律走 `install.sh`。
+- 旧机器日常迭代继续用 `update.sh`。
 
-##  管理后台 (Admin Panel)
+### 是否必须先卸载再升级？
+- 不必须。正常升级优先 `update.sh`。
+- 仅当环境损坏、端口/服务冲突长期无法修复时，再考虑卸载重装。
 
-本系统包含一个管理员后台，用于管理用户、订单和系统配置。
+---
 
-*   **访问地址**: `http://你的域名或IP/admin/`
-*   **初始密码**: 系统首次启动时会自动生成一个 Admin Token。
-    *   查看位置: `backend/data/admin_token.txt`
-    *   请妥善保管此 Token。
+## 🔧 常用运维命令
 
-### 功能说明
-1.  **用户管理**: 查看注册设备，手动增加用户时长 (Add Time)。
-2.  **订单管理**: 审核用户的支付订单 (Code验证)。
-3.  **系统配置**: 修改龙虎榜同步策略、交易时间段等。
+```bash
+# 服务状态
+sudo systemctl status limit-up-sniper-commercial
+
+# 重启服务
+sudo systemctl restart limit-up-sniper-commercial
+
+# 停止服务
+sudo systemctl stop limit-up-sniper-commercial
+
+# 查看实时日志
+sudo journalctl -u limit-up-sniper-commercial -f
+
+# 查看 nginx 配置检查
+sudo nginx -t
+```
+
+---
+
+## ❓ FAQ
+
+### 1) 80 端口被占用
+- 如果占用者是 nginx，安装脚本会复用该端口。
+- 如果占用者不是 nginx，请先释放端口或改用其他监听端口。
+
+### 2) 页面显示 WebSocket Disconnected
+- 检查服务是否正常：`sudo systemctl status limit-up-sniper-commercial`
+- 检查 nginx 是否正常：`sudo nginx -t && sudo systemctl restart nginx`
+
+### 3) 龙虎榜数据文件缺失
+- 当前安装/更新脚本会自动补齐 `seat_mappings.json` 与 `vip_seats.json`。
+
+---
+
+## 🛡️ 管理后台
+
+- 访问地址：`http://你的域名或IP/admin/`
+- 管理员 Token 文件：`backend/data/admin_token.txt`
+
+功能包括：
+1. 用户管理（增减时长）
+2. 订单审核
+3. 系统配置（含龙虎榜策略）

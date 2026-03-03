@@ -673,6 +673,41 @@ EOF
     systemctl restart nginx
 }
 
+verify_deployment_health() {
+    log_warn "[健康检查] 校验服务与接口状态..."
+
+    if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+        log_error "[错误] 服务未处于 active 状态: $SERVICE_NAME"
+        log_error "请执行: sudo journalctl -u ${SERVICE_NAME} -n 120 --no-pager"
+        exit 1
+    fi
+
+    local internal_health_url="http://127.0.0.1:${INTERNAL_PORT}/api/status"
+    local internal_ok="false"
+    local i
+    for i in $(seq 1 20); do
+        if curl -fsS "$internal_health_url" >/dev/null 2>&1; then
+            internal_ok="true"
+            break
+        fi
+        sleep 1
+    done
+
+    if [ "$internal_ok" != "true" ]; then
+        log_error "[错误] 内部健康检查失败: $internal_health_url"
+        log_error "请执行: sudo journalctl -u ${SERVICE_NAME} -n 120 --no-pager"
+        exit 1
+    fi
+
+    local external_health_url="http://127.0.0.1:${EXTERNAL_PORT}/api/status"
+    if ! curl -fsS "$external_health_url" >/dev/null 2>&1; then
+        log_warn "[警告] Nginx 转发健康检查失败: $external_health_url"
+        log_warn "请检查 Nginx: sudo nginx -t && sudo systemctl status nginx"
+    fi
+
+    log_info "健康检查通过"
+}
+
 show_result() {
     ADMIN_HINT="已保留服务器现有管理员账号配置（用户名默认为 admin）"
     if [ ! -f "$APP_DIR/backend/data/admin_credentials.json" ]; then
@@ -724,6 +759,7 @@ main() {
     setup_python_venv
     setup_systemd
     setup_nginx
+    verify_deployment_health
     show_result
     cleanup_temp
 }

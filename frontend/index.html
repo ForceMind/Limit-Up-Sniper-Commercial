@@ -1663,14 +1663,34 @@
                     newStockCode: '',
                     logs: [],
                     wsConnected: false,
+                    wsConnecting: false,
+                    wsReconnectTimer: null,
+                    logSocket: null,
                     notifyWsConnected: false,
+                    notifyWsConnecting: false,
+                    notifyReconnectTimer: null,
                     notifySocket: null,
+                    marketWsConnected: false,
+                    marketWsConnecting: false,
+                    marketReconnectTimer: null,
+                    marketSocket: null,
+                    wsRefreshLastTs: {},
+                    marketFallbackFastTimer: null,
+                    marketFallbackSlowTimer: null,
+                    lhbStatusPollTimer: null,
+                    configPollTimer: null,
+                    clockTimer: null,
+                    lhbStatusLastCheckTs: 0,
                     globalAuthErrorHandler: null,
                     currentTime: new Date(),
                     searchQuery: '',
                     searchResults: [],
                     searchTimeout: null,
                     isMobile: window.innerWidth < 768,
+                    isFetchingStocks: false,
+                    isFetchingIndices: false,
+                    isFetchingLimitUpPool: false,
+                    isFetchingSentiment: false,
                     marketSentiment: {
                         indices: [],
                         stats: {
@@ -1977,10 +1997,34 @@
                 if(this.trialTimer) clearTimeout(this.trialTimer);
                 if(this.expiryTimer) clearInterval(this.expiryTimer);
                 if(this.msgTimer) clearTimeout(this.msgTimer);
+                if (this.logSocket) {
+                    try { this.logSocket.close(); } catch (e) {}
+                    this.logSocket = null;
+                }
                 if (this.notifySocket) {
                     try { this.notifySocket.close(); } catch (e) {}
                     this.notifySocket = null;
                 }
+                if (this.marketSocket) {
+                    try { this.marketSocket.close(); } catch (e) {}
+                    this.marketSocket = null;
+                }
+                if (this.marketFallbackFastTimer) clearInterval(this.marketFallbackFastTimer);
+                if (this.marketFallbackSlowTimer) clearInterval(this.marketFallbackSlowTimer);
+                if (this.lhbStatusPollTimer) clearInterval(this.lhbStatusPollTimer);
+                if (this.configPollTimer) clearInterval(this.configPollTimer);
+                if (this.clockTimer) clearInterval(this.clockTimer);
+                if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer);
+                if (this.notifyReconnectTimer) clearTimeout(this.notifyReconnectTimer);
+                if (this.marketReconnectTimer) clearTimeout(this.marketReconnectTimer);
+                this.marketFallbackFastTimer = null;
+                this.marketFallbackSlowTimer = null;
+                this.lhbStatusPollTimer = null;
+                this.configPollTimer = null;
+                this.clockTimer = null;
+                this.wsReconnectTimer = null;
+                this.notifyReconnectTimer = null;
+                this.marketReconnectTimer = null;
                 if (this.globalAuthErrorHandler) {
                     window.removeEventListener('auth-error', this.globalAuthErrorHandler);
                     this.globalAuthErrorHandler = null;
@@ -2568,12 +2612,7 @@
                         this.showLoginModal = false;
                         this.showSettingsModal = false;
                         if (this.hasDataAccess) {
-                            this.initialDataLoading = true;
-                            this.fetchData();
-                            this.fetchLimitUpPool();
-                            this.fetchMarketSentiment();
-                            this.fetchIndices();
-                            if (!this.wsConnected) this.connectWebSocket();
+                            this.refreshMarketSnapshots(true);
                         }
                         if (mode === 'register') {
                             this.qqInviteInfo = {
@@ -2633,12 +2672,7 @@
                         localStorage.setItem('sniper_device_id', token);
                         this.accountCanApplyTrial = false;
                         if (this.hasDataAccess) {
-                            this.initialDataLoading = true;
-                            this.fetchData();
-                            this.fetchLimitUpPool();
-                            this.fetchMarketSentiment();
-                            this.fetchIndices();
-                            if (!this.wsConnected) this.connectWebSocket();
+                            this.refreshMarketSnapshots(true);
                         }
                         this.showMsg('体验申请已通过，资格已开通', 'success');
                     } catch (e) {
@@ -3265,17 +3299,62 @@
                     } finally {
                         // Don't set false immediately, let polling handle it or just timeout
                         // Actually, for better UX, we should poll status
-                        this.checkLHBStatus();
+                        this.checkLHBStatus(true);
+                        this.startLhbStatusPolling();
                     }
                 },
-                async checkLHBStatus() {
+                async checkLHBStatus(force = false) {
                     if (!this.hasDataAccess) return;
+                    const now = Date.now();
+                    if (!force && !this.isSyncingLHB) return;
+                    if (!force && this.lhbStatusLastCheckTs && (now - this.lhbStatusLastCheckTs < 12000)) return;
                     try {
+                        this.lhbStatusLastCheckTs = now;
                         const response = await fetch(API_BASE_URL + '/api/lhb/status');
                         const data = await response.json();
                         this.isSyncingLHB = data.is_syncing;
+                        if (!this.isSyncingLHB) {
+                            this.stopLhbStatusPolling();
+                        }
                     } catch (e) {
                         console.error(e);
+                    }
+                },
+                startLhbStatusPolling() {
+                    if (this.lhbStatusPollTimer) return;
+                    this.lhbStatusPollTimer = setInterval(() => {
+                        if (!this.hasDataAccess || !this.isSyncingLHB) return;
+                        this.checkLHBStatus();
+                    }, 20000);
+                },
+                stopLhbStatusPolling() {
+                    if (this.lhbStatusPollTimer) {
+                        clearInterval(this.lhbStatusPollTimer);
+                        this.lhbStatusPollTimer = null;
+                    }
+                },
+                startMarketFallbackPolling() {
+                    if (this.marketFallbackFastTimer || this.marketFallbackSlowTimer) return;
+                    this.marketFallbackFastTimer = setInterval(() => {
+                        if (!this.hasDataAccess || this.marketWsConnected) return;
+                        this.fetchData();
+                        this.fetchIndices();
+                    }, 15000);
+
+                    this.marketFallbackSlowTimer = setInterval(() => {
+                        if (!this.hasDataAccess || this.marketWsConnected) return;
+                        this.fetchLimitUpPool();
+                        this.fetchMarketSentiment();
+                    }, 45000);
+                },
+                stopMarketFallbackPolling() {
+                    if (this.marketFallbackFastTimer) {
+                        clearInterval(this.marketFallbackFastTimer);
+                        this.marketFallbackFastTimer = null;
+                    }
+                    if (this.marketFallbackSlowTimer) {
+                        clearInterval(this.marketFallbackSlowTimer);
+                        this.marketFallbackSlowTimer = null;
                     }
                 },
                 async fetchConfig() {
@@ -3423,6 +3502,10 @@
                 
                 connectWebSocket() {
                     if (!this.hasDataAccess) return;
+                    if (this.wsConnected || this.wsConnecting) return;
+                    if (this.logSocket && (this.logSocket.readyState === WebSocket.OPEN || this.logSocket.readyState === WebSocket.CONNECTING)) {
+                        return;
+                    }
                     // Use API_BASE_URL to determine WS URL
                     let wsBase = API_BASE_URL.replace(/^http/, 'ws');
                     // Handle case where API_BASE_URL has no protocol (e.g. relative path, though unlikely in this setup)
@@ -3430,8 +3513,15 @@
                     
                     const wsUrl = `${wsBase}/ws/logs`;
                     const ws = new WebSocket(wsUrl);
+                    this.logSocket = ws;
+                    this.wsConnecting = true;
                     
                     ws.onopen = () => {
+                        this.wsConnecting = false;
+                        if (this.wsReconnectTimer) {
+                            clearTimeout(this.wsReconnectTimer);
+                            this.wsReconnectTimer = null;
+                        }
                         this.wsConnected = true;
                         this.addLog('系统连接成功');
                     };
@@ -3442,8 +3532,14 @@
                     
                     ws.onclose = () => {
                         this.wsConnected = false;
+                        this.wsConnecting = false;
+                        this.logSocket = null;
                         if (this.hasDataAccess) {
-                            setTimeout(() => this.connectWebSocket(), 3000); // Reconnect
+                            if (this.wsReconnectTimer) return;
+                            this.wsReconnectTimer = setTimeout(() => {
+                                this.wsReconnectTimer = null;
+                                this.connectWebSocket();
+                            }, 3000);
                         }
                     };
                 },
@@ -3468,6 +3564,10 @@
                 },
                 connectNotifyWebSocket() {
                     if (!this.deviceId) return;
+                    if (this.notifyWsConnected || this.notifyWsConnecting) return;
+                    if (this.notifySocket && (this.notifySocket.readyState === WebSocket.OPEN || this.notifySocket.readyState === WebSocket.CONNECTING)) {
+                        return;
+                    }
                     if (this.notifySocket) {
                         try { this.notifySocket.close(); } catch (e) {}
                         this.notifySocket = null;
@@ -3477,8 +3577,14 @@
                     const wsUrl = `${wsBase}/ws/logs?channel=notify&device_id=${encodeURIComponent(this.deviceId)}`;
                     const ws = new WebSocket(wsUrl);
                     this.notifySocket = ws;
+                    this.notifyWsConnecting = true;
 
                     ws.onopen = () => {
+                        this.notifyWsConnecting = false;
+                        if (this.notifyReconnectTimer) {
+                            clearTimeout(this.notifyReconnectTimer);
+                            this.notifyReconnectTimer = null;
+                        }
                         this.notifyWsConnected = true;
                     };
 
@@ -3502,12 +3608,7 @@
                             }
                             await this.refreshCurrentUserInfo();
                             if (this.hasDataAccess) {
-                                this.initialDataLoading = true;
-                                if (!this.wsConnected) this.connectWebSocket();
-                                this.fetchData();
-                                this.fetchLimitUpPool();
-                                this.fetchMarketSentiment();
-                                this.fetchIndices();
+                                this.refreshMarketSnapshots(true);
                             }
                             if (this.showSubscriptionModal && this.purchaseStep === 3) {
                                 this.showSubscriptionModal = false;
@@ -3520,11 +3621,140 @@
 
                     ws.onclose = () => {
                         this.notifyWsConnected = false;
+                        this.notifyWsConnecting = false;
                         this.notifySocket = null;
                         if (this.deviceId) {
-                            setTimeout(() => this.connectNotifyWebSocket(), 3000);
+                            if (this.notifyReconnectTimer) return;
+                            this.notifyReconnectTimer = setTimeout(() => {
+                                this.notifyReconnectTimer = null;
+                                this.connectNotifyWebSocket();
+                            }, 3000);
                         }
                     };
+                },
+                connectMarketWebSocket() {
+                    if (!this.hasDataAccess) return;
+                    if (this.marketWsConnected || this.marketWsConnecting) return;
+                    if (this.marketSocket && (this.marketSocket.readyState === WebSocket.OPEN || this.marketSocket.readyState === WebSocket.CONNECTING)) {
+                        return;
+                    }
+                    if (this.marketSocket) {
+                        try { this.marketSocket.close(); } catch (e) {}
+                        this.marketSocket = null;
+                    }
+                    let wsBase = API_BASE_URL.replace(/^http/, 'ws');
+                    if (wsBase.startsWith('//')) wsBase = 'ws:' + wsBase;
+                    const wsUrl = `${wsBase}/ws/logs?channel=market`;
+                    const ws = new WebSocket(wsUrl);
+                    this.marketSocket = ws;
+                    this.marketWsConnecting = true;
+
+                    ws.onopen = () => {
+                        this.marketWsConnecting = false;
+                        if (this.marketReconnectTimer) {
+                            clearTimeout(this.marketReconnectTimer);
+                            this.marketReconnectTimer = null;
+                        }
+                        this.marketWsConnected = true;
+                        this.stopMarketFallbackPolling();
+                    };
+
+                    ws.onmessage = (event) => {
+                        let payload = null;
+                        try {
+                            payload = JSON.parse(event.data);
+                        } catch (e) {
+                            return;
+                        }
+                        if (!payload || !payload.event) return;
+
+                        if (payload.event === 'quotes_tick') {
+                            this.applyQuoteTick(payload.quotes || []);
+                            return;
+                        }
+                        if (payload.event === 'market_refresh') {
+                            this.triggerRefreshByTargets(payload.targets || []);
+                            return;
+                        }
+                        if (payload.event === 'lhb_status') {
+                            this.isSyncingLHB = !!payload.is_syncing;
+                            if (this.isSyncingLHB) {
+                                this.startLhbStatusPolling();
+                            } else {
+                                this.stopLhbStatusPolling();
+                            }
+                        }
+                    };
+
+                    ws.onclose = () => {
+                        this.marketWsConnected = false;
+                        this.marketWsConnecting = false;
+                        this.marketSocket = null;
+                        this.startMarketFallbackPolling();
+                        if (this.hasDataAccess) {
+                            if (this.marketReconnectTimer) return;
+                            this.marketReconnectTimer = setTimeout(() => {
+                                this.marketReconnectTimer = null;
+                                this.connectMarketWebSocket();
+                            }, 3000);
+                        }
+                    };
+                },
+                _shouldThrottleWsRefresh(key, intervalMs) {
+                    const now = Date.now();
+                    const last = Number(this.wsRefreshLastTs[key] || 0);
+                    if (last && now - last < intervalMs) return true;
+                    this.wsRefreshLastTs[key] = now;
+                    return false;
+                },
+                triggerRefreshByTargets(targets) {
+                    const list = Array.isArray(targets) ? targets : [];
+                    if (!list.length) return;
+                    if (list.includes('stocks') && !this._shouldThrottleWsRefresh('stocks', 3000)) {
+                        this.fetchData();
+                        this.fetchIndices();
+                    }
+                    if (list.includes('limit_up_pool') && !this._shouldThrottleWsRefresh('limit_up_pool', 5000)) {
+                        this.fetchLimitUpPool();
+                    }
+                    if (list.includes('market_sentiment') && !this._shouldThrottleWsRefresh('market_sentiment', 8000)) {
+                        this.fetchMarketSentiment();
+                    }
+                },
+                applyQuoteTick(quotes) {
+                    const rows = Array.isArray(quotes) ? quotes : [];
+                    if (!rows.length) return;
+                    const tickMap = {};
+                    rows.forEach((item) => {
+                        if (!item || !item.code) return;
+                        tickMap[String(item.code)] = item;
+                    });
+
+                    if (Array.isArray(this.stocks) && this.stocks.length) {
+                        this.stocks = this.stocks.map((stock) => {
+                            const tick = tickMap[String(stock.code || '')];
+                            if (!tick) return stock;
+                            return {
+                                ...stock,
+                                current: Number(tick.current ?? stock.current ?? 0),
+                                change_percent: Number(tick.change_percent ?? stock.change_percent ?? 0),
+                                time: tick.time || stock.time || ''
+                            };
+                        });
+                    }
+
+                    if (Array.isArray(this.localFavoriteQuotes) && this.localFavoriteQuotes.length) {
+                        this.localFavoriteQuotes = this.localFavoriteQuotes.map((stock) => {
+                            const tick = tickMap[String(stock.code || '')];
+                            if (!tick) return stock;
+                            return {
+                                ...stock,
+                                current: Number(tick.current ?? stock.current ?? 0),
+                                change_percent: Number(tick.change_percent ?? stock.change_percent ?? 0),
+                                time: tick.time || stock.time || ''
+                            };
+                        });
+                    }
                 },
                 addLog(msg) {
                     const time = new Date().toLocaleTimeString();
@@ -3592,6 +3822,8 @@
                         this.initialDataLoading = false;
                         return;
                     }
+                    if (this.isFetchingStocks) return;
+                    this.isFetchingStocks = true;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/stocks');
                         const data = await response.json();
@@ -3622,11 +3854,14 @@
                     } catch (error) {
                         console.error('Data fetch failed:', error);
                     } finally {
+                        this.isFetchingStocks = false;
                         this.initialDataLoading = false;
                     }
                 },
                 async fetchIndices() {
                     if (!this.hasDataAccess) return;
+                    if (this.isFetchingIndices) return;
+                    this.isFetchingIndices = true;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/indices');
                         const data = await response.json();
@@ -3637,10 +3872,14 @@
                         }
                     } catch (error) {
                         console.error('Indices fetch failed:', error);
+                    } finally {
+                        this.isFetchingIndices = false;
                     }
                 },
                 async fetchLimitUpPool() {
                     if (!this.hasDataAccess) return;
+                    if (this.isFetchingLimitUpPool) return;
+                    this.isFetchingLimitUpPool = true;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/limit_up_pool');
                         const data = await response.json();
@@ -3653,10 +3892,14 @@
                         }
                     } catch (error) {
                         console.error('Limit Up Pool fetch failed:', error);
+                    } finally {
+                        this.isFetchingLimitUpPool = false;
                     }
                 },
                 async fetchMarketSentiment() {
                     if (!this.hasDataAccess) return;
+                    if (this.isFetchingSentiment) return;
+                    this.isFetchingSentiment = true;
                     this.sentimentLoading = true;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/market_sentiment');
@@ -3691,8 +3934,21 @@
                     } catch (error) {
                         console.error('Market Sentiment fetch failed:', error);
                     } finally {
+                        this.isFetchingSentiment = false;
                         this.sentimentLoading = false;
                     }
+                },
+                refreshMarketSnapshots(setLoading = true) {
+                    if (!this.hasDataAccess) return;
+                    if (setLoading) {
+                        this.initialDataLoading = true;
+                    }
+                    this.fetchData();
+                    this.fetchLimitUpPool();
+                    this.fetchMarketSentiment();
+                    this.fetchIndices();
+                    if (!this.wsConnected) this.connectWebSocket();
+                    if (!this.marketWsConnected) this.connectMarketWebSocket();
                 },
                 getSeatName(stock) {
                     if (stock.likely_seats && stock.likely_seats.length > 0) {
@@ -4666,12 +4922,7 @@
                         this.connectNotifyWebSocket();
                     }
                     if (this.hasDataAccess) {
-                        this.initialDataLoading = true;
-                        this.fetchData();
-                        this.fetchLimitUpPool();
-                        this.fetchMarketSentiment();
-                        this.fetchIndices();
-                        this.connectWebSocket();
+                        this.refreshMarketSnapshots(true);
                     }
                     if (localStorage.getItem('sniper_open_subscription') === '1') {
                         localStorage.removeItem('sniper_open_subscription');
@@ -4686,7 +4937,7 @@
                 // --- Existing Logic ---
                 this.fetchConfig();
                 this.fetchLHBConfig();
-                setInterval(this.fetchConfig, 10000); // Poll config every 10s
+                this.configPollTimer = setInterval(this.fetchConfig, 60000); // Poll config every 60s
                 
                 // Initialize Theme
                 const savedTheme = localStorage.getItem('theme');
@@ -4771,60 +5022,10 @@
                         }
                     });
 
-                // Intelligent Polling
-                setInterval(() => {
-                    if (!this.hasDataAccess) return;
-                    const now = new Date();
-                    const day = now.getDay();
-                    // Weekend check (0=Sun, 6=Sat)
-                    if (day === 0 || day === 6) return;
-
-                    const h = now.getHours();
-                    const m = now.getMinutes();
-                    const timeVal = h * 100 + m;
-                    const isTrading = (timeVal >= 915 && timeVal <= 1130) || (timeVal >= 1300 && timeVal <= 1500);
-                    
-                    // 1. Stocks Data & Indices: 3s during trading
-                    if (isTrading) {
-                        this.fetchData();
-                        this.fetchIndices(); // Fast update for indices
-                    }
-                }, 3000);
-
-                // Poll LHB Status
-                setInterval(() => {
-                    if (!this.hasDataAccess) return;
-                    this.checkLHBStatus();
-                }, 5000);
-
-                setInterval(() => {
-                    if (!this.hasDataAccess) return;
-                    const now = new Date();
-                    const day = now.getDay();
-                    if (day === 0 || day === 6) return;
-
-                    const h = now.getHours();
-                    const m = now.getMinutes();
-                    const timeVal = h * 100 + m;
-                    const isTrading = (timeVal >= 915 && timeVal <= 1130) || (timeVal >= 1300 && timeVal <= 1500);
-
-                    // 2. Limit Up Pool: 10s during trading
-                    if (isTrading) {
-                        this.fetchLimitUpPool();
-                    } else {
-                        // if (now.getSeconds() < 10) this.fetchLimitUpPool();
-                    }
-                }, 10000);
-
-                // 3. Market Sentiment: 60s always (or just trading?)
-                // User said "1 minute refresh is fine"
-                setInterval(() => {
-                    if (!this.hasDataAccess) return;
-                    this.fetchMarketSentiment();
-                }, 60000); 
+                this.startMarketFallbackPolling();
 
                 // Update time every second for trial countdown / visibility logic
-                setInterval(() => {
+                this.clockTimer = setInterval(() => {
                     this.currentTime = new Date();
                 }, 1000);
                 

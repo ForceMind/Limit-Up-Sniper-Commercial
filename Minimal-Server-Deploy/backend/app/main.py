@@ -6,6 +6,7 @@ from sqlalchemy.orm import Session
 from app.db.database import get_db
 import requests
 import json
+import hashlib
 import os
 import shutil
 import asyncio
@@ -650,6 +651,10 @@ indices_cache = []
 indices_cache_ts = 0.0
 market_sentiment_cache = {}
 market_sentiment_cache_ts = 0.0
+market_ws_last_stock_hash = ""
+market_ws_last_pool_hash = ""
+market_ws_last_sentiment_hash = ""
+market_ws_last_lhb_syncing = None
 day_kline_refresh_ts = {}
 day_kline_attempt_ts = {}
 kline_update_cursor = 0
@@ -1249,7 +1254,7 @@ def refresh_watchlist():
 async def websocket_endpoint(websocket: WebSocket):
     channel = (websocket.query_params.get("channel") or "logs").strip().lower()
     device_id = (websocket.query_params.get("device_id") or "").strip()
-    if channel not in ("logs", "notify"):
+    if channel not in ("logs", "notify", "market"):
         channel = "logs"
     if channel == "notify" and not device_id:
         channel = "logs"
@@ -1505,6 +1510,102 @@ async def log_broadcaster():
         except queue.Empty:
             await asyncio.sleep(0.1)
 
+
+def _market_hash_obj(value) -> str:
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        encoded = str(value)
+    return hashlib.md5(encoded.encode("utf-8")).hexdigest()
+
+
+def _compact_quote_ticks(rows):
+    compact = []
+    for row in rows or []:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("code", "")).strip()
+        if not code:
+            continue
+        compact.append({
+            "code": code,
+            "current": row.get("current", 0),
+            "change_percent": row.get("change_percent", 0),
+            "time": row.get("time", ""),
+        })
+    return compact
+
+
+async def market_event_broadcaster():
+    global market_ws_last_stock_hash, market_ws_last_pool_hash, market_ws_last_sentiment_hash, market_ws_last_lhb_syncing
+    while True:
+        try:
+            if not await ws_hub.has_market_subscribers():
+                market_ws_last_stock_hash = ""
+                market_ws_last_pool_hash = ""
+                market_ws_last_sentiment_hash = ""
+                market_ws_last_lhb_syncing = None
+                await asyncio.sleep(2)
+                continue
+
+            quotes = _get_stock_quotes_cache()
+            if quotes:
+                await ws_hub.broadcast_market_event({
+                    "event": "quotes_tick",
+                    "ts": int(time.time()),
+                    "quotes": _compact_quote_ticks(quotes),
+                })
+
+            refresh_targets = []
+
+            stocks_fingerprint = [
+                {
+                    "code": str(x.get("code", "")),
+                    "strategy": str(x.get("strategy", "")),
+                    "is_favorite": bool(x.get("is_favorite", False)),
+                }
+                for x in (quotes or [])
+                if isinstance(x, dict)
+            ]
+            stock_hash = _market_hash_obj(stocks_fingerprint)
+            if stock_hash != market_ws_last_stock_hash:
+                market_ws_last_stock_hash = stock_hash
+                refresh_targets.append("stocks")
+
+            pool_fingerprint = {
+                "limit_up": [str(x.get("code", "")) for x in (limit_up_pool_data or []) if isinstance(x, dict)],
+                "broken": [str(x.get("code", "")) for x in (broken_limit_pool_data or []) if isinstance(x, dict)],
+            }
+            pool_hash = _market_hash_obj(pool_fingerprint)
+            if pool_hash != market_ws_last_pool_hash:
+                market_ws_last_pool_hash = pool_hash
+                refresh_targets.append("limit_up_pool")
+
+            sentiment_payload = get_market_sentiment_cache() or {}
+            sentiment_hash = _market_hash_obj(sentiment_payload.get("stats", {}))
+            if sentiment_hash != market_ws_last_sentiment_hash:
+                market_ws_last_sentiment_hash = sentiment_hash
+                refresh_targets.append("market_sentiment")
+
+            lhb_syncing = bool(lhb_manager.is_syncing)
+            if lhb_syncing != market_ws_last_lhb_syncing:
+                market_ws_last_lhb_syncing = lhb_syncing
+                await ws_hub.broadcast_market_event({
+                    "event": "lhb_status",
+                    "is_syncing": lhb_syncing,
+                })
+
+            if refresh_targets:
+                await ws_hub.broadcast_market_event({
+                    "event": "market_refresh",
+                    "targets": refresh_targets,
+                    "ts": int(time.time()),
+                })
+        except Exception as e:
+            print(f"市场WS广播任务错误: {e}")
+
+        await asyncio.sleep(2)
+
 def update_limit_up_pool_task():
     """更新涨停股票池"""
     global limit_up_pool_data
@@ -1548,6 +1649,7 @@ async def startup_event():
 
     # Always start lightweight websocket log broadcaster.
     asyncio.create_task(log_broadcaster())
+    asyncio.create_task(market_event_broadcaster())
 
     if not _bool_env("ENABLE_BACKGROUND_TASKS", True):
         msg = "启动：已禁用后台任务（ENABLE_BACKGROUND_TASKS=0）"

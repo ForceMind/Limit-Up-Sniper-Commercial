@@ -9,8 +9,6 @@ APP_NAME="limit-up-sniper-commercial"
 APP_DIR="/opt/${APP_NAME}"
 SERVICE_NAME="${APP_NAME}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-LEGACY_APP_DIR="/opt/limit-up-sniper"
-LEGACY_SERVICE_NAME="limit-up-sniper"
 WORKER_COUNT="2"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 DEFAULT_SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -26,10 +24,26 @@ log_warn() { echo -e "${YELLOW}$1${NC}"; }
 log_error() { echo -e "${RED}$1${NC}"; }
 
 resolve_install_target() {
-    if [ ! -d "$APP_DIR" ] && [ -d "$LEGACY_APP_DIR" ]; then
-        APP_DIR="$LEGACY_APP_DIR"
-        SERVICE_NAME="$LEGACY_SERVICE_NAME"
-        SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+    :
+}
+
+validate_existing_install() {
+    if [ ! -d "$APP_DIR" ]; then
+        log_error "[错误] 未检测到安装目录: $APP_DIR"
+        log_error "请先执行安装脚本: sudo bash Server-Version/install.sh"
+        exit 1
+    fi
+
+    if [ ! -f "$SERVICE_FILE" ]; then
+        log_error "[错误] 未检测到 systemd 服务文件: $SERVICE_FILE"
+        log_error "请先执行安装脚本重新创建服务: sudo bash Server-Version/install.sh"
+        exit 1
+    fi
+
+    if [ ! -f "$APP_DIR/venv/bin/activate" ]; then
+        log_error "[错误] 未检测到 Python 虚拟环境: $APP_DIR/venv"
+        log_error "请先执行安装脚本修复运行环境: sudo bash Server-Version/install.sh"
+        exit 1
     fi
 }
 
@@ -264,9 +278,47 @@ EOF
     systemctl daemon-reload
 }
 
+verify_update_health() {
+    log_warn "健康检查：校验更新后服务与接口..."
+
+    if ! systemctl is-active --quiet "$SERVICE_NAME"; then
+        log_error "[错误] 服务未启动成功: $SERVICE_NAME"
+        log_error "请执行: sudo journalctl -u ${SERVICE_NAME} -n 120 --no-pager"
+        log_error "若需回滚，可使用备份目录: $BACKUP_DIR"
+        exit 1
+    fi
+
+    local internal_port
+    internal_port=$(grep -Eo -- '--port[[:space:]]+[0-9]+' "$SERVICE_FILE" | head -n 1 | awk '{print $2}') || true
+    if ! [[ "$internal_port" =~ ^[0-9]+$ ]]; then
+        internal_port="8000"
+    fi
+
+    local internal_health_url="http://127.0.0.1:${internal_port}/api/status"
+    local ok="false"
+    local i
+    for i in $(seq 1 20); do
+        if curl -fsS "$internal_health_url" >/dev/null 2>&1; then
+            ok="true"
+            break
+        fi
+        sleep 1
+    done
+
+    if [ "$ok" != "true" ]; then
+        log_error "[错误] 健康检查失败: $internal_health_url"
+        log_error "请执行: sudo journalctl -u ${SERVICE_NAME} -n 120 --no-pager"
+        log_error "若需回滚，可使用备份目录: $BACKUP_DIR"
+        exit 1
+    fi
+
+    log_info "更新后健康检查通过"
+}
+
 main() {
     require_root
     resolve_install_target
+    validate_existing_install
     calc_worker_count
     resolve_source
     prepare_backup_dir
@@ -276,6 +328,7 @@ main() {
     echo "源码目录: $SOURCE_ROOT"
 
     log_warn "停止服务..."
+    systemctl stop "$SERVICE_NAME" || true
     systemctl stop limit-up-sniper || true
 
     backup_runtime_files
@@ -290,6 +343,7 @@ main() {
     echo "重启服务..."
     systemctl restart "$SERVICE_NAME"
     systemctl restart nginx || true
+    verify_update_health
 
     log_info "========================================="
     log_info "更新完成，运行数据与配置已恢复"
