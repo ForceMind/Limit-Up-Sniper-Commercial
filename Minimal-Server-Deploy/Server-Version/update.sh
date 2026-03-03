@@ -5,7 +5,13 @@
 
 set -euo pipefail
 
-APP_DIR="/opt/limit-up-sniper"
+APP_NAME="limit-up-sniper-commercial"
+APP_DIR="/opt/${APP_NAME}"
+SERVICE_NAME="${APP_NAME}"
+SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+LEGACY_APP_DIR="/opt/limit-up-sniper"
+LEGACY_SERVICE_NAME="limit-up-sniper"
+WORKER_COUNT="2"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 DEFAULT_SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
 SOURCE_ROOT_INPUT="${1:-}"
@@ -18,6 +24,32 @@ NC='\033[0m'
 log_info() { echo -e "${GREEN}$1${NC}"; }
 log_warn() { echo -e "${YELLOW}$1${NC}"; }
 log_error() { echo -e "${RED}$1${NC}"; }
+
+resolve_install_target() {
+    if [ ! -d "$APP_DIR" ] && [ -d "$LEGACY_APP_DIR" ]; then
+        APP_DIR="$LEGACY_APP_DIR"
+        SERVICE_NAME="$LEGACY_SERVICE_NAME"
+        SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+    fi
+}
+
+calc_worker_count() {
+    local cpu_count="2"
+    if command -v nproc >/dev/null 2>&1; then
+        cpu_count="$(nproc 2>/dev/null || echo 2)"
+    fi
+    if ! [[ "$cpu_count" =~ ^[0-9]+$ ]] || [ "$cpu_count" -lt 1 ]; then
+        cpu_count="2"
+    fi
+
+    if [ "$cpu_count" -le 2 ]; then
+        WORKER_COUNT="2"
+    elif [ "$cpu_count" -le 4 ]; then
+        WORKER_COUNT="3"
+    else
+        WORKER_COUNT="4"
+    fi
+}
 
 require_root() {
     if [ "${EUID}" -ne 0 ]; then
@@ -193,8 +225,49 @@ install_dependencies() {
     fi
 }
 
+tune_systemd_service() {
+    if [ ! -f "$SERVICE_FILE" ]; then
+        log_warn "未找到 systemd 服务文件，跳过性能参数更新"
+        return
+    fi
+
+    local internal_port
+    internal_port=$(grep -Eo -- '--port[[:space:]]+[0-9]+' "$SERVICE_FILE" | head -n 1 | awk '{print $2}') || true
+    if ! [[ "$internal_port" =~ ^[0-9]+$ ]]; then
+        internal_port="8000"
+    fi
+
+    local deepseek_key
+    deepseek_key=$(grep -E '^Environment="DEEPSEEK_API_KEY=' "$SERVICE_FILE" | head -n 1 | sed -E 's/^Environment="DEEPSEEK_API_KEY=([^"]*)"/\1/') || true
+
+    cat > "$SERVICE_FILE" <<EOF
+[Unit]
+Description=Limit-Up Sniper Commercial Backend
+After=network.target
+
+[Service]
+User=root
+Group=root
+WorkingDirectory=$APP_DIR/backend
+Environment="PATH=$APP_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="DEEPSEEK_API_KEY=$deepseek_key"
+Environment="ENABLE_BACKGROUND_TASKS=1"
+Environment="BACKGROUND_SINGLETON_PORT=39731"
+ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $internal_port --workers $WORKER_COUNT
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+    systemctl daemon-reload
+}
+
 main() {
     require_root
+    resolve_install_target
+    calc_worker_count
     resolve_source
     prepare_backup_dir
 
@@ -212,15 +285,16 @@ main() {
     ensure_lhb_data_files
     fix_runtime_permissions
     install_dependencies
+    tune_systemd_service
 
     echo "重启服务..."
-    systemctl restart limit-up-sniper
+    systemctl restart "$SERVICE_NAME"
     systemctl restart nginx || true
 
     log_info "========================================="
     log_info "更新完成，运行数据与配置已恢复"
     log_info "========================================="
-    systemctl status limit-up-sniper --no-pager | head -n 8 || true
+    systemctl status "$SERVICE_NAME" --no-pager | head -n 8 || true
 }
 
 main "$@"

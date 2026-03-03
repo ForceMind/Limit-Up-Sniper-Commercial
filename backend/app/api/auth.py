@@ -207,9 +207,11 @@ async def register(data: dict = Body(...), db: Session = Depends(get_db)):
     if len(username) < 3 or len(password) < 6:
         raise HTTPException(status_code=400, detail="用户名至少3位，密码至少6位")
 
-    accounts = _load_accounts()
-    if username in accounts:
+    existing_account = account_store.get_account_by_username(username)
+    if existing_account:
         raise HTTPException(status_code=400, detail="用户名已存在")
+
+    accounts = _load_accounts()
 
     salt = os.urandom(8).hex()
     password_hash = _hash_password(password, salt)
@@ -266,8 +268,7 @@ async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
     if not username or not password:
         raise HTTPException(status_code=400, detail="请输入用户名和密码")
 
-    accounts = _load_accounts()
-    account = accounts.get(username)
+    account = account_store.get_account_by_username(username)
     if not account:
         log_user_operation(
             "user_login",
@@ -280,7 +281,7 @@ async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
         )
         raise HTTPException(status_code=404, detail="用户不存在，请先注册")
 
-    account_store.ensure_device_not_banned(str(account.get("device_id", "")).strip(), accounts=accounts)
+    account_store.ensure_device_not_banned(str(account.get("device_id", "")).strip())
 
     if _hash_password(password, account.get("salt", "")) != account.get("password_hash"):
         log_user_operation(
@@ -396,15 +397,14 @@ async def apply_trial(
     if not fingerprint_id:
         raise HTTPException(status_code=400, detail="缺少设备标识")
 
-    accounts = _load_accounts()
-    account_key = None
-    for username, account in accounts.items():
-        if account.get("device_id") == x_device_id:
-            account_key = username
-            break
+    account_key, matched_account = account_store.get_account_by_device_id(x_device_id)
 
-    if not account_key:
+    if not account_key or not matched_account:
         raise HTTPException(status_code=403, detail="请先注册并登录后再申请体验")
+
+    accounts = _load_accounts()
+    if account_key not in accounts:
+        accounts[account_key] = matched_account
 
     user = user_service.get_or_create_user(db, x_device_id)
     if user.version in PAID_VERSIONS:

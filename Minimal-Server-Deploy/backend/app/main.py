@@ -12,6 +12,7 @@ import asyncio
 import time
 import copy
 import threading
+import socket
 import re
 from pathlib import Path
 from datetime import datetime, timedelta
@@ -123,6 +124,34 @@ API_DEVICE_AUTH_EXEMPT_PATHS = {
 PRESENCE_HEARTBEAT_SECONDS = 15 * 60
 _presence_last_logged: dict = {}
 _presence_lock = threading.Lock()
+_bg_singleton_socket = None
+
+
+def _bool_env(name: str, default: bool = True) -> bool:
+    raw = str(os.getenv(name, "")).strip().lower()
+    if not raw:
+        return bool(default)
+    return raw in {"1", "true", "yes", "on"}
+
+
+def _acquire_background_singleton() -> bool:
+    global _bg_singleton_socket
+    if _bg_singleton_socket is not None:
+        return True
+    lock_port = int(os.getenv("BACKGROUND_SINGLETON_PORT", "39731") or 39731)
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    try:
+        sock.bind(("127.0.0.1", lock_port))
+        sock.listen(1)
+        _bg_singleton_socket = sock
+        return True
+    except OSError:
+        try:
+            sock.close()
+        except Exception:
+            pass
+        return False
 
 
 def _client_ip_from_request(request: Request) -> str:
@@ -1516,7 +1545,22 @@ def update_limit_up_pool_task():
 async def startup_event():
     # Load caches
     load_analysis_cache()
-    
+
+    # Always start lightweight websocket log broadcaster.
+    asyncio.create_task(log_broadcaster())
+
+    if not _bool_env("ENABLE_BACKGROUND_TASKS", True):
+        msg = "启动：已禁用后台任务（ENABLE_BACKGROUND_TASKS=0）"
+        print(msg)
+        add_runtime_log(msg)
+        return
+
+    if not _acquire_background_singleton():
+        msg = "启动：后台任务由其他 worker 持有，当前实例仅提供 API"
+        print(msg)
+        add_runtime_log(msg)
+        return
+
     # Update base info only during market trading session.
     if is_market_open_day() and is_trading_time():
         print("启动：正在更新股票基础信息...")
@@ -1525,12 +1569,12 @@ async def startup_event():
     else:
         print("启动：当前非交易时段，跳过基础信息更新。")
         add_runtime_log("启动：当前非交易时段，跳过基础信息更新。")
+
     # Warm core caches once at startup.
     await asyncio.to_thread(refresh_stock_quotes_cache)
     await asyncio.to_thread(refresh_indices_cache)
     await asyncio.to_thread(refresh_market_sentiment_cache)
-    
-    asyncio.create_task(log_broadcaster())
+
     # Start background scheduler
     asyncio.create_task(scheduler_loop())
     # Start centralized cache updater (all user APIs read these caches only)
@@ -1542,7 +1586,7 @@ async def startup_event():
     asyncio.create_task(update_intraday_pool_task())
     # Start periodic cleanup task
     asyncio.create_task(periodic_cleanup_task())
-    
+
     # 启动时立即执行一次盘中扫描，确保列表不为空。
     print("启动：正在执行首次盘中扫描...")
     add_runtime_log("启动：正在执行首次盘中扫描...")

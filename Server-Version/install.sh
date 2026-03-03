@@ -19,6 +19,7 @@ INTERNAL_PORT="$DEFAULT_INTERNAL_PORT"
 DEFAULT_EXTERNAL_PORT="80"
 EXTERNAL_PORT="$DEFAULT_EXTERNAL_PORT"
 USER_IP=""
+WORKER_COUNT="2"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
 
@@ -39,6 +40,24 @@ detect_os() {
         OS_NAME="${NAME:-Unknown}"
     else
         OS_NAME="Unknown"
+    fi
+}
+
+calc_worker_count() {
+    local cpu_count="2"
+    if command -v nproc >/dev/null 2>&1; then
+        cpu_count="$(nproc 2>/dev/null || echo 2)"
+    fi
+    if ! [[ "$cpu_count" =~ ^[0-9]+$ ]] || [ "$cpu_count" -lt 1 ]; then
+        cpu_count="2"
+    fi
+
+    if [ "$cpu_count" -le 2 ]; then
+        WORKER_COUNT="2"
+    elif [ "$cpu_count" -le 4 ]; then
+        WORKER_COUNT="3"
+    else
+        WORKER_COUNT="4"
     fi
 }
 
@@ -534,7 +553,9 @@ Group=root
 WorkingDirectory=$APP_DIR/backend
 Environment="PATH=$APP_DIR/venv/bin:/usr/local/bin:/usr/bin:/bin"
 Environment="DEEPSEEK_API_KEY=$FINAL_DEEPSEEK_KEY"
-ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $INTERNAL_PORT --workers 1
+Environment="ENABLE_BACKGROUND_TASKS=1"
+Environment="BACKGROUND_SINGLETON_PORT=39731"
+ExecStart=$APP_DIR/venv/bin/uvicorn app.main:app --host 0.0.0.0 --port $INTERNAL_PORT --workers $WORKER_COUNT
 Restart=always
 RestartSec=5
 
@@ -635,6 +656,7 @@ main() {
 
     require_root
     detect_os
+    calc_worker_count
     check_source_tree
 
     log_info "检测到源码目录: $SOURCE_ROOT"
