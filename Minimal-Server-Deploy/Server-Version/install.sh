@@ -100,6 +100,27 @@ sys.exit(1)
 PY
 }
 
+is_port_in_use_by_nginx() {
+    local port="$1"
+
+    if command -v ss >/dev/null 2>&1; then
+        ss -ltnp "sport = :$port" 2>/dev/null | grep -qi nginx
+        return
+    fi
+
+    if command -v lsof >/dev/null 2>&1; then
+        lsof -iTCP:"$port" -sTCP:LISTEN -n -P 2>/dev/null | grep -qi nginx
+        return
+    fi
+
+    if command -v netstat >/dev/null 2>&1; then
+        netstat -ltnp 2>/dev/null | grep -E "[:.]${port}[[:space:]]" | grep -qi nginx
+        return
+    fi
+
+    return 1
+}
+
 resolve_internal_port() {
     local preferred="$1"
     local candidate="$preferred"
@@ -154,8 +175,12 @@ configure_ports() {
         fi
 
         if is_port_in_use "$EXTERNAL_PORT"; then
-            log_warn "端口 $EXTERNAL_PORT 已被占用，请更换"
-            continue
+            if is_port_in_use_by_nginx "$EXTERNAL_PORT"; then
+                log_warn "端口 $EXTERNAL_PORT 当前由 Nginx 占用，将复用该端口并覆盖站点配置"
+            else
+                log_warn "端口 $EXTERNAL_PORT 已被占用，请更换"
+                continue
+            fi
         fi
 
         break
