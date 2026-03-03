@@ -73,6 +73,18 @@ sudo /opt/limit-up-sniper/scripts/update.sh /root/Limit-Up-Sniper-Commercial
 sudo systemctl restart limit-up-sniper
 ```
 
+### 卸载服务
+如需仅卸载 systemd 服务与 Nginx 站点配置（保留业务数据）：
+```bash
+chmod +x /opt/limit-up-sniper-commercial/scripts/uninstall.sh
+sudo /opt/limit-up-sniper-commercial/scripts/uninstall.sh
+```
+
+如需连同应用目录一起删除（会删除运行数据）：
+```bash
+sudo /opt/limit-up-sniper-commercial/scripts/uninstall.sh --remove-app
+```
+
 ## 常见问题 (FAQ)
 
 **Q: 为什么日志显示 "ModuleNotFoundError"?**
