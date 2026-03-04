@@ -329,6 +329,35 @@ EOF
     systemctl daemon-reload
 }
 
+install_zt_launcher() {
+    local launcher="/usr/local/bin/zt"
+    cat > "$launcher" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+PANEL_SCRIPT="$APP_DIR/scripts/zt.sh"
+
+if [ ! -f "\$PANEL_SCRIPT" ]; then
+    echo "[错误] 未找到运维面板脚本: \$PANEL_SCRIPT"
+    echo "请先执行安装或更新脚本同步脚本文件。"
+    exit 1
+fi
+
+if [ "\${EUID}" -eq 0 ]; then
+    exec "\$PANEL_SCRIPT" "\$@"
+fi
+
+if command -v sudo >/dev/null 2>&1; then
+    exec sudo "\$PANEL_SCRIPT" "\$@"
+fi
+
+echo "[错误] 当前非 root 用户且未检测到 sudo，无法执行 zt 管理面板"
+exit 1
+EOF
+    chmod +x "$launcher"
+    log_info "已更新终端运维命令: zt"
+}
+
 verify_update_health() {
     log_warn "健康检查：校验更新后服务与接口..."
 
@@ -390,6 +419,7 @@ main() {
     fix_runtime_permissions
     install_dependencies
     tune_systemd_service
+    install_zt_launcher
 
     echo "重启服务..."
     systemctl restart "$SERVICE_NAME"

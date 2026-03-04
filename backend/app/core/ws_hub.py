@@ -119,6 +119,14 @@ class WSHub:
             "total_connections": int(log_count + market_count + notify_count),
         }
 
+    async def snapshot_active_devices(self) -> Dict[str, int]:
+        async with self._lock:
+            return {
+                str(device_id): int(len(conns))
+                for device_id, conns in self._notify_connections.items()
+                if device_id and conns
+            }
+
 
 ws_hub = WSHub()
 

@@ -141,6 +141,9 @@ def _bool_env(name: str, default: bool = True) -> bool:
     return raw in {"1", "true", "yes", "on"}
 
 
+DISABLE_PUBLIC_FRONTEND = _bool_env("DISABLE_PUBLIC_FRONTEND", False)
+
+
 def _acquire_background_singleton() -> bool:
     global _bg_singleton_socket
     if _bg_singleton_socket is not None:
@@ -374,11 +377,25 @@ def _log_ai_quota_event(
 @app.middleware("http")
 async def admin_panel_custom_path_guard(request: Request, call_next):
     path = request.url.path
+    normalized = path.rstrip("/") or "/"
+
+    admin_api_prefix = admin.get_admin_api_prefix()
+    if admin_api_prefix != "/api/admin":
+        if normalized == "/api/admin" or normalized.startswith("/api/admin/"):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+
+        if normalized == admin_api_prefix or normalized.startswith(admin_api_prefix + "/"):
+            suffix = path[len(admin_api_prefix):]
+            new_path = "/api/admin" + suffix
+            request.scope["path"] = new_path
+            request.scope["raw_path"] = new_path.encode("utf-8")
+            path = new_path
+            normalized = path.rstrip("/") or "/"
+
     if path.startswith("/api/"):
         return await call_next(request)
 
     admin_path = admin.get_admin_panel_path()
-    normalized = path.rstrip("/") or "/"
 
     if admin_path != "/admin" and (normalized == "/admin" or normalized.startswith("/admin/")):
         return JSONResponse({"detail": "Not Found"}, status_code=404)
@@ -388,6 +405,9 @@ async def admin_panel_custom_path_guard(request: Request, call_next):
             return RedirectResponse(url=admin_path, status_code=307)
         if normalized == admin_path or normalized.startswith(admin_path + "/"):
             return FileResponse(str(ADMIN_INDEX_FILE))
+
+    if DISABLE_PUBLIC_FRONTEND:
+        return JSONResponse({"detail": "Public frontend disabled"}, status_code=404)
 
     return await call_next(request)
 
@@ -482,7 +502,7 @@ async def get_system_status(request: Request):
         "is_trading_time": is_trading_time(),
         "is_market_open_day": is_market_open_day(),
         "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        "server_version": SERVER_VERSION
+        "server_version": SERVER_VERSION,
     }
 
 @app.get("/api/news_history/clear")

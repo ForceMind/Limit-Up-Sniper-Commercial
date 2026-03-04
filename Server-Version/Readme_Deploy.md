@@ -60,6 +60,19 @@ sudo systemctl restart limit-up-sniper-commercial
 sudo systemctl stop limit-up-sniper-commercial
 ```
 
+### 终端运维面板（推荐）
+安装或更新后可直接使用命令：
+```bash
+zt
+```
+
+`zt` 面板支持：
+- 启动/重启/停止后端服务
+- 启动/停止前端（Nginx）
+- 健康检查（内外网 status）
+- 查看/跟踪后端与 Nginx 日志
+- 参数设置（Worker、状态接口限流、后台访问路径、开机自启）
+
 ## 8. 卸载
 ```bash
 cd /opt/limit-up-sniper-commercial

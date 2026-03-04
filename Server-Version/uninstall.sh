@@ -135,6 +135,7 @@ remove_app_dirs_if_needed() {
 
 show_result() {
     log_warn "[4/4] 卸载完成"
+    rm -f /usr/local/bin/zt || true
     log_info "========================================="
     log_info "服务卸载已完成"
     if [ "$REMOVE_APP" = "true" ]; then

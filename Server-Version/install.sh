@@ -662,6 +662,35 @@ EOF
     systemctl restart "$SERVICE_NAME"
 }
 
+install_zt_launcher() {
+    local launcher="/usr/local/bin/zt"
+    cat > "$launcher" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+
+PANEL_SCRIPT="$APP_DIR/scripts/zt.sh"
+
+if [ ! -f "\$PANEL_SCRIPT" ]; then
+    echo "[错误] 未找到运维面板脚本: \$PANEL_SCRIPT"
+    echo "请先执行安装或更新脚本同步脚本文件。"
+    exit 1
+fi
+
+if [ "\${EUID}" -eq 0 ]; then
+    exec "\$PANEL_SCRIPT" "\$@"
+fi
+
+if command -v sudo >/dev/null 2>&1; then
+    exec sudo "\$PANEL_SCRIPT" "\$@"
+fi
+
+echo "[错误] 当前非 root 用户且未检测到 sudo，无法执行 zt 管理面板"
+exit 1
+EOF
+    chmod +x "$launcher"
+    log_info "已安装终端运维命令: zt"
+}
+
 setup_nginx() {
     log_warn "[7/7] 配置 Nginx 反向代理..."
 
@@ -801,6 +830,7 @@ main() {
     configure_ports
     setup_python_venv
     setup_systemd
+    install_zt_launcher
     setup_nginx
     verify_deployment_health
     show_result
