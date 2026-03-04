@@ -19,10 +19,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data"
 ACCOUNTS_FILE = DATA_DIR / "user_accounts.json"
 TRIAL_FP_FILE = DATA_DIR / "trial_fingerprints.json"
+AUTH_ACCESS_LIMITS_FILE = DATA_DIR / "auth_access_limits.json"
 
 PAID_VERSIONS = {"basic", "advanced", "flagship"}
 GUEST_PREFIXES = ("guestv2_", "guest_", "visitor_")
 GUEST_TRIAL_MINUTES = 10
+REGISTER_PER_IP_LIMIT = 3
+GUEST_PER_IP_LIMIT = 3
 
 
 def _ensure_data_dir():
@@ -59,6 +62,99 @@ def _load_trial_fingerprints():
 
 def _save_trial_fingerprints(data):
     _save_json(TRIAL_FP_FILE, data)
+
+
+def _client_ip_from_request(request: Request) -> str:
+    forwarded = (request.headers.get("X-Forwarded-For") or "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if request.client and request.client.host:
+        return str(request.client.host).strip()
+    return ""
+
+
+def _normalize_fingerprint(raw: str) -> str:
+    return str(raw or "").strip()[:128]
+
+
+def _dedupe_str_list(raw) -> list[str]:
+    result = []
+    seen = set()
+    if isinstance(raw, list):
+        for item in raw:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+    return result
+
+
+def _load_auth_access_limits() -> dict:
+    raw = _load_json(AUTH_ACCESS_LIMITS_FILE, {})
+    if not isinstance(raw, dict):
+        raw = {}
+
+    def _normalize_map_of_lists(key: str) -> dict:
+        src = raw.get(key, {})
+        dst = {}
+        if isinstance(src, dict):
+            for k, v in src.items():
+                kk = str(k or "").strip()
+                if not kk:
+                    continue
+                vv = _dedupe_str_list(v)
+                if vv:
+                    dst[kk] = vv
+        return dst
+
+    fp_guest_src = raw.get("fingerprint_guest_device", {})
+    fp_guest_dst = {}
+    if isinstance(fp_guest_src, dict):
+        for k, v in fp_guest_src.items():
+            kk = str(k or "").strip()
+            vv = str(v or "").strip()
+            if kk and vv:
+                fp_guest_dst[kk] = vv
+
+    return {
+        "ip_registered_users": _normalize_map_of_lists("ip_registered_users"),
+        "ip_guest_devices": _normalize_map_of_lists("ip_guest_devices"),
+        "fingerprint_registered_users": _normalize_map_of_lists("fingerprint_registered_users"),
+        "fingerprint_guest_device": fp_guest_dst,
+    }
+
+
+def _save_auth_access_limits(data: dict):
+    payload = data if isinstance(data, dict) else {}
+    _save_json(AUTH_ACCESS_LIMITS_FILE, payload)
+
+
+def _append_unique(target: list[str], value: str) -> list[str]:
+    text = str(value or "").strip()
+    if not text:
+        return target
+    if text not in target:
+        target.append(text)
+    return target
+
+
+def _has_registered_hint(limits: dict, client_ip: str, fingerprint_id: str) -> bool:
+    if fingerprint_id:
+        fp_users = (limits.get("fingerprint_registered_users") or {}).get(fingerprint_id, [])
+        if isinstance(fp_users, list) and len(fp_users) > 0:
+            return True
+    if client_ip:
+        ip_users = (limits.get("ip_registered_users") or {}).get(client_ip, [])
+        if isinstance(ip_users, list) and len(ip_users) > 0:
+            return True
+    return False
+
+
+def _guest_limit_detail(must_login: bool) -> str:
+    if must_login:
+        return "当前IP/设备游客已达上限，你已注册过账号，请先登录"
+    return "当前IP/设备游客已达上限，请先注册账号"
 
 
 def _hash_password(password: str, salt: str) -> str:
@@ -176,13 +272,33 @@ def get_db():
 
 
 @router.post("/login", response_model=schemas.UserInfo)
-async def login(data: schemas.UserCreate, db: Session = Depends(get_db)):
+async def login(data: schemas.UserCreate, request: Request, db: Session = Depends(get_db)):
     device_id = (data.device_id or "").strip()
     if not device_id:
         raise HTTPException(status_code=400, detail="缺少设备标识")
 
     account_store.ensure_device_not_banned(device_id)
+    client_ip = _client_ip_from_request(request)
+    fingerprint_id = _normalize_fingerprint(request.headers.get("X-Device-Fingerprint"))
     created = db.query(models.User).filter(models.User.device_id == device_id).first() is None
+
+    if created and _is_guest_device(device_id):
+        limits = _load_auth_access_limits()
+        ip_guest_devices = limits.get("ip_guest_devices", {})
+        fp_guest_device = limits.get("fingerprint_guest_device", {})
+
+        if fingerprint_id:
+            bound_guest = str(fp_guest_device.get(fingerprint_id, "") or "").strip()
+            if bound_guest and bound_guest != device_id:
+                must_login = _has_registered_hint(limits, client_ip, fingerprint_id)
+                raise HTTPException(status_code=403, detail=_guest_limit_detail(must_login))
+
+        if client_ip:
+            guest_devices = _dedupe_str_list(ip_guest_devices.get(client_ip, []))
+            if device_id not in guest_devices and len(guest_devices) >= GUEST_PER_IP_LIMIT:
+                must_login = _has_registered_hint(limits, client_ip, fingerprint_id)
+                raise HTTPException(status_code=403, detail=_guest_limit_detail(must_login))
+
     user = user_service.get_or_create_user(db, device_id)
 
     # 新游客首次进入：自动开通10分钟浏览权限
@@ -195,17 +311,34 @@ async def login(data: schemas.UserCreate, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(user)
 
+        limits = _load_auth_access_limits()
+        if client_ip:
+            ip_guest_devices = limits.setdefault("ip_guest_devices", {})
+            ip_guest_devices[client_ip] = _append_unique(_dedupe_str_list(ip_guest_devices.get(client_ip, [])), device_id)
+        if fingerprint_id:
+            fp_guest_device = limits.setdefault("fingerprint_guest_device", {})
+            fp_guest_device[fingerprint_id] = device_id
+        _save_auth_access_limits(limits)
+
     return _build_user_payload(user)
 
 
 @router.post("/register")
-async def register(data: dict = Body(...), db: Session = Depends(get_db)):
+async def register(data: dict = Body(...), request: Request, db: Session = Depends(get_db)):
     username = _read_auth_field(data, "username", "username_b64")
     password = _read_auth_field(data, "password", "password_b64")
     if not username or not password:
         raise HTTPException(status_code=400, detail="请输入用户名和密码")
     if len(username) < 3 or len(password) < 6:
         raise HTTPException(status_code=400, detail="用户名至少3位，密码至少6位")
+
+    client_ip = _client_ip_from_request(request)
+    fingerprint_id = _normalize_fingerprint(request.headers.get("X-Device-Fingerprint"))
+    limits = _load_auth_access_limits()
+    if client_ip:
+        current_users = _dedupe_str_list((limits.get("ip_registered_users") or {}).get(client_ip, []))
+        if username not in current_users and len(current_users) >= REGISTER_PER_IP_LIMIT:
+            raise HTTPException(status_code=403, detail="当前IP注册账号数量已达上限，请使用已有账号登录")
 
     existing_account = account_store.get_account_by_username(username)
     if existing_account:
@@ -227,6 +360,21 @@ async def register(data: dict = Body(...), db: Session = Depends(get_db)):
     }
     invite_code = account_store.ensure_account_invite_code(username, accounts)
     _save_accounts(accounts)
+
+    if client_ip or fingerprint_id:
+        ip_registered_users = limits.setdefault("ip_registered_users", {})
+        fingerprint_registered_users = limits.setdefault("fingerprint_registered_users", {})
+        if client_ip:
+            ip_registered_users[client_ip] = _append_unique(
+                _dedupe_str_list(ip_registered_users.get(client_ip, [])),
+                username,
+            )
+        if fingerprint_id:
+            fingerprint_registered_users[fingerprint_id] = _append_unique(
+                _dedupe_str_list(fingerprint_registered_users.get(fingerprint_id, [])),
+                username,
+            )
+        _save_auth_access_limits(limits)
 
     # 注册后默认未开通高级权限（需申请体验或购买）
     user = user_service.get_or_create_user(db, device_id)

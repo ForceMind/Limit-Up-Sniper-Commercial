@@ -1685,6 +1685,10 @@
 
             if (requestUrl.includes('/api/') && !requestUrl.includes('/api/admin/')) {
                 headers.set('X-Device-ID', getOrCreateDeviceId());
+                const fingerprintId = (localStorage.getItem('sniper_fingerprint_id') || '').trim();
+                if (fingerprintId) {
+                    headers.set('X-Device-Fingerprint', fingerprintId);
+                }
             }
             config.headers = headers;
 
@@ -2699,6 +2703,13 @@
                         await this.ensureGuestSession();
                     } catch (e) {
                         console.error('Guest session init failed', e);
+                        const msg = String((e && e.message) || '').trim();
+                        if (msg) {
+                            this.showMsg(msg, 'error');
+                            if (msg.includes('注册') || msg.includes('登录')) {
+                                this.showLoginModal = true;
+                            }
+                        }
                         this.userInfo = {
                             ...this.userInfo,
                             version: 'trial',
