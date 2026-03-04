@@ -61,13 +61,10 @@ KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
-SERVER_VERSION = "v3.0.0"
+SERVER_VERSION = "v3.0.1"
 
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
-app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
-app.include_router(payment.router, prefix="/api/payment", tags=["payment"])
-
-# CORS配置
+# 重要：CORS 中间件必须在任何路由 (app.include_router) 和中间件注册之前被加载
+# 否则会导致 OPTIONS preflight 请求被后续路由拦截（比如被报 "Missing Device ID"）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],  # 允许所有来源，生产环境应限制为前端域名
@@ -75,6 +72,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
+app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
+app.include_router(payment.router, prefix="/api/payment", tags=["payment"])
 
 FRONTEND_DIR = BASE_DIR.parent / "frontend"
 ADMIN_INDEX_FILE = FRONTEND_DIR / "admin" / "index.html"
@@ -394,6 +395,8 @@ async def admin_panel_custom_path_guard(request: Request, call_next):
 @app.middleware("http")
 async def api_device_auth_guard(request: Request, call_next):
     path = request.url.path
+    if request.method == "OPTIONS":
+        return await call_next(request)
     if not path.startswith("/api/"):
         return await call_next(request)
     if path.startswith("/api/admin/"):

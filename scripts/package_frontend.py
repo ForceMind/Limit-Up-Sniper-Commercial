@@ -26,11 +26,32 @@ def _inject_api_prefix(config_path: Path, api_base: str) -> None:
     config_path.write_text(patched, encoding="utf-8")
 
 
-def _write_deploy_readme(target_dir: Path, api_base: str) -> None:
+def _normalize_admin_path(admin_path: str) -> str:
+    value = str(admin_path or "admin").strip().strip("/").strip()
+    if not value:
+        return "admin"
+    if not re.match(r"^[A-Za-z0-9_\-]+$", value):
+        raise ValueError("admin 路径仅允许字母、数字、下划线和中划线")
+    return value
+
+
+def _apply_admin_path(target_dir: Path, admin_path: str) -> None:
+    if admin_path == "admin":
+        return
+    src = target_dir / "admin"
+    dst = target_dir / admin_path
+    if not src.exists():
+        raise FileNotFoundError(f"未找到默认后台目录: {src}")
+    if dst.exists():
+        shutil.rmtree(dst)
+    src.rename(dst)
+
+
+def _write_deploy_readme(target_dir: Path, api_base: str, admin_path: str) -> None:
     text = (
         "# 前端分离部署说明\n\n"
         "1. 将本目录全部文件上传到任意静态服务器（Nginx/CDN/对象存储网站托管均可）。\n"
-        "2. 默认首页为 index.html，管理后台入口为 admin/index.html。\n"
+        f"2. 默认首页为 index.html，管理后台入口为 {admin_path}/index.html。\n"
         "3. 当前包已固定后端地址：\n"
         f"   {api_base or '（未固定，使用前端默认自动识别逻辑）'}\n"
         "4. 如果后端启用了跨域限制，请在后端 CORS 中放行此前端域名。\n"
@@ -38,7 +59,7 @@ def _write_deploy_readme(target_dir: Path, api_base: str) -> None:
     (target_dir / "DEPLOY_FRONTEND.md").write_text(text, encoding="utf-8")
 
 
-def package_frontend(api_base: str = "", output_name: str = "frontend_split_package") -> None:
+def package_frontend(api_base: str = "", output_name: str = "frontend_split_package", admin_path: str = "admin") -> None:
     base_dir = Path(__file__).resolve().parent.parent
     frontend_dir = base_dir / "frontend"
     dist_dir = base_dir / "dist"
@@ -53,10 +74,12 @@ def package_frontend(api_base: str = "", output_name: str = "frontend_split_pack
 
     shutil.copytree(frontend_dir, output_dir, dirs_exist_ok=True)
 
+    _apply_admin_path(output_dir, admin_path)
+
     if api_base:
         _inject_api_prefix(output_dir / "config.js", api_base)
 
-    _write_deploy_readme(output_dir, api_base)
+    _write_deploy_readme(output_dir, api_base, admin_path)
 
     archive_base = dist_dir / output_name
     archive_path = shutil.make_archive(str(archive_base), "zip", root_dir=str(output_dir))
@@ -66,6 +89,7 @@ def package_frontend(api_base: str = "", output_name: str = "frontend_split_pack
     print(f"Output dir : {output_dir}")
     print(f"Output zip : {archive_path}")
     print(f"API base   : {api_base or '[auto-detect default logic]'}")
+    print(f"Admin path : {admin_path}")
     print("=" * 60)
 
 
@@ -85,10 +109,17 @@ def parse_args() -> argparse.Namespace:
         default="frontend_split_package",
         help="输出 zip 文件名（不含 .zip）",
     )
+    parser.add_argument(
+        "--admin-path",
+        dest="admin_path",
+        default="admin",
+        help="管理后台目录名，默认 admin。示例: admin-panel",
+    )
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
     normalized = _normalize_api_base(args.api_base)
-    package_frontend(api_base=normalized, output_name=args.output_name)
+    normalized_admin_path = _normalize_admin_path(args.admin_path)
+    package_frontend(api_base=normalized, output_name=args.output_name, admin_path=normalized_admin_path)
