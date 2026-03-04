@@ -363,6 +363,50 @@ verify_update_health() {
         exit 1
     fi
 
+    local admin_api_prefix_file="$APP_DIR/backend/data/admin_api_prefix.json"
+    local admin_api_prefix="/api/admin"
+    if [ -f "$admin_api_prefix_file" ]; then
+        admin_api_prefix="$($APP_DIR/venv/bin/python - "$admin_api_prefix_file" <<'PY'
+import json
+import re
+import sys
+
+path = sys.argv[1]
+value = "/api/admin"
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    if isinstance(data, dict):
+        raw = str(data.get("prefix", "/api/admin") or "").strip()
+        if raw:
+            if not raw.startswith("/"):
+                raw = "/" + raw
+            if not raw.startswith("/api/"):
+                raw = "/api" + raw
+            parts = [p for p in raw.split("/") if p]
+            candidate = "/" + "/".join(parts)
+            if candidate not in {"/", "/api"} and re.fullmatch(r"/[A-Za-z0-9/_-]+", candidate):
+                value = candidate
+except Exception:
+    pass
+print(value)
+PY
+)"
+    fi
+
+    local admin_probe_url="http://127.0.0.1:${internal_port}${admin_api_prefix}/panel_path"
+    local admin_probe_status
+    admin_probe_status=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 5 "$admin_probe_url" || echo "000")
+    if [ "$admin_probe_status" = "404" ] || [ "$admin_probe_status" = "000" ]; then
+        log_error "[错误] 管理员API健康检查失败: $admin_probe_url (HTTP $admin_probe_status)"
+        log_error "请确认 backend/data/admin_api_prefix.json 与当前后端代码一致"
+        log_error "请执行: sudo journalctl -u ${SERVICE_NAME} -n 120 --no-pager"
+        log_error "若需回滚，可使用备份目录: $BACKUP_DIR"
+        exit 1
+    fi
+
+    log_info "管理员API探测通过: ${admin_api_prefix}/panel_path (HTTP $admin_probe_status)"
+
     log_info "更新后健康检查通过"
 }
 

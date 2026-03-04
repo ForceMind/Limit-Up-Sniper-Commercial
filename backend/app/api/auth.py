@@ -324,7 +324,7 @@ async def login(data: schemas.UserCreate, request: Request, db: Session = Depend
 
 
 @router.post("/register")
-async def register(data: dict = Body(...), request: Request, db: Session = Depends(get_db)):
+async def register(request: Request, data: dict = Body(...), db: Session = Depends(get_db)):
     username = _read_auth_field(data, "username", "username_b64")
     password = _read_auth_field(data, "password", "password_b64")
     if not username or not password:
