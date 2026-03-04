@@ -359,15 +359,94 @@ EOF
     chmod -R 777 "$DATA_DIR" || true
     chmod 666 "$APP_DIR/backend/app.log" || true
 
-    # 安装时强制重置后台路径为默认 /admin
     ADMIN_PANEL_PATH_FILE="$DATA_DIR/admin_panel_path.json"
-    cat > "$ADMIN_PANEL_PATH_FILE" <<EOF
+    ADMIN_API_PREFIX_FILE="$DATA_DIR/admin_api_prefix.json"
+    SOURCE_ADMIN_PANEL_PATH_FILE="$SOURCE_ROOT/backend/data/admin_panel_path.json"
+    SOURCE_ADMIN_API_PREFIX_FILE="$SOURCE_ROOT/backend/data/admin_api_prefix.json"
+
+    if [ ! -f "$ADMIN_PANEL_PATH_FILE" ] || [ ! -f "$ADMIN_API_PREFIX_FILE" ]; then
+        eval "$("$PYTHON_CMD" - "$SOURCE_ADMIN_PANEL_PATH_FILE" "$SOURCE_ADMIN_API_PREFIX_FILE" "${INSTALL_ADMIN_PANEL_PATH:-}" "${INSTALL_ADMIN_API_PREFIX:-}" <<'PY'
+import json
+import re
+import shlex
+import sys
+
+source_panel_file = sys.argv[1]
+source_api_file = sys.argv[2]
+env_panel = (sys.argv[3] or '').strip()
+env_api = (sys.argv[4] or '').strip()
+
+def load_value(path, key):
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            return str(data.get(key, '') or '').strip()
+    except Exception:
+        pass
+    return ''
+
+def norm_panel(value):
+    v = (value or '').strip()
+    if not v:
+        return '/admin'
+    if not v.startswith('/'):
+        v = '/' + v
+    v = '/' + '/'.join([p for p in v.split('/') if p])
+    if v == '/':
+        return '/admin'
+    if v.startswith('/api'):
+        return '/admin'
+    if not re.fullmatch(r'/[A-Za-z0-9/_-]+', v):
+        return '/admin'
+    return v
+
+def norm_api(value):
+    v = (value or '').strip()
+    if not v:
+        return '/api/admin'
+    if not v.startswith('/'):
+        v = '/' + v
+    if not v.startswith('/api/'):
+        v = '/api' + v
+    v = '/' + '/'.join([p for p in v.split('/') if p])
+    if v in {'/', '/api'}:
+        return '/api/admin'
+    if not re.fullmatch(r'/[A-Za-z0-9/_-]+', v):
+        return '/api/admin'
+    return v
+
+source_panel = load_value(source_panel_file, 'path')
+source_api = load_value(source_api_file, 'prefix')
+
+final_panel = norm_panel(env_panel or source_panel)
+final_api = norm_api(env_api or source_api)
+
+print('FINAL_ADMIN_PANEL_PATH=' + shlex.quote(final_panel))
+print('FINAL_ADMIN_API_PREFIX=' + shlex.quote(final_api))
+PY
+)"
+
+        if [ ! -f "$ADMIN_PANEL_PATH_FILE" ]; then
+            cat > "$ADMIN_PANEL_PATH_FILE" <<EOF
 {
-  "path": "/admin",
+  "path": "$FINAL_ADMIN_PANEL_PATH",
   "updated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 }
 EOF
-    log_info "后台路径已重置为默认: /admin"
+            log_info "已初始化后台路径: $FINAL_ADMIN_PANEL_PATH"
+        fi
+
+        if [ ! -f "$ADMIN_API_PREFIX_FILE" ]; then
+            cat > "$ADMIN_API_PREFIX_FILE" <<EOF
+{
+  "prefix": "$FINAL_ADMIN_API_PREFIX",
+  "updated_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+}
+EOF
+            log_info "已初始化管理员API前缀: $FINAL_ADMIN_API_PREFIX"
+        fi
+    fi
 
     USER_ACCOUNTS_FILE="$DATA_DIR/user_accounts.json"
     TRIAL_FP_FILE="$DATA_DIR/trial_fingerprints.json"
@@ -763,8 +842,27 @@ show_result() {
     if [ "$EXTERNAL_PORT" != "80" ]; then
         ACCESS_BASE_URL="http://${USER_IP}:${EXTERNAL_PORT}"
     fi
+    ADMIN_PANEL_PATH="$("$PYTHON_CMD" - "$APP_DIR/backend/data/admin_panel_path.json" <<'PY'
+import json
+import sys
+path = '/admin'
+try:
+    with open(sys.argv[1], 'r', encoding='utf-8') as f:
+        data = json.load(f)
+        if isinstance(data, dict):
+            p = str(data.get('path', '') or '').strip()
+            if p:
+                path = p
+except Exception:
+    pass
+if not path.startswith('/'):
+    path = '/' + path
+print(path)
+PY
+)"
+
     echo "前台地址: ${ACCESS_BASE_URL}/"
-    echo "后台地址: ${ACCESS_BASE_URL}/admin/index.html"
+    echo "后台地址: ${ACCESS_BASE_URL}${ADMIN_PANEL_PATH}/index.html"
     echo "管理员登录: $ADMIN_HINT"
     echo "部署目录: $APP_DIR"
     echo "服务名称: $SERVICE_NAME"

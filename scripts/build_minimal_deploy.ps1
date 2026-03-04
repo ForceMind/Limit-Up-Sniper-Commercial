@@ -1,6 +1,8 @@
 ﻿param(
     [string]$OutputDir = "Minimal-Server-Deploy",
     [string]$ZipDir = "dist",
+    [string]$AdminPanelPath = "",
+    [string]$AdminApiPrefix = "",
     [switch]$NoZip,
     [switch]$KeepRuntimeData
 )
@@ -147,10 +149,64 @@ function Copy-StaticSeatFiles {
     }
 }
 
+function Normalize-AdminPanelPath {
+    param([string]$Raw)
+
+    $value = "$Raw".Trim()
+    if (-not $value) { return "/admin" }
+    if (-not $value.StartsWith('/')) { $value = '/' + $value }
+    $segments = $value.Split('/') | Where-Object { $_ -ne '' }
+    $normalized = '/' + ($segments -join '/')
+    if ($normalized -eq '/') { throw "后台路径不能为根路径 /" }
+    if ($normalized.StartsWith('/api')) { throw "后台路径不能以 /api 开头" }
+    if ($normalized -notmatch '^/[A-Za-z0-9/_-]+$') { throw "后台路径只允许字母、数字、/、_、-" }
+    return $normalized
+}
+
+function Normalize-AdminApiPrefix {
+    param([string]$Raw)
+
+    $value = "$Raw".Trim()
+    if (-not $value) { return "/api/admin" }
+    if (-not $value.StartsWith('/')) { $value = '/' + $value }
+    if (-not $value.StartsWith('/api/')) { $value = '/api' + $value }
+    $segments = $value.Split('/') | Where-Object { $_ -ne '' }
+    $normalized = '/' + ($segments -join '/')
+    if ($normalized -eq '/api' -or $normalized -eq '/') { throw "管理员API前缀不能为 / 或 /api" }
+    if ($normalized -notmatch '^/[A-Za-z0-9/_-]+$') { throw "管理员API前缀只允许字母、数字、/、_、-" }
+    return $normalized
+}
+
+function Write-AdminRouteConfig {
+    param(
+        [string]$DataDir,
+        [string]$PanelPath,
+        [string]$ApiPrefix
+    )
+
+    $nowIso = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ss.fffZ")
+
+    $panelPayload = [ordered]@{
+        path = $PanelPath
+        updated_at = $nowIso
+    }
+    $apiPayload = [ordered]@{
+        prefix = $ApiPrefix
+        updated_at = $nowIso
+    }
+
+    $panelPathFile = Join-Path $DataDir "admin_panel_path.json"
+    $apiPrefixFile = Join-Path $DataDir "admin_api_prefix.json"
+    $panelPayload | ConvertTo-Json -Depth 4 | Set-Content -Path $panelPathFile -Encoding UTF8
+    $apiPayload | ConvertTo-Json -Depth 4 | Set-Content -Path $apiPrefixFile -Encoding UTF8
+}
+
 $root = Split-Path -Parent $PSScriptRoot
 $dest = Join-Path $root $OutputDir
 $zipRoot = Join-Path $root $ZipDir
 $versionInfo = Get-VersionInfo -ProjectRoot $root
+$normalizedAdminPanelPath = Normalize-AdminPanelPath -Raw $AdminPanelPath
+$normalizedAdminApiPrefix = Normalize-AdminApiPrefix -Raw $AdminApiPrefix
 
 if ($versionInfo.Backend -and $versionInfo.Frontend -and ($versionInfo.Backend -ne $versionInfo.Frontend)) {
     Write-Warning "前后端版本号不一致: backend=$($versionInfo.Backend), frontend=$($versionInfo.Frontend)"
@@ -191,6 +247,7 @@ if ($KeepRuntimeData) {
     Write-DataTemplates -DataDir $dataDest
 }
 Copy-StaticSeatFiles -ProjectRoot $root -DataDir $dataDest
+Write-AdminRouteConfig -DataDir $dataDest -PanelPath $normalizedAdminPanelPath -ApiPrefix $normalizedAdminApiPrefix
 
 Write-Host "[3/6] 复制前端文件..." -ForegroundColor Cyan
 $frontendDest = Join-Path $dest "frontend"
@@ -264,5 +321,7 @@ Write-Host "目录: $dest"
 if ($zipPath) {
     Write-Host "压缩包: $zipPath"
 }
+Write-Host "后台路径: $normalizedAdminPanelPath"
+Write-Host "管理员API前缀: $normalizedAdminApiPrefix"
 Write-Host "版本: backend=$($versionInfo.Backend) / frontend=$($versionInfo.Frontend)"
 Write-Host "文件数: $($manifest.file_count), 大小: $($manifest.total_size_bytes) bytes"

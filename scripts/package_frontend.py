@@ -77,7 +77,9 @@ def _write_deploy_readme(target_dir: Path, api_base: str, admin_path: str, admin
         f"   {api_base or '（未固定，使用前端默认自动识别逻辑）'}\n"
         "4. 当前包后台 API 前缀：\n"
         f"   {admin_api_prefix or '（未固定，默认自动推断/读取后台配置）'}\n"
-        "5. 如果后端启用了跨域限制，请在后端 CORS 中放行此前端域名。\n"
+        "5. 注意：本脚本只修改前端静态文件，不会修改后端运行时的 admin 路由配置。\n"
+        "   若后端通过 backend/data/admin_panel_path.json 与 admin_api_prefix.json 自定义了路由，请保持与前端一致。\n"
+        "6. 如果后端启用了跨域限制，请在后端 CORS 中放行此前端域名。\n"
     )
     (target_dir / "DEPLOY_FRONTEND.md").write_text(text, encoding="utf-8")
 
