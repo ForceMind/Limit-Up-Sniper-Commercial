@@ -1940,7 +1940,10 @@
 
         const __rawFetch = window.fetch.bind(window);
         const __savedAdminPrefixHint = localStorage.getItem('admin_api_prefix_hint') || '';
-        window.__ADMIN_API_PREFIX__ = normalizeAdminApiPrefix(__savedAdminPrefixHint || ('/api' + normalizePanelPath(window.location.pathname || '/admin')));
+        const __injectedAdminPrefix = String(window.ADMIN_API_PREFIX || '').trim();
+        window.__ADMIN_API_PREFIX__ = normalizeAdminApiPrefix(
+            __savedAdminPrefixHint || __injectedAdminPrefix || ('/api' + normalizePanelPath(window.location.pathname || '/admin'))
+        );
         window.fetch = (input, init) => {
             const currentPrefix = normalizeAdminApiPrefix(window.__ADMIN_API_PREFIX__ || '/api/admin');
             const rewriteAdminPath = (url) => String(url || '').replace(/\/api\/admin(?=\/|$)/g, currentPrefix);

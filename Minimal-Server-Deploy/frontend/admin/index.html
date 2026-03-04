@@ -537,7 +537,7 @@
                         <section class="mb-8 border-b pb-8">
                             <h3 class="text-xl font-semibold mb-4 text-gray-700">后台地址</h3>
                             <div class="bg-gray-50 border border-gray-200 rounded p-4 max-w-2xl">
-                                <p class="text-sm text-gray-500 mb-3">自定义后台访问地址（默认：`/admin`）。示例：`/ops-2026`</p>
+                                <p class="text-sm text-gray-500 mb-3">自定义后台访问地址与管理员API前缀，保存后即时生效，无需重新打包前端。</p>
                                 <div class="flex gap-3 items-end">
                                     <div class="flex-1">
                                         <label class="block text-sm font-bold text-gray-700 mb-1">后台路径</label>
@@ -549,6 +549,18 @@
                                     </button>
                                 </div>
                                 <div class="text-xs text-gray-500 mt-2">当前生效：<span class="font-mono">{{ adminPanelPath || '/admin' }}</span></div>
+
+                                <div class="flex gap-3 items-end mt-4">
+                                    <div class="flex-1">
+                                        <label class="block text-sm font-bold text-gray-700 mb-1">管理员API前缀</label>
+                                        <input type="text" v-model="adminApiPrefix" class="w-full border rounded p-2 text-sm font-mono" placeholder="/api/admin">
+                                    </div>
+                                    <button @click="saveAdminApiPrefix" class="text-white px-4 py-2 rounded text-sm whitespace-nowrap"
+                                        :class="isConfigDirty('admin_path') ? 'bg-amber-600 hover:bg-amber-700' : 'bg-indigo-600 hover:bg-indigo-700'">
+                                        {{ isConfigDirty('admin_path') ? '保存API前缀（未保存）' : '保存API前缀' }}
+                                    </button>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-2">当前生效：<span class="font-mono">{{ adminApiPrefix || '/api/admin' }}</span></div>
                             </div>
                         </section>
 
@@ -1864,6 +1876,42 @@
     <script>
         const { createApp } = Vue
 
+        function normalizePanelPath(path) {
+            let p = String(path || '').trim();
+            if (!p) p = '/admin';
+            if (!p.startsWith('/')) p = '/' + p;
+            p = '/' + p.split('/').filter(Boolean).join('/');
+            return p || '/admin';
+        }
+
+        function normalizeAdminApiPrefix(prefix) {
+            let p = String(prefix || '').trim();
+            if (!p) p = '/api/admin';
+            if (!p.startsWith('/')) p = '/' + p;
+            if (!p.startsWith('/api/')) p = '/api' + p;
+            p = '/' + p.split('/').filter(Boolean).join('/');
+            return p === '/api' ? '/api/admin' : p;
+        }
+
+        const __rawFetch = window.fetch.bind(window);
+        const __savedAdminPrefixHint = localStorage.getItem('admin_api_prefix_hint') || '';
+        const __injectedAdminPrefix = String(window.ADMIN_API_PREFIX || '').trim();
+        window.__ADMIN_API_PREFIX__ = normalizeAdminApiPrefix(
+            __savedAdminPrefixHint || __injectedAdminPrefix || ('/api' + normalizePanelPath(window.location.pathname || '/admin'))
+        );
+        window.fetch = (input, init) => {
+            const currentPrefix = normalizeAdminApiPrefix(window.__ADMIN_API_PREFIX__ || '/api/admin');
+            const rewriteAdminPath = (url) => String(url || '').replace(/\/api\/admin(?=\/|$)/g, currentPrefix);
+
+            if (typeof input === 'string') {
+                return __rawFetch(rewriteAdminPath(input), init);
+            }
+            if (input instanceof Request) {
+                return __rawFetch(new Request(rewriteAdminPath(input.url), input), init);
+            }
+            return __rawFetch(input, init);
+        };
+
         createApp({
             data() {
                 return {
@@ -1998,6 +2046,7 @@
                     dataFileMeta: {},
                     // Admin Account
                     adminPanelPath: '/admin',
+                    adminApiPrefix: '/api/admin',
                     newAdminUsername: '',
                     newAdminPassword: '',
                     passwordMsg: '',
@@ -2020,6 +2069,7 @@
                 }
             },
             mounted() {
+                this.initAdminApiPrefixFromHint();
                 const today = new Date();
                 const start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
                 this.lhbRange.start_date = start.toISOString().slice(0, 10);
@@ -2037,6 +2087,7 @@
                     this.fetchTodayOverview();
                     this.startOverviewAutoRefresh();
                     this.fetchAdminPanelPath();
+                    this.fetchAdminApiPrefix();
                     this.fetchDataFiles();
                     // Pre-fetch
                     this.fetchUsers();
@@ -2063,6 +2114,7 @@
                     if (val === 'config') {
                         this.fetchConfig();
                         this.fetchAdminPanelPath();
+                        this.fetchAdminApiPrefix();
                         this.fetchDataFiles();
                     }
                     if (val === 'users') {
@@ -2174,8 +2226,20 @@
                             referral_config: this.config.referral_config || {}
                         };
                     }
-                    if (section === 'admin_path') return this.adminPanelPath || '/admin';
+                    if (section === 'admin_path') {
+                        return {
+                            panel_path: this.adminPanelPath || '/admin',
+                            api_prefix: this.adminApiPrefix || '/api/admin'
+                        };
+                    }
                     return null;
+                },
+                initAdminApiPrefixFromHint() {
+                    const hint = localStorage.getItem('admin_api_prefix_hint') || '';
+                    const fallback = '/api' + normalizePanelPath(window.location.pathname || '/admin');
+                    const finalPrefix = normalizeAdminApiPrefix(hint || fallback);
+                    this.adminApiPrefix = finalPrefix;
+                    window.__ADMIN_API_PREFIX__ = finalPrefix;
                 },
                 snapshotConfigSection(section) {
                     this.configSnapshots[section] = this.stableStringify(this.getConfigSectionValue(section));
@@ -2693,6 +2757,7 @@
                         this.startOverviewAutoRefresh();
                         this.fetchConfig();
                         this.fetchAdminPanelPath();
+                        this.fetchAdminApiPrefix();
                         this.fetchDataFiles();
                         this.fetchUsers();
                         this.fetchOrders();
@@ -2818,6 +2883,22 @@
                         console.error('Fetch admin panel path failed', e);
                     }
                 },
+                async fetchAdminApiPrefix() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/api_prefix', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (res.ok) {
+                            const p = normalizeAdminApiPrefix(data.prefix || '/api/admin');
+                            this.adminApiPrefix = p;
+                            window.__ADMIN_API_PREFIX__ = p;
+                            localStorage.setItem('admin_api_prefix_hint', p);
+                            this.snapshotConfigSection('admin_path');
+                        }
+                    } catch (e) {
+                        console.error('Fetch admin api prefix failed', e);
+                    }
+                },
                 async saveAdminPanelPath() {
                     const path = (this.adminPanelPath || '').trim();
                     if (!path) {
@@ -2838,6 +2919,31 @@
                         this.showMsg(`后台地址已更新为 ${this.adminPanelPath}`, 'success');
                     } catch (e) {
                         this.showMsg(e.message || '保存后台路径失败', 'error');
+                    }
+                },
+                async saveAdminApiPrefix() {
+                    const prefix = (this.adminApiPrefix || '').trim();
+                    if (!prefix) {
+                        this.showMsg('请输入管理员API前缀', 'error');
+                        return;
+                    }
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/api_prefix', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({ prefix })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '保存管理员API前缀失败');
+                        const finalPrefix = normalizeAdminApiPrefix(data.prefix || prefix);
+                        this.adminApiPrefix = finalPrefix;
+                        window.__ADMIN_API_PREFIX__ = finalPrefix;
+                        localStorage.setItem('admin_api_prefix_hint', finalPrefix);
+                        this.snapshotConfigSection('admin_path');
+                        this.showMsg(`管理员API前缀已更新为 ${finalPrefix}`, 'success');
+                    } catch (e) {
+                        this.showMsg(e.message || '保存管理员API前缀失败', 'error');
                     }
                 },
                 async updateAdminAccount() {

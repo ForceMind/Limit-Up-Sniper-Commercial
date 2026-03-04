@@ -1,16 +1,18 @@
 @echo off
 setlocal enabledelayedexpansion
+chcp 65001 >nul
 cd /d "%~dp0"
 
 echo ============================================================
-echo Frontend Split Packager (Windows One-Click)
+echo 前端分离打包工具（Windows 一键）
 echo ============================================================
 echo.
-echo Notes:
-echo - Press Enter: use default auto-detect API logic
-echo - Input URL  : force backend API base for split deployment
-echo   Example: https://api.your-domain.com
-echo - Admin path : folder name for admin site (default: admin)
+echo 说明：
+echo - 直接回车：使用默认自动识别 API 逻辑
+echo - 输入后端地址：固定分离部署时的后端 API 地址
+echo   示例：https://api.your-domain.com
+echo - 后台目录：管理后台目录名（默认：admin）
+echo - 管理员API前缀：默认自动推断（示例：/api/admin-panel）
 echo.
 
 set "PY_CMD="
@@ -22,36 +24,36 @@ if exist ".venv\Scripts\python.exe" (
 
 "%PY_CMD%" --version >nul 2>&1
 if errorlevel 1 (
-    echo [ERROR] Python not found. Install Python or create .venv first.
+    echo [错误] 未找到 Python，请先安装 Python 或创建 .venv。
     pause
     exit /b 1
 )
 
-set /p API_BASE=Enter backend API base (leave empty for default): 
-set /p ADMIN_PATH=Enter admin folder name (default: admin): 
+set /p API_BASE=请输入后端 API 地址（留空使用默认）： 
+set /p ADMIN_PATH=请输入后台目录名（默认：admin）： 
+set /p ADMIN_API_PREFIX=请输入管理员 API 前缀（留空自动推断）： 
 if "%ADMIN_PATH%"=="" set "ADMIN_PATH=admin"
 
-if "%API_BASE%"=="" (
-    echo.
-    echo [RUN] Build package with default API logic...
-    "%PY_CMD%" scripts\package_frontend.py --admin-path "%ADMIN_PATH%"
-) else (
-    echo.
-    echo [RUN] Build package with fixed API base: %API_BASE%
-    "%PY_CMD%" scripts\package_frontend.py --api-base "%API_BASE%" --admin-path "%ADMIN_PATH%"
-)
+set "CMD_ARGS=--admin-path "%ADMIN_PATH%""
+if not "%API_BASE%"=="" set "CMD_ARGS=!CMD_ARGS! --api-base "%API_BASE%""
+if not "%ADMIN_API_PREFIX%"=="" set "CMD_ARGS=!CMD_ARGS! --admin-api-prefix "%ADMIN_API_PREFIX%""
+
+echo.
+echo [执行] 开始打包...
+echo [参数] %CMD_ARGS%
+"%PY_CMD%" scripts\package_frontend.py %CMD_ARGS%
 
 if errorlevel 1 (
     echo.
-    echo [FAILED] Packaging failed. Check API base or script output.
+    echo [失败] 打包失败，请检查输入参数与脚本输出日志。
     pause
     exit /b 1
 )
 
 echo.
-echo [OK] Packaging completed.
-echo - Directory: dist\frontend_split
-echo - Zip file : dist\frontend_split_package.zip
-echo - Admin URL: /%ADMIN_PATH%/index.html
+echo [完成] 打包成功。
+echo - 目录：dist\frontend_split
+echo - 压缩包：dist\frontend_split_package.zip
+echo - 后台入口：/%ADMIN_PATH%/index.html
 echo.
 pause
