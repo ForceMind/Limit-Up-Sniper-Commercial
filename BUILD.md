@@ -20,6 +20,32 @@ powershell -ExecutionPolicy Bypass -File .\scripts\build_minimal_deploy.ps1 -NoZ
 powershell -ExecutionPolicy Bypass -File .\scripts\build_minimal_deploy.ps1 -KeepRuntimeData
 ```
 
+## 0.1 打包前后端分离部署前端
+
+可以把前端部署到任意静态站点，把后端单独部署在 API 服务器。
+
+Windows 一键方式（双击）：
+
+```bat
+package_frontend.bat
+```
+
+```powershell
+# 使用默认逻辑（同域名时走相对路径，本地 file:// 时走 localhost）
+python .\scripts\package_frontend.py
+
+# 固定后端地址（推荐用于前后端分离部署）
+python .\scripts\package_frontend.py --api-base "https://api.your-domain.com"
+```
+
+输出：
+- `dist/frontend_split/`：可直接上传的前端目录
+- `dist/frontend_split_package.zip`：前端部署压缩包
+
+说明：
+- 管理后台入口：`/admin/index.html`
+- 脚本会在包内写入 `DEPLOY_FRONTEND.md`
+
 ## 1. Windows 独立版 (.exe)
 
 要构建用户无需安装 Python 即可运行的独立 Windows 可执行文件：
