@@ -670,7 +670,7 @@
                     <div v-if="activeLogTab === 'system'" class="flex-1 space-y-4">
                         <div class="bg-gray-900 text-green-400 p-4 rounded font-mono text-xs overflow-auto max-h-[50vh]">
                             <div v-if="sysLogs.length === 0" class="text-gray-500">暂无日志或无法读取日志文件</div>
-                            <div v-for="(line, i) in sysLogs" :key="i" class="whitespace-pre-wrap border-b border-gray-800 pb-1 mb-1">{{ line }}</div>
+                            <div v-for="(line, i) in sysLogs" :key="i" :class="getSystemLogLineClass(line)">{{ line }}</div>
                         </div>
                     </div>
 
@@ -2100,6 +2100,16 @@
                 }
             },
             methods: {
+                getSystemLogLineClass(line) {
+                    const text = String(line || '');
+                    if (text.includes('[系统守护]') || text.includes('[WARNING]')) {
+                        return 'whitespace-pre-wrap border-b border-amber-700/60 bg-amber-900/20 text-amber-300 pb-1 mb-1 px-1 rounded';
+                    }
+                    if (text.includes('[CRITICAL]') || text.includes('[ERROR]') || text.includes('!!!')) {
+                        return 'whitespace-pre-wrap border-b border-red-700/60 bg-red-900/20 text-red-300 pb-1 mb-1 px-1 rounded';
+                    }
+                    return 'whitespace-pre-wrap border-b border-gray-800 pb-1 mb-1';
+                },
                 showMsg(msg, type = 'info') {
                     if (this.msgTimer) {
                         clearTimeout(this.msgTimer);

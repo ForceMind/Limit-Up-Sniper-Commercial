@@ -1652,7 +1652,10 @@ async def startup_event():
     if not _acquire_background_singleton():
         msg = "启动：后台任务由其他 worker 持有，当前实例仅提供 API"
         print(msg)
-        add_runtime_log(msg)
+        add_runtime_log(
+            "[系统守护] 后台任务实例未获取到执行锁。原因: 已有其他worker在运行定时任务。处理建议: 多worker部署属正常；若为单实例部署，请结束残留进程或调整 BACKGROUND_SINGLETON_PORT。",
+            level="WARNING",
+        )
         return
 
     # Update base info only during market trading session.
@@ -2059,6 +2062,38 @@ def _mode_display_name(mode: str) -> str:
     return value or "未知模式"
 
 
+def _is_user_visible_analysis_log(line: str, mode_cn: str = "") -> bool:
+    text = _normalize_runtime_log_for_replay(line)
+    if not text:
+        return False
+
+    blocked = (
+        "后台任务由其他 worker 持有",
+        "ENABLE_BACKGROUND_TASKS",
+        "启动：",
+        "系统守护",
+    )
+    if any(key in text for key in blocked):
+        return False
+
+    allowed_common = (
+        "调用 AI 分析",
+        "挖掘目标",
+        "开始执行",
+        "任务完成",
+        "列表已更新",
+        "结果已同步",
+        "任务已受理",
+    )
+    if any(key in text for key in allowed_common):
+        return True
+
+    mode_text = str(mode_cn or "").strip()
+    if mode_text and mode_text in text and "分析" in text:
+        return True
+    return False
+
+
 def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
     queue_obj = globals().get("log_queue")
     if queue_obj is None:
@@ -2069,22 +2104,9 @@ def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
     except Exception:
         return 0
 
-    mode_text = str(mode_cn or "").strip()
-    common_keywords = (
-        "盘中突击",
-        "盘后复盘",
-        "开始执行",
-        "任务完成",
-        "列表已更新",
-        "分析",
-    )
-    selected = [
-        line
-        for line in logs
-        if (mode_text and mode_text in line) or any(keyword in line for keyword in common_keywords)
-    ]
+    selected = [line for line in logs if _is_user_visible_analysis_log(line, mode_cn=mode_cn)]
     if not selected:
-        selected = logs[-30:]
+        return 0
 
     replay_items = [_normalize_runtime_log_for_replay(line) for line in selected[-80:]]
     for line in replay_items:
@@ -2106,22 +2128,14 @@ def _recent_analysis_log_lines(limit: int = 120) -> list[str]:
     except Exception:
         return []
 
-    keywords = (
-        "盘中突击",
-        "盘后复盘",
-        "调用 AI 分析",
-        "挖掘目标",
-        "分析",
-        "任务完成",
-        "列表已更新",
-    )
-    selected = [line for line in logs if any(k in line for k in keywords)]
+    selected = [line for line in logs if _is_user_visible_analysis_log(line)]
     if not selected:
-        selected = logs[-40:]
+        return []
     return [_normalize_runtime_log_for_replay(line) for line in selected[-100:]]
 
 # Global Cache Timer
-ANALYSIS_REUSE_SECONDS = 15 * 60
+ANALYSIS_REUSE_SECONDS_INTRADAY = 15 * 60
+ANALYSIS_REUSE_SECONDS_AFTER_HOURS = 60 * 60
 LAST_ANALYSIS_TIME = {
     "mid_day": datetime.min,
     "after_hours": datetime.min
@@ -2149,13 +2163,21 @@ async def run_analysis(
     else:
         await check_review_permission(user, skip_quota=True)
     
-    # 2. 缓存检查（15分钟）+ 并发互斥，避免重复扣费和重复触发
+    # 2. 复用检查（时段互斥 + 冷却窗口）+ 并发互斥
     cache_key = "mid_day" if limit_type == 'raid' else "after_hours"
     lock = ANALYSIS_TRIGGER_LOCKS[cache_key]
+    in_trading_session = bool(is_market_open_day() and is_trading_time())
+    force_reuse = (limit_type == 'raid' and not in_trading_session) or (limit_type != 'raid' and in_trading_session)
+    cooldown_seconds = ANALYSIS_REUSE_SECONDS_INTRADAY if limit_type == 'raid' else ANALYSIS_REUSE_SECONDS_AFTER_HOURS
     async with lock:
         last_time = LAST_ANALYSIS_TIME.get(cache_key, datetime.min)
         seconds_since_last = int((datetime.now() - last_time).total_seconds())
-        if seconds_since_last < ANALYSIS_REUSE_SECONDS:
+        if force_reuse or seconds_since_last < cooldown_seconds:
+            try:
+                refresh_watchlist()
+                reload_watchlist_globals()
+            except Exception:
+                pass
             replayed = _replay_recent_analysis_logs(mode_cn)
             thread_logger(f"[分析] {mode_cn}结果已同步，回放日志 {replayed} 条。")
             return {
