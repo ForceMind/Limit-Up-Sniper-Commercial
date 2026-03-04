@@ -19,7 +19,7 @@ INTERNAL_PORT="$DEFAULT_INTERNAL_PORT"
 DEFAULT_EXTERNAL_PORT="80"
 EXTERNAL_PORT="$DEFAULT_EXTERNAL_PORT"
 USER_IP=""
-WORKER_COUNT="2"
+WORKER_COUNT="1"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" &> /dev/null && pwd )"
 SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
 PYTHON_CMD=""
@@ -71,21 +71,9 @@ select_python_cmd() {
 }
 
 calc_worker_count() {
-    local cpu_count="2"
-    if command -v nproc >/dev/null 2>&1; then
-        cpu_count="$(nproc 2>/dev/null || echo 2)"
-    fi
-    if ! [[ "$cpu_count" =~ ^[0-9]+$ ]] || [ "$cpu_count" -lt 1 ]; then
-        cpu_count="2"
-    fi
-
-    if [ "$cpu_count" -le 2 ]; then
-        WORKER_COUNT="2"
-    elif [ "$cpu_count" -le 4 ]; then
-        WORKER_COUNT="3"
-    else
-        WORKER_COUNT="4"
-    fi
+    # 当前后端核心行情缓存是进程内内存结构；多 worker 会导致部分 worker 缓存未刷新。
+    # 热修策略：部署脚本固定单 worker，保证 /api/stocks 与后台任务缓存一致。
+    WORKER_COUNT="1"
 }
 
 is_valid_port() {

@@ -670,6 +670,7 @@ ANALYSIS_CACHE = {} # Cache for AI analysis results: {code: {content: str, times
 cache_lock = threading.Lock()
 stock_quotes_cache = []
 stock_quotes_cache_ts = 0.0
+stock_quotes_refresh_guard = threading.Lock()
 indices_cache = []
 indices_cache_ts = 0.0
 market_sentiment_cache = {}
@@ -2421,6 +2422,29 @@ def get_stock_quotes():
     """Return cached quotes only (no network)."""
     return _get_stock_quotes_cache()
 
+
+def ensure_stock_quotes_cache(max_age_sec: int = max(30, REALTIME_CACHE_INTERVAL_SEC * 2)):
+    """
+    Multi-worker safety: if current worker cache is empty/stale, refresh on demand.
+    """
+    now_ts = time.time()
+    with cache_lock:
+        has_rows = bool(stock_quotes_cache)
+        cache_age = (now_ts - stock_quotes_cache_ts) if stock_quotes_cache_ts > 0 else float("inf")
+    if has_rows and cache_age <= max_age_sec:
+        return
+
+    with stock_quotes_refresh_guard:
+        now_ts = time.time()
+        with cache_lock:
+            has_rows = bool(stock_quotes_cache)
+            cache_age = (now_ts - stock_quotes_cache_ts) if stock_quotes_cache_ts > 0 else float("inf")
+        if has_rows and cache_age <= max_age_sec:
+            return
+        if not WATCH_LIST:
+            reload_watchlist_globals()
+        refresh_stock_quotes_cache()
+
 @app.post("/api/watchlist/remove")
 async def remove_from_watchlist(request: Request, user: models.User = Depends(check_data_permission)):
     """从自选列表中移除股票"""
@@ -2454,6 +2478,7 @@ async def remove_from_watchlist(request: Request, user: models.User = Depends(ch
 
 @app.get("/api/stocks")
 async def api_stocks(user: models.User = Depends(check_data_permission)):
+    await asyncio.to_thread(ensure_stock_quotes_cache)
     return get_stock_quotes()
 
 @app.get("/api/indices")

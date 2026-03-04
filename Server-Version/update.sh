@@ -9,7 +9,7 @@ APP_NAME="limit-up-sniper-commercial"
 APP_DIR="/opt/${APP_NAME}"
 SERVICE_NAME="${APP_NAME}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
-WORKER_COUNT="2"
+WORKER_COUNT="1"
 SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 DEFAULT_SOURCE_ROOT="$(dirname "$SCRIPT_DIR")"
 SOURCE_ROOT_INPUT="${1:-}"
@@ -97,21 +97,9 @@ validate_existing_install() {
 }
 
 calc_worker_count() {
-    local cpu_count="2"
-    if command -v nproc >/dev/null 2>&1; then
-        cpu_count="$(nproc 2>/dev/null || echo 2)"
-    fi
-    if ! [[ "$cpu_count" =~ ^[0-9]+$ ]] || [ "$cpu_count" -lt 1 ]; then
-        cpu_count="2"
-    fi
-
-    if [ "$cpu_count" -le 2 ]; then
-        WORKER_COUNT="2"
-    elif [ "$cpu_count" -le 4 ]; then
-        WORKER_COUNT="3"
-    else
-        WORKER_COUNT="4"
-    fi
+    # 当前后端核心行情缓存是进程内内存结构；多 worker 会导致部分 worker 缓存未刷新。
+    # 热修策略：更新脚本固定单 worker，保证 /api/stocks 与后台任务缓存一致。
+    WORKER_COUNT="1"
 }
 
 require_root() {
