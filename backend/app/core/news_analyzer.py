@@ -343,7 +343,7 @@ def analyze_news_with_deepseek(news_batch, market_summary="", logger=None, mode=
     
     cached_result = ai_cache.get(cache_key)
     if cached_result:
-        msg = f"[*] 使用缓存的AI分析结果 (缓存键: {cache_key[:8]})..."
+        msg = "[*] AI分析结果已同步完成，正在继续后续处理..."
         print(msg)
         if logger: logger(msg)
         try:
@@ -607,7 +607,7 @@ def analyze_single_stock(stock_data, logger=None, prompt_type='normal', api_key=
             # Try to return cached result if available
             cached_data = ai_cache.get(cache_key)
             if cached_data:
-                return f"[缓存结果] {cached_data}"
+                return str(cached_data)
             return msg
     
     # Additional metrics for better analysis

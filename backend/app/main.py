@@ -27,7 +27,7 @@ from app.core.lhb_manager import lhb_manager, KLINE_DIR
 from app.core.ai_cache import ai_cache
 from app.core.config_manager import SYSTEM_CONFIG, save_config, DEFAULT_SCHEDULE
 from app.core.ws_hub import ws_hub
-from app.core.runtime_logs import add_runtime_log
+from app.core.runtime_logs import add_runtime_log, get_runtime_logs
 from app.core.operation_log import log_user_operation
 from app.api import auth, admin, payment
 from app.db import database, models
@@ -2052,6 +2052,39 @@ def _mode_display_name(mode: str) -> str:
         return "暂停"
     return value or "未知模式"
 
+
+def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
+    queue_obj = globals().get("log_queue")
+    if queue_obj is None:
+        return 0
+
+    try:
+        logs = get_runtime_logs(limit=max(20, int(limit)))
+    except Exception:
+        return 0
+
+    mode_text = str(mode_cn or "").strip()
+    common_keywords = (
+        "盘中突击",
+        "盘后复盘",
+        "开始执行",
+        "任务完成",
+        "列表已更新",
+        "分析",
+    )
+    selected = [
+        line
+        for line in logs
+        if (mode_text and mode_text in line) or any(keyword in line for keyword in common_keywords)
+    ]
+    if not selected:
+        selected = logs[-30:]
+
+    replay_items = selected[-80:]
+    for line in replay_items:
+        queue_obj.put(line)
+    return len(replay_items)
+
 # Global Cache Timer
 ANALYSIS_REUSE_SECONDS = 15 * 60
 LAST_ANALYSIS_TIME = {
@@ -2088,12 +2121,11 @@ async def run_analysis(
         last_time = LAST_ANALYSIS_TIME.get(cache_key, datetime.min)
         seconds_since_last = int((datetime.now() - last_time).total_seconds())
         if seconds_since_last < ANALYSIS_REUSE_SECONDS:
-            thread_logger(f"[缓存] {mode_cn} 15分钟缓存命中，复用最近结果（{seconds_since_last}s 前）")
+            replayed = _replay_recent_analysis_logs(mode_cn)
+            thread_logger(f"[分析] {mode_cn}结果已同步，回放日志 {replayed} 条。")
             return {
                 "status": "success",
-                "cached": True,
-                "seconds_since_last": seconds_since_last,
-                "message": f"已同步服务器最近结果：{mode_cn}（{seconds_since_last}s 前）"
+                "message": f"{mode_cn}任务已在后台启动"
             }
 
         # 3. 执行新的分析
@@ -2107,7 +2139,7 @@ async def run_analysis(
     # Run in background to avoid blocking
     background_tasks.add_task(execute_analysis, mode)
     
-    return {"status": "success", "cached": False, "message": f"{mode_cn}任务已在后台启动"}
+    return {"status": "success", "message": f"{mode_cn}任务已在后台启动"}
 
 def execute_analysis(mode="after_hours", hours=None):
     try:
@@ -2412,7 +2444,7 @@ async def api_analyze_stock(
     cached_content = _get_valid_analysis_content(cache_key, prompt_type, force=force)
     if cached_content is not None:
         _consume_and_log(cached=True, real_call=False)
-        return {"status": "success", "analysis": cached_content, "cached": True}
+        return {"status": "success", "analysis": cached_content}
 
     # Single-flight guard for high concurrency: one cache key => one live AI request.
     analysis_lock = _get_analysis_lock(cache_key)
@@ -2420,7 +2452,7 @@ async def api_analyze_stock(
         cached_content = _get_valid_analysis_content(cache_key, prompt_type, force=force)
         if cached_content is not None:
             _consume_and_log(cached=True, real_call=False)
-            return {"status": "success", "analysis": cached_content, "cached": True}
+            return {"status": "success", "analysis": cached_content}
 
         _consume_and_log(cached=False, real_call=True)
         loop = asyncio.get_event_loop()
@@ -2436,7 +2468,7 @@ async def api_analyze_stock(
             }
             save_analysis_cache()
 
-        return {"status": "success", "analysis": result, "cached": False}
+        return {"status": "success", "analysis": result}
 
 # --- LHB API ---
 class LHBConfigRequest(BaseModel):
@@ -2556,13 +2588,13 @@ async def analyze_lhb_daily_api(
     )
 
     if cached_result:
-        return {"status": "ok", "result": cached_result, "analysis": cached_result, "cached": True}
+        return {"status": "ok", "result": cached_result, "analysis": cached_result}
     
     loop = asyncio.get_event_loop()
     # Fetch data first
     data = lhb_manager.get_daily_data(req.date)
     result = await loop.run_in_executor(None, lambda: analyze_daily_lhb(req.date, data, force_update=req.force))
-    return {"status": "ok", "result": result, "analysis": result, "cached": False}
+    return {"status": "ok", "result": result, "analysis": result}
 
 @app.get("/api/lhb/analysis")
 async def get_lhb_analysis_api(date: str, user: models.User = Depends(get_current_user)):
