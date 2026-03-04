@@ -415,11 +415,15 @@ async def admin_panel_custom_path_guard(request: Request, call_next):
 @app.middleware("http")
 async def api_device_auth_guard(request: Request, call_next):
     path = request.url.path
+    normalized = path.rstrip("/") or "/"
+    admin_api_prefix = admin.get_admin_api_prefix()
     if request.method == "OPTIONS":
         return await call_next(request)
     if not path.startswith("/api/"):
         return await call_next(request)
     if path.startswith("/api/admin/"):
+        return await call_next(request)
+    if admin_api_prefix != "/api/admin" and (normalized == admin_api_prefix or normalized.startswith(admin_api_prefix + "/")):
         return await call_next(request)
     if path in API_DEVICE_AUTH_EXEMPT_PATHS:
         return await call_next(request)
