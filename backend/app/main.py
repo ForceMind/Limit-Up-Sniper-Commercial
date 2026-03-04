@@ -1247,6 +1247,12 @@ async def websocket_endpoint(websocket: WebSocket):
 
     await ws_hub.register(websocket, channel=channel, device_id=device_id)
     try:
+        if channel == "logs":
+            for line in _recent_analysis_log_lines(limit=120):
+                try:
+                    await websocket.send_text(str(line))
+                except Exception:
+                    break
         while True:
             await websocket.receive_text()  # Keep connection open
     except WebSocketDisconnect:
@@ -2080,10 +2086,39 @@ def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
     if not selected:
         selected = logs[-30:]
 
-    replay_items = selected[-80:]
+    replay_items = [_normalize_runtime_log_for_replay(line) for line in selected[-80:]]
     for line in replay_items:
         queue_obj.put(line)
     return len(replay_items)
+
+
+def _normalize_runtime_log_for_replay(line: str) -> str:
+    text = str(line or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"^\[[0-9\-: ]+\]\s*\[[A-Z]+\]\s*", "", text)
+    return text
+
+
+def _recent_analysis_log_lines(limit: int = 120) -> list[str]:
+    try:
+        logs = get_runtime_logs(limit=max(20, int(limit)))
+    except Exception:
+        return []
+
+    keywords = (
+        "盘中突击",
+        "盘后复盘",
+        "调用 AI 分析",
+        "挖掘目标",
+        "分析",
+        "任务完成",
+        "列表已更新",
+    )
+    selected = [line for line in logs if any(k in line for k in keywords)]
+    if not selected:
+        selected = logs[-40:]
+    return [_normalize_runtime_log_for_replay(line) for line in selected[-100:]]
 
 # Global Cache Timer
 ANALYSIS_REUSE_SECONDS = 15 * 60
@@ -2136,6 +2171,8 @@ async def run_analysis(
         user_service.consume_quota(db, user, limit_type)
         LAST_ANALYSIS_TIME[cache_key] = datetime.now()
     
+    thread_logger(f"[分析] {mode_cn}任务已受理，正在准备最新数据...")
+
     # Run in background to avoid blocking
     background_tasks.add_task(execute_analysis, mode)
     

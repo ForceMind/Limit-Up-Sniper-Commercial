@@ -815,6 +815,20 @@ async def set_user_membership(
         device_id=user.device_id,
         detail=f"user_id={user.id}, version={version}, days={days}",
     )
+    await ws_hub.push_device_event(user.device_id, {
+        "event": "membership_approved",
+        "order_code": "",
+        "status": "completed",
+        "version": user.version,
+        "expires_at": user.expires_at.isoformat() if user.expires_at else None,
+        "converted_days": 0,
+        "bonus_days": 0,
+        "upgrade_bonus_days": 0,
+        "referral_bonus_token": "",
+        "referral_bonus_days": 0,
+        "message": "会员状态已更新，权益已生效。",
+        "source": "admin_set_membership",
+    })
     return {
         "status": "success",
         "user_id": user.id,
