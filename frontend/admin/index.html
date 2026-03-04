@@ -1942,7 +1942,7 @@
         const __savedAdminPrefixHint = localStorage.getItem('admin_api_prefix_hint') || '';
         const __injectedAdminPrefix = String(window.ADMIN_API_PREFIX || '').trim();
         window.__ADMIN_API_PREFIX__ = normalizeAdminApiPrefix(
-            __savedAdminPrefixHint || __injectedAdminPrefix || ('/api' + normalizePanelPath(window.location.pathname || '/admin'))
+            __savedAdminPrefixHint || __injectedAdminPrefix || '/api/admin'
         );
         window.fetch = (input, init) => {
             const currentPrefix = normalizeAdminApiPrefix(window.__ADMIN_API_PREFIX__ || '/api/admin');
@@ -2282,7 +2282,7 @@
                 },
                 initAdminApiPrefixFromHint() {
                     const hint = localStorage.getItem('admin_api_prefix_hint') || '';
-                    const fallback = '/api' + normalizePanelPath(window.location.pathname || '/admin');
+                    const fallback = '/api/admin';
                     const finalPrefix = normalizeAdminApiPrefix(hint || fallback);
                     this.adminApiPrefix = finalPrefix;
                     window.__ADMIN_API_PREFIX__ = finalPrefix;
