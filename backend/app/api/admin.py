@@ -65,6 +65,8 @@ failed_attempts: Dict[str, List[float]] = {}
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 EXPORT_TICKET_TTL_SECONDS = 120
 ADMIN_OVERVIEW_CACHE_TTL_SECONDS = float(os.getenv("ADMIN_OVERVIEW_CACHE_TTL_SECONDS", "5") or 5)
+USER_OP_LOG_CACHE_MAX_ITEMS = int(os.getenv("USER_OP_LOG_CACHE_MAX_ITEMS", "200000") or 200000)
+OVERVIEW_AUX_CACHE_TTL_SECONDS = float(os.getenv("OVERVIEW_AUX_CACHE_TTL_SECONDS", "15") or 15)
 _export_ticket_lock = threading.Lock()
 _export_tickets: Dict[str, Dict[str, Any]] = {}
 _admin_overview_cache_lock = threading.Lock()
@@ -73,6 +75,154 @@ _admin_overview_cache: Dict[str, Any] = {
     "date": "",
     "payload": None,
 }
+_user_ops_log_cache_lock = threading.Lock()
+_user_ops_log_cache: Dict[str, Any] = {
+    "mtime": 0.0,
+    "size": 0,
+    "items": [],
+}
+_news_history_cache_lock = threading.Lock()
+_news_history_cache: Dict[str, Any] = {"ts": 0.0, "items": []}
+_news_analysis_cache_lock = threading.Lock()
+_news_analysis_cache: Dict[str, Any] = {"ts": 0.0, "items": []}
+_ai_usage_summary_cache_lock = threading.Lock()
+_ai_usage_summary_cache: Dict[str, Dict[str, Any]] = {}
+_ai_usage_report_cache_lock = threading.Lock()
+_ai_usage_report_cache: Dict[str, Dict[str, Any]] = {}
+
+
+def _prune_timed_cache(cache_map: Dict[str, Dict[str, Any]], max_items: int = 128):
+    if len(cache_map) <= max_items:
+        return
+    sorted_keys = sorted(
+        cache_map.keys(),
+        key=lambda k: float((cache_map.get(k) or {}).get("ts", 0) or 0),
+        reverse=True,
+    )
+    for stale_key in sorted_keys[max_items:]:
+        cache_map.pop(stale_key, None)
+
+
+def _invalidate_overview_aux_cache():
+    with _admin_overview_cache_lock:
+        _admin_overview_cache["ts"] = 0.0
+        _admin_overview_cache["date"] = ""
+        _admin_overview_cache["payload"] = None
+    with _news_history_cache_lock:
+        _news_history_cache["ts"] = 0.0
+        _news_history_cache["items"] = []
+    with _news_analysis_cache_lock:
+        _news_analysis_cache["ts"] = 0.0
+        _news_analysis_cache["items"] = []
+    with _ai_usage_summary_cache_lock:
+        _ai_usage_summary_cache.clear()
+    with _ai_usage_report_cache_lock:
+        _ai_usage_report_cache.clear()
+
+
+def _load_news_history_cached(max_age_sec: float = OVERVIEW_AUX_CACHE_TTL_SECONDS) -> List[Dict[str, Any]]:
+    now_ts = time.time()
+    with _news_history_cache_lock:
+        cached_ts = float(_news_history_cache.get("ts", 0) or 0)
+        cached_items = _news_history_cache.get("items")
+        if now_ts - cached_ts <= max_age_sec and isinstance(cached_items, list):
+            return list(cached_items)
+    items = load_news_history()
+    if not isinstance(items, list):
+        items = []
+    with _news_history_cache_lock:
+        _news_history_cache["ts"] = time.time()
+        _news_history_cache["items"] = items
+    return list(items)
+
+
+def _load_news_analysis_records_cached(max_age_sec: float = OVERVIEW_AUX_CACHE_TTL_SECONDS) -> List[Dict[str, Any]]:
+    now_ts = time.time()
+    with _news_analysis_cache_lock:
+        cached_ts = float(_news_analysis_cache.get("ts", 0) or 0)
+        cached_items = _news_analysis_cache.get("items")
+        if now_ts - cached_ts <= max_age_sec and isinstance(cached_items, list):
+            return list(cached_items)
+    items = load_news_analysis_records()
+    if not isinstance(items, list):
+        items = []
+    with _news_analysis_cache_lock:
+        _news_analysis_cache["ts"] = time.time()
+        _news_analysis_cache["items"] = items
+    return list(items)
+
+
+def _summarize_ai_usage_for_date_cached(
+    date_text: str,
+    max_age_sec: float = OVERVIEW_AUX_CACHE_TTL_SECONDS,
+) -> Dict[str, Any]:
+    key = str(date_text or "").strip()
+    if not key:
+        return {}
+
+    now_ts = time.time()
+    with _ai_usage_summary_cache_lock:
+        cached = _ai_usage_summary_cache.get(key)
+        if isinstance(cached, dict):
+            cached_ts = float(cached.get("ts", 0) or 0)
+            payload = cached.get("payload")
+            if now_ts - cached_ts <= max_age_sec and isinstance(payload, dict):
+                return dict(payload)
+
+    payload = summarize_ai_usage_for_date(key)
+    if not isinstance(payload, dict):
+        payload = {}
+    with _ai_usage_summary_cache_lock:
+        _ai_usage_summary_cache[key] = {"ts": time.time(), "payload": payload}
+        _prune_timed_cache(_ai_usage_summary_cache, max_items=128)
+    return dict(payload)
+
+
+def _query_ai_usage_report_cached(
+    *,
+    page: int = 1,
+    page_size: int = 50,
+    date_from: str = "",
+    date_to: str = "",
+    provider: str = "",
+    model: str = "",
+    source: str = "",
+    max_age_sec: float = OVERVIEW_AUX_CACHE_TTL_SECONDS,
+) -> Dict[str, Any]:
+    key_obj = {
+        "page": int(page or 1),
+        "page_size": int(page_size or 50),
+        "date_from": str(date_from or "").strip(),
+        "date_to": str(date_to or "").strip(),
+        "provider": str(provider or "").strip(),
+        "model": str(model or "").strip(),
+        "source": str(source or "").strip(),
+    }
+    cache_key = json.dumps(key_obj, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    now_ts = time.time()
+    with _ai_usage_report_cache_lock:
+        cached = _ai_usage_report_cache.get(cache_key)
+        if isinstance(cached, dict):
+            cached_ts = float(cached.get("ts", 0) or 0)
+            payload = cached.get("payload")
+            if now_ts - cached_ts <= max_age_sec and isinstance(payload, dict):
+                return dict(payload)
+
+    payload = query_ai_usage_report(
+        page=key_obj["page"],
+        page_size=key_obj["page_size"],
+        date_from=key_obj["date_from"],
+        date_to=key_obj["date_to"],
+        provider=key_obj["provider"],
+        model=key_obj["model"],
+        source=key_obj["source"],
+    )
+    if not isinstance(payload, dict):
+        payload = {}
+    with _ai_usage_report_cache_lock:
+        _ai_usage_report_cache[cache_key] = {"ts": time.time(), "payload": payload}
+        _prune_timed_cache(_ai_usage_report_cache, max_items=128)
+    return dict(payload)
 
 
 def _load_json(path: Path, default):
@@ -1508,17 +1658,18 @@ async def get_today_overview(
         return cached_payload
 
     # Users
-    new_users = (
-        db.query(models.User)
+    new_user_rows = (
+        db.query(models.User.device_id)
         .filter(models.User.created_at >= start_utc, models.User.created_at < end_utc)
         .all()
     )
-    total_new_users = len(new_users)
+    new_user_devices = [str(row[0] or "").strip() for row in new_user_rows]
+    total_new_users = len(new_user_devices)
 
     accounts = _load_user_accounts()
     device_to_username = _device_username_map(accounts)
     registered_devices = set(device_to_username.keys())
-    new_registered_users = sum(1 for u in new_users if str(u.device_id or "").strip() in registered_devices)
+    new_registered_users = sum(1 for did in new_user_devices if did in registered_devices)
     new_guest_users = max(0, total_new_users - new_registered_users)
 
     registered_account_today = 0
@@ -1530,31 +1681,38 @@ async def get_today_overview(
             registered_account_today += 1
 
     # Orders
-    today_orders = (
-        db.query(models.PurchaseOrder)
+    order_rows = (
+        db.query(
+            models.PurchaseOrder.status,
+            func.count(models.PurchaseOrder.id),
+            func.coalesce(func.sum(models.PurchaseOrder.amount), 0.0),
+        )
         .filter(models.PurchaseOrder.created_at >= start_utc, models.PurchaseOrder.created_at < end_utc)
+        .group_by(models.PurchaseOrder.status)
         .all()
     )
-    orders_total = len(today_orders)
+    orders_total = 0
     orders_completed = 0
     orders_waiting = 0
     orders_pending = 0
     orders_rejected = 0
     amount_total = 0.0
     amount_completed = 0.0
-    for order in today_orders:
-        amount = float(order.amount or 0.0)
-        amount_total += amount
-        status = str(order.status or "").strip().lower()
+    for status_raw, count_raw, amount_raw in order_rows:
+        count_val = max(0, int(count_raw or 0))
+        amount_val = float(amount_raw or 0.0)
+        status = str(status_raw or "").strip().lower()
+        orders_total += count_val
+        amount_total += amount_val
         if status == "completed":
-            orders_completed += 1
-            amount_completed += amount
+            orders_completed += count_val
+            amount_completed += amount_val
         elif status == "waiting_verification":
-            orders_waiting += 1
+            orders_waiting += count_val
         elif status == "pending":
-            orders_pending += 1
+            orders_pending += count_val
         elif status in {"rejected", "cancelled"}:
-            orders_rejected += 1
+            orders_rejected += count_val
 
     # User operations for today (single pass over logs)
     today_ops: List[Tuple[Dict[str, Any], datetime]] = []
@@ -1673,7 +1831,7 @@ async def get_today_overview(
                 referrals_rewarded_today += 1
 
     # News / AI
-    news_history = load_news_history()
+    news_history = _load_news_history_cached()
     news_today = 0
     for item in news_history:
         dt_sh = _as_shanghai_datetime(item.get("timestamp"), assume_utc_when_naive=False)
@@ -1685,7 +1843,7 @@ async def get_today_overview(
             continue
         news_today += 1
 
-    analysis_records = load_news_analysis_records()
+    analysis_records = _load_news_analysis_records_cached()
     ai_analysis_today = 0
     for row in analysis_records:
         dt_sh = _as_shanghai_datetime(row.get("analyzed_at"), assume_utc_when_naive=True)
@@ -1696,14 +1854,14 @@ async def get_today_overview(
 
     # AI token / cost usage (from dedicated ledger, more accurate than cache estimation)
     today_text = start_sh.strftime("%Y-%m-%d")
-    usage_summary = summarize_ai_usage_for_date(today_text)
+    usage_summary = _summarize_ai_usage_for_date_cached(today_text)
     ai_prompt_tokens_today = int(usage_summary.get("prompt_tokens", 0) or 0)
     ai_completion_tokens_today = int(usage_summary.get("completion_tokens", 0) or 0)
     ai_total_tokens_today = int(usage_summary.get("total_tokens", 0) or 0)
     ai_cost_today = float(usage_summary.get("total_cost_cny", 0.0) or 0.0)
     ai_total_real_calls_today = int(usage_summary.get("count", 0) or 0)
 
-    usage_report = query_ai_usage_report(
+    usage_report = _query_ai_usage_report_cached(
         page=1,
         page_size=10,
         date_from=today_text,
@@ -1741,10 +1899,8 @@ async def get_today_overview(
     system_ai_real_calls_today = max(0, ai_total_real_calls_today - user_ai_quota_real_today)
 
     # Current quota consumption snapshot from users table
-    users_all = db.query(models.User).all()
-    ai_quota_used_total = 0
-    for u in users_all:
-        ai_quota_used_total += max(0, int(u.daily_ai_count or 0))
+    ai_quota_used_total_raw = db.query(func.coalesce(func.sum(models.User.daily_ai_count), 0)).scalar()
+    ai_quota_used_total = max(0, int(ai_quota_used_total_raw or 0))
 
     # Realtime system metrics
     runtime_metrics = _collect_system_runtime_metrics(today_text)
@@ -2547,6 +2703,27 @@ def _iter_user_operation_logs() -> List[Dict[str, Any]]:
     if not log_file.exists():
         return []
 
+    try:
+        stat = log_file.stat()
+        mtime = float(stat.st_mtime or 0)
+        size = int(stat.st_size or 0)
+    except Exception:
+        mtime = 0.0
+        size = 0
+
+    with _user_ops_log_cache_lock:
+        cached_mtime = float(_user_ops_log_cache.get("mtime", 0) or 0)
+        cached_size = int(_user_ops_log_cache.get("size", 0) or 0)
+        cached_items = _user_ops_log_cache.get("items")
+        if (
+            mtime > 0
+            and size >= 0
+            and cached_mtime == mtime
+            and cached_size == size
+            and isinstance(cached_items, list)
+        ):
+            return list(cached_items)
+
     items: List[Dict[str, Any]] = []
     try:
         with open(log_file, "r", encoding="utf-8", errors="ignore") as f:
@@ -2563,6 +2740,13 @@ def _iter_user_operation_logs() -> List[Dict[str, Any]]:
     except Exception:
         return []
     items.reverse()
+    max_items = max(1000, int(USER_OP_LOG_CACHE_MAX_ITEMS or 0))
+    if len(items) > max_items:
+        items = items[:max_items]
+    with _user_ops_log_cache_lock:
+        _user_ops_log_cache["mtime"] = mtime
+        _user_ops_log_cache["size"] = size
+        _user_ops_log_cache["items"] = items
     return items
 
 
@@ -3224,7 +3408,7 @@ async def get_ai_cache_stats(limit: int = 100, authorized: bool = Depends(verify
     total_output_tokens = sum(x["usage"]["completion_tokens"] for x in all_items)
     total_cost = sum(float(x.get("cost_cny", 0.0) or 0.0) for x in all_items)
     today_text = datetime.now(SHANGHAI_TZ).strftime("%Y-%m-%d")
-    billing_today = summarize_ai_usage_for_date(today_text)
+    billing_today = _summarize_ai_usage_for_date_cached(today_text)
 
     return {
         "total_keys": len(ai_cache.cache),
@@ -3293,7 +3477,7 @@ async def get_ai_cost_report(
     if dto and not date_re.match(dto):
         raise HTTPException(status_code=400, detail="date_to format should be YYYY-MM-DD")
 
-    report = query_ai_usage_report(
+    report = _query_ai_usage_report_cached(
         page=page,
         page_size=page_size,
         date_from=dfrom,
@@ -3517,8 +3701,8 @@ async def get_news_admin_list(
     if ai_status_lc not in {"all", "analyzed", "unanalyzed"}:
         raise HTTPException(status_code=400, detail="Invalid ai_status filter")
 
-    news_items = load_news_history()
-    analysis_index = _build_news_analysis_index(load_news_analysis_records())
+    news_items = _load_news_history_cached()
+    analysis_index = _build_news_analysis_index(_load_news_analysis_records_cached())
 
     filtered: List[Dict[str, Any]] = []
     for item in news_items:
@@ -3595,7 +3779,7 @@ async def delete_news_items(
     if not ids_set:
         raise HTTPException(status_code=400, detail="No ids provided")
 
-    news_items = load_news_history()
+    news_items = _load_news_history_cached(max_age_sec=0)
     remained = []
     removed = 0
     for item in news_items:
@@ -3606,7 +3790,7 @@ async def delete_news_items(
         remained.append(item)
     save_news_history(remained)
 
-    records = load_news_analysis_records()
+    records = _load_news_analysis_records_cached(max_age_sec=0)
     kept_records: List[Dict[str, Any]] = []
     for row in records:
         if not isinstance(row, dict):
@@ -3626,6 +3810,7 @@ async def delete_news_items(
             ]
         kept_records.append(row)
     save_news_analysis_records(kept_records)
+    _invalidate_overview_aux_cache()
 
     log_user_operation(
         "delete_news_items",

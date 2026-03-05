@@ -1682,6 +1682,45 @@
         console.log('App Starting...');
         
         const { createApp } = Vue
+        const STOCKS_LITE_FIELDS = [
+            'code',
+            'name',
+            'current',
+            'change_percent',
+            'strategy',
+            'initial_score',
+            'is_limit_up',
+            'news_summary',
+            'concept',
+            'turnover',
+            'circulation_value',
+            'time',
+            'likely_seats',
+            'seal_rate',
+            'broken_rate',
+            'next_day_premium',
+            'limit_up_days'
+        ].join(',');
+        const LIMIT_UP_POOL_LITE_FIELDS = [
+            'code',
+            'name',
+            'current',
+            'change_percent',
+            'turnover',
+            'circulation_value',
+            'concept',
+            'associated',
+            'amplitude',
+            'time',
+            'seal_rate',
+            'broken_rate',
+            'next_day_premium',
+            'limit_up_days'
+        ].join(',');
+        const INDICES_LITE_FIELDS = ['name', 'current', 'change', 'amount'].join(',');
+        const STOCKS_LITE_PATH = `/api/stocks?lite=1&fields=${encodeURIComponent(STOCKS_LITE_FIELDS)}`;
+        const LIMIT_UP_POOL_LITE_PATH = `/api/limit_up_pool?lite=1&fields=${encodeURIComponent(LIMIT_UP_POOL_LITE_FIELDS)}`;
+        const INDICES_LITE_PATH = `/api/indices?lite=1&fields=${encodeURIComponent(INDICES_LITE_FIELDS)}`;
 
         const resolveRequestUrl = (resource) => {
             if (typeof resource === 'string') return resource;
@@ -1905,6 +1944,7 @@
                     copyFallbackModal: { show: false, content: '' },
                     lastErrorFingerprint: '',
                     lastFetchTime: 0,
+                    apiEtags: {},
 
                     // --- New User & Subscription Data ---
                     userInfo: {
@@ -2237,6 +2277,29 @@
                     } catch (e) {
                         return '';
                     }
+                },
+                async fetchJsonWithEtag(apiPath) {
+                    const path = String(apiPath || '').trim();
+                    if (!path) throw new Error('Missing API path');
+                    const headers = {};
+                    const cachedEtag = this.apiEtags[path];
+                    if (cachedEtag) headers['If-None-Match'] = cachedEtag;
+                    const response = await fetch(API_BASE_URL + path, { headers });
+                    if (response.status === 304) {
+                        return { notModified: true, data: null, response };
+                    }
+                    let data = null;
+                    try {
+                        data = await response.json();
+                    } catch (_) {
+                        data = null;
+                    }
+                    const nextEtag = response.headers.get('ETag');
+                    if (nextEtag) this.apiEtags[path] = nextEtag;
+                    if (!response.ok) {
+                        throw new Error((data && (data.detail || data.message)) || 'Request failed');
+                    }
+                    return { notModified: false, data, response };
                 },
                 handleGlobalAuthError(event) {
                     const payload = (event && event.detail) ? event.detail : {};
@@ -4195,8 +4258,10 @@
                     if (this.isFetchingStocks) return;
                     this.isFetchingStocks = true;
                     try {
-                        const response = await fetch(API_BASE_URL + '/api/stocks');
-                        const data = await response.json();
+                        const { notModified, data } = await this.fetchJsonWithEtag(STOCKS_LITE_PATH);
+                        if (notModified || !Array.isArray(data)) {
+                            return;
+                        }
                         
                         const now = Date.now();
                         data.forEach(stock => {
@@ -4235,8 +4300,10 @@
                     if (this.isFetchingIndices) return;
                     this.isFetchingIndices = true;
                     try {
-                        const response = await fetch(API_BASE_URL + '/api/indices');
-                        const data = await response.json();
+                        const { notModified, data } = await this.fetchJsonWithEtag(INDICES_LITE_PATH);
+                        if (notModified || !Array.isArray(data)) {
+                            return;
+                        }
                         if (data && data.length > 0) {
                             // Update indices in marketSentiment object to reflect in UI
                             if (!this.marketSentiment) this.marketSentiment = {};
@@ -4253,8 +4320,10 @@
                     if (this.isFetchingLimitUpPool) return;
                     this.isFetchingLimitUpPool = true;
                     try {
-                        const response = await fetch(API_BASE_URL + '/api/limit_up_pool');
-                        const data = await response.json();
+                        const { notModified, data } = await this.fetchJsonWithEtag(LIMIT_UP_POOL_LITE_PATH);
+                        if (notModified || !data) {
+                            return;
+                        }
                         if (data.limit_up) {
                             this.limitUpPool = data.limit_up;
                             this.brokenLimitPool = data.broken || [];
@@ -4300,12 +4369,15 @@
                     this.isFetchingSentiment = true;
                     this.sentimentLoading = true;
                     try {
-                        const response = await fetch(API_BASE_URL + '/api/market_sentiment');
-                        const payload = await response.json();
-                        if (!response.ok) {
-                            throw new Error(payload.detail || '市场情绪接口请求失败');
+                        const { notModified, data } = await this.fetchJsonWithEtag('/api/market_sentiment');
+                        if (notModified) {
+                            this.sentimentLastUpdate = new Date().toLocaleTimeString();
+                            return;
                         }
-                        this.applyMarketSentimentPayload(payload);
+                        if (!data) {
+                            throw new Error('市场情绪接口请求失败');
+                        }
+                        this.applyMarketSentimentPayload(data);
                     } catch (error) {
                         console.error('Market Sentiment fetch failed:', error);
                     } finally {

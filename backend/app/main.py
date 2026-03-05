@@ -917,7 +917,9 @@ def _set_stock_quotes_cache(rows):
 
 def _get_stock_quotes_cache():
     with cache_lock:
-        return copy.deepcopy(stock_quotes_cache)
+        # Return a shallow list snapshot to avoid repeated deep-copy overhead
+        # on hot paths (market WS broadcaster + high-frequency API reads).
+        return list(stock_quotes_cache)
 
 
 def _normalize_market_code(value: str) -> str:
@@ -2968,10 +2970,27 @@ async def api_stocks(
     return JSONResponse(content=payload, headers={"ETag": etag, "Cache-Control": "private, max-age=1"})
 
 @app.get("/api/indices")
-async def api_indices(request: Request, user: models.User = Depends(check_data_permission)):
+async def api_indices(
+    request: Request,
+    lite: bool = Query(False),
+    fields: str = Query(""),
+    user: models.User = Depends(check_data_permission),
+):
     """快速获取大盘指数"""
     await asyncio.to_thread(ensure_indices_cache)
     payload = get_indices_cache()
+    if lite or fields:
+        selected = _resolve_selected_fields(
+            fields,
+            (
+                "name",
+                "current",
+                "change",
+                "amount",
+                "time",
+            ),
+        )
+        payload = _project_rows(payload, selected)
     etag = _json_etag(payload)
     if _is_not_modified(request, etag):
         return Response(status_code=304, headers={"ETag": etag})
