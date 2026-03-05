@@ -396,7 +396,53 @@ PY
     log_info "管理员API探测通过: ${admin_api_prefix}/panel_path (HTTP $admin_probe_status)"
 
     local probe_device
-    probe_device="healthcheck_$(date +%s)"
+    probe_device="healthcheck_probe_device"
+    local db_path="$APP_DIR/backend/data/commercial.db"
+    if ! "$APP_DIR/venv/bin/python" - "$db_path" "$probe_device" <<'PY'
+import datetime
+import os
+import sqlite3
+import sys
+
+db_path = sys.argv[1]
+device_id = sys.argv[2]
+if not os.path.exists(db_path):
+    raise SystemExit(1)
+
+now = datetime.datetime.utcnow()
+expires = now + datetime.timedelta(days=3650)
+fmt = lambda dt: dt.strftime("%Y-%m-%d %H:%M:%S.%f")
+
+with sqlite3.connect(db_path) as conn:
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM users WHERE device_id = ?", (device_id,))
+    row = cur.fetchone()
+    if row:
+        cur.execute(
+            """
+            UPDATE users
+            SET version = ?, expires_at = ?, last_reset_date = ?,
+                daily_ai_count = 0, daily_raid_count = 0, daily_review_count = 0
+            WHERE id = ?
+            """,
+            ("flagship", fmt(expires), fmt(now), row[0]),
+        )
+    else:
+        cur.execute(
+            """
+            INSERT INTO users
+            (device_id, version, expires_at, created_at, last_reset_date, daily_ai_count, daily_raid_count, daily_review_count)
+            VALUES (?, ?, ?, ?, ?, 0, 0, 0)
+            """,
+            (device_id, "flagship", fmt(expires), fmt(now), fmt(now)),
+        )
+    conn.commit()
+PY
+    then
+        log_error "[错误] 无法写入健康检查探活账号: $db_path"
+        log_error "请执行: sudo journalctl -u ${SERVICE_NAME} -n 120 --no-pager"
+        exit 1
+    fi
     local stocks_url="http://127.0.0.1:${internal_port}/api/stocks"
     local stocks_tmp
     stocks_tmp="$(mktemp)"
