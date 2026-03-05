@@ -1894,6 +1894,7 @@ def _is_not_modified(request: Request, etag: str) -> bool:
     inm = str(request.headers.get("if-none-match") or "").strip()
     if not inm or not etag:
         return False
+    return inm == etag
 
 
 def ensure_runtime_indexes():
@@ -1909,7 +1910,6 @@ def ensure_runtime_indexes():
                 conn.execute(text(stmt))
     except Exception as e:
         print(f"创建运行时索引失败: {e}")
-    return inm == etag
 
 
 def _compact_quote_ticks(rows):
