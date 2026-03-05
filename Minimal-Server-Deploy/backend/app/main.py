@@ -735,13 +735,14 @@ stock_quotes_cache_ts = 0.0
 stock_quotes_refresh_guard = threading.Lock()
 indices_cache = []
 indices_cache_ts = 0.0
+indices_refresh_guard = threading.Lock()
 market_sentiment_cache = {}
 market_sentiment_cache_ts = 0.0
+market_sentiment_refresh_guard = threading.Lock()
 market_ws_last_stock_hash = ""
 market_ws_last_pool_hash = ""
 market_ws_last_sentiment_hash = ""
 market_ws_last_lhb_syncing = None
-market_ws_last_client_config_hash = ""
 market_ws_last_quote_state = {}
 admin_ws_last_overview_hint_hash = ""
 admin_ws_last_online_users_hash = ""
@@ -752,6 +753,22 @@ kline_error_window_start_ts = 0.0
 kline_error_window_count = 0
 kline_error_suppressed = 0
 analysis_key_locks = {}
+DEFAULT_MARKET_STATS = {
+    "limit_up_count": 0,
+    "limit_down_count": 0,
+    "broken_count": 0,
+    "up_count": 0,
+    "down_count": 0,
+    "flat_count": 0,
+    "total_volume": 0,
+    "sentiment": "Neutral",
+    "suggestion": "观察",
+}
+DEFAULT_INDICES_ROWS = [
+    {"name": "上证指数", "current": 0, "change": 0, "amount": 0},
+    {"name": "深证成指", "current": 0, "change": 0, "amount": 0},
+    {"name": "创业板指", "current": 0, "change": 0, "amount": 0},
+]
 
 def load_analysis_cache():
     """Load AI analysis cache from disk"""
@@ -851,36 +868,122 @@ def _get_stock_quotes_cache():
         return copy.deepcopy(stock_quotes_cache)
 
 
+def _normalize_indices_rows(rows):
+    if not isinstance(rows, list):
+        return []
+    normalized = []
+    for row in rows:
+        if isinstance(row, dict):
+            normalized.append(copy.deepcopy(row))
+    return normalized
+
+
+def _build_market_sentiment_payload(data=None, fallback_indices=None):
+    src = data if isinstance(data, dict) else {}
+    raw_indices = src.get("indices")
+    normalized_indices = _normalize_indices_rows(raw_indices)
+    if not normalized_indices:
+        normalized_indices = _normalize_indices_rows(fallback_indices)
+    if not normalized_indices:
+        normalized_indices = copy.deepcopy(DEFAULT_INDICES_ROWS)
+
+    stats_src = src.get("stats")
+    if not isinstance(stats_src, dict):
+        stats_src = {}
+    stats = dict(DEFAULT_MARKET_STATS)
+    for key in DEFAULT_MARKET_STATS.keys():
+        if key in stats_src and stats_src.get(key) is not None:
+            stats[key] = stats_src.get(key)
+
+    return {
+        "indices": normalized_indices,
+        "stats": stats,
+    }
+
+
 def refresh_indices_cache():
     global indices_cache, indices_cache_ts
     try:
-        rows = data_provider.fetch_indices() or []
+        rows = _normalize_indices_rows(data_provider.fetch_indices() or [])
+        if not rows:
+            return
+        now_ts = time.time()
         with cache_lock:
             indices_cache = rows
-            indices_cache_ts = time.time()
+            indices_cache_ts = now_ts
     except Exception as e:
         print(f"刷新指数缓存失败: {e}")
 
 
 def get_indices_cache():
     with cache_lock:
-        return copy.deepcopy(indices_cache)
+        rows = copy.deepcopy(indices_cache)
+        fallback = copy.deepcopy((market_sentiment_cache or {}).get("indices", []))
+    normalized_fallback = _normalize_indices_rows(fallback)
+    return rows or normalized_fallback or copy.deepcopy(DEFAULT_INDICES_ROWS)
+
+
+def ensure_indices_cache(max_age_sec: int = max(60, REALTIME_CACHE_INTERVAL_SEC * 3)):
+    now_ts = time.time()
+    with cache_lock:
+        has_rows = bool(indices_cache)
+        cache_age = (now_ts - indices_cache_ts) if indices_cache_ts > 0 else float("inf")
+    if has_rows and cache_age <= max_age_sec:
+        return
+
+    with indices_refresh_guard:
+        now_ts = time.time()
+        with cache_lock:
+            has_rows = bool(indices_cache)
+            cache_age = (now_ts - indices_cache_ts) if indices_cache_ts > 0 else float("inf")
+        if has_rows and cache_age <= max_age_sec:
+            return
+        refresh_indices_cache()
 
 
 def refresh_market_sentiment_cache():
-    global market_sentiment_cache, market_sentiment_cache_ts
+    global market_sentiment_cache, market_sentiment_cache_ts, indices_cache, indices_cache_ts
     try:
         data = get_market_overview() or {}
         with cache_lock:
-            market_sentiment_cache = data
-            market_sentiment_cache_ts = time.time()
+            fallback_indices = copy.deepcopy(indices_cache) or copy.deepcopy((market_sentiment_cache or {}).get("indices", []))
+        payload = _build_market_sentiment_payload(data, fallback_indices=fallback_indices)
+        now_ts = time.time()
+        with cache_lock:
+            market_sentiment_cache = payload
+            market_sentiment_cache_ts = now_ts
+            if payload.get("indices"):
+                indices_cache = copy.deepcopy(payload.get("indices"))
+                indices_cache_ts = now_ts
     except Exception as e:
         print(f"刷新市场情绪缓存失败: {e}")
 
 
 def get_market_sentiment_cache():
     with cache_lock:
-        return copy.deepcopy(market_sentiment_cache)
+        payload = copy.deepcopy(market_sentiment_cache)
+        fallback_indices = copy.deepcopy(indices_cache)
+    return _build_market_sentiment_payload(payload, fallback_indices=fallback_indices)
+
+
+def ensure_market_sentiment_cache(max_age_sec: int = max(60, REALTIME_CACHE_INTERVAL_SEC * 3)):
+    now_ts = time.time()
+    with cache_lock:
+        payload = market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {}
+        has_payload = bool(payload.get("indices")) or bool(payload.get("stats"))
+        cache_age = (now_ts - market_sentiment_cache_ts) if market_sentiment_cache_ts > 0 else float("inf")
+    if has_payload and cache_age <= max_age_sec:
+        return
+
+    with market_sentiment_refresh_guard:
+        now_ts = time.time()
+        with cache_lock:
+            payload = market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {}
+            has_payload = bool(payload.get("indices")) or bool(payload.get("stats"))
+            cache_age = (now_ts - market_sentiment_cache_ts) if market_sentiment_cache_ts > 0 else float("inf")
+        if has_payload and cache_age <= max_age_sec:
+            return
+        refresh_market_sentiment_cache()
 
 
 def _day_kline_cache_path(clean_code: str) -> Path:
@@ -1337,11 +1440,18 @@ async def websocket_endpoint(websocket: WebSocket):
     admin_token = (websocket.query_params.get("admin_token") or "").strip()
     if channel not in ("logs", "notify", "market", "admin"):
         channel = "logs"
-    if channel == "notify" and not device_id:
-        channel = "logs"
+    if channel in ("logs", "notify", "market") and not device_id:
+        await websocket.close(code=1008)
+        return
     if channel == "admin":
         sessions = admin._cleanup_sessions(admin._load_sessions())
         if not admin_token or admin_token not in sessions:
+            await websocket.close(code=1008)
+            return
+    else:
+        try:
+            account_store.ensure_device_not_banned(device_id)
+        except Exception:
             await websocket.close(code=1008)
             return
 
@@ -1630,7 +1740,7 @@ def _compact_quote_ticks(rows):
 
 async def market_event_broadcaster():
     global market_ws_last_stock_hash, market_ws_last_pool_hash, market_ws_last_sentiment_hash
-    global market_ws_last_lhb_syncing, market_ws_last_client_config_hash, market_ws_last_quote_state
+    global market_ws_last_lhb_syncing, market_ws_last_quote_state
     while True:
         try:
             if not await ws_hub.has_market_subscribers():
@@ -1638,7 +1748,6 @@ async def market_event_broadcaster():
                 market_ws_last_pool_hash = ""
                 market_ws_last_sentiment_hash = ""
                 market_ws_last_lhb_syncing = None
-                market_ws_last_client_config_hash = ""
                 market_ws_last_quote_state = {}
                 await asyncio.sleep(2)
                 continue
@@ -1695,15 +1804,14 @@ async def market_event_broadcaster():
                 refresh_targets.append("limit_up_pool")
 
             sentiment_payload = get_market_sentiment_cache() or {}
-            sentiment_hash = _market_hash_obj(sentiment_payload.get("stats", {}))
+            sentiment_hash = _market_hash_obj(sentiment_payload)
             if sentiment_hash != market_ws_last_sentiment_hash:
                 market_ws_last_sentiment_hash = sentiment_hash
-                refresh_targets.append("market_sentiment")
-
-            client_config_hash = _market_hash_obj(_public_client_config())
-            if client_config_hash != market_ws_last_client_config_hash:
-                market_ws_last_client_config_hash = client_config_hash
-                refresh_targets.append("client_config")
+                await ws_hub.broadcast_market_event({
+                    "event": "market_sentiment",
+                    "ts": int(time.time()),
+                    "data": sentiment_payload,
+                })
 
             lhb_syncing = bool(lhb_manager.is_syncing)
             if lhb_syncing != market_ws_last_lhb_syncing:
@@ -2262,6 +2370,7 @@ def _is_user_visible_analysis_log(line: str, mode_cn: str = "") -> bool:
         "ENABLE_BACKGROUND_TASKS",
         "启动：",
         "系统守护",
+        "回放日志",
     )
     if any(key in text for key in blocked):
         return False
@@ -2272,7 +2381,6 @@ def _is_user_visible_analysis_log(line: str, mode_cn: str = "") -> bool:
         "开始执行",
         "任务完成",
         "列表已更新",
-        "结果已同步",
         "任务已受理",
     )
     if any(key in text for key in allowed_common):
@@ -2288,15 +2396,12 @@ def _normalize_runtime_log_for_replay(line: str) -> str:
     text = str(line or "").strip()
     if not text:
         return ""
-    text = re.sub(r"^\[[0-9\-: ]+\]\s*\[[A-Z]+\]\s*", "", text)
+    text = re.sub(r"^\[[0-9:\- ]+\]\s*\[[^\]]+\]\s*", "", text)
+    text = re.sub(r"^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]\s*(\[[^\]]+\]\s*)?", "", text)
     return text
 
 
 def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
-    queue_obj = globals().get("log_queue")
-    if queue_obj is None:
-        return 0
-
     try:
         logs = get_runtime_logs(limit=max(20, int(limit)))
     except Exception:
@@ -2308,7 +2413,7 @@ def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
 
     replay_items = [_normalize_runtime_log_for_replay(line) for line in selected[-80:]]
     for line in replay_items:
-        queue_obj.put(line)
+        thread_logger(line)
     return len(replay_items)
 
 
@@ -2369,7 +2474,8 @@ async def run_analysis(
             except Exception:
                 pass
             replayed = _replay_recent_analysis_logs(mode_cn)
-            thread_logger(f"[分析] {mode_cn}结果已同步，回放日志 {replayed} 条。")
+            if replayed <= 0:
+                thread_logger(f"[分析] {mode_cn}任务已受理，正在准备最新数据...")
             return {
                 "status": "success",
                 "message": f"{mode_cn}任务已在后台启动"
@@ -2646,6 +2752,7 @@ async def api_stocks(user: models.User = Depends(check_data_permission)):
 @app.get("/api/indices")
 async def api_indices(user: models.User = Depends(check_data_permission)):
     """快速获取大盘指数"""
+    await asyncio.to_thread(ensure_indices_cache)
     return get_indices_cache()
 
 @app.get("/api/limit_up_pool")
@@ -2663,6 +2770,7 @@ async def api_intraday_pool(user: models.User = Depends(check_data_permission)):
 @app.get("/api/market_sentiment")
 async def api_market_sentiment(user: models.User = Depends(check_data_permission)):
     """获取大盘情绪数据"""
+    await asyncio.to_thread(ensure_market_sentiment_cache)
     return get_market_sentiment_cache()
 
 class StockAnalysisRequest(BaseModel):

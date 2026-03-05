@@ -2200,6 +2200,17 @@
                     const payload = (event && event.detail) ? event.detail : {};
                     const status = Number(payload.status || 0);
                     const detail = String(payload.detail || '').toLowerCase();
+                    const isBanned = detail.includes('封禁') || detail.includes('banned');
+                    if (isBanned) {
+                        this.showMsg(payload.detail || '账号已被封禁', 'error');
+                        localStorage.removeItem('sniper_token');
+                        localStorage.removeItem('sniper_username');
+                        this.deviceId = '';
+                        this.displayUsername = '';
+                        this.isRegisteredAccount = false;
+                        this.showLoginModal = true;
+                        return;
+                    }
                     const isPermissionIssue = (
                         detail.includes('upgrade') ||
                         detail.includes('license expired') ||
@@ -3749,8 +3760,10 @@
                     let wsBase = API_BASE_URL.replace(/^http/, 'ws');
                     // Handle case where API_BASE_URL has no protocol (e.g. relative path, though unlikely in this setup)
                     if (wsBase.startsWith('//')) wsBase = 'ws:' + wsBase;
-                    
-                    const wsUrl = `${wsBase}/ws/logs`;
+
+                    const wsUrl = this.deviceId
+                        ? `${wsBase}/ws/logs?device_id=${encodeURIComponent(this.deviceId)}`
+                        : `${wsBase}/ws/logs`;
                     const ws = new WebSocket(wsUrl);
                     this.logSocket = ws;
                     this.wsConnecting = true;
@@ -3855,6 +3868,25 @@
                             }
                         } else if (payload.event === 'membership_rejected') {
                             this.showMsg(payload.message || '订单审核未通过', 'error');
+                        } else if (payload.event === 'account_banned') {
+                            const banMsg = payload.message || payload.reason || '账号已被封禁';
+                            this.showMsg(banMsg, 'error');
+                            localStorage.removeItem('sniper_token');
+                            localStorage.removeItem('sniper_username');
+                            this.deviceId = '';
+                            this.displayUsername = '';
+                            this.isRegisteredAccount = false;
+                            this.accountCanApplyTrial = false;
+                            this.userInfo = { ...(this.userInfo || {}), is_expired: true };
+                            if (this.wsReconnectTimer) { clearTimeout(this.wsReconnectTimer); this.wsReconnectTimer = null; }
+                            if (this.notifyReconnectTimer) { clearTimeout(this.notifyReconnectTimer); this.notifyReconnectTimer = null; }
+                            if (this.marketReconnectTimer) { clearTimeout(this.marketReconnectTimer); this.marketReconnectTimer = null; }
+                            if (this.logSocket) { try { this.logSocket.close(); } catch (e) {} this.logSocket = null; }
+                            if (this.marketSocket) { try { this.marketSocket.close(); } catch (e) {} this.marketSocket = null; }
+                            if (this.notifySocket) { try { this.notifySocket.close(); } catch (e) {} this.notifySocket = null; }
+                            this.showLoginModal = true;
+                        } else if (payload.event === 'account_unbanned') {
+                            this.showMsg(payload.message || '账号封禁已解除，请重新登录', 'info');
                         }
                     };
 
@@ -3883,7 +3915,9 @@
                     }
                     let wsBase = API_BASE_URL.replace(/^http/, 'ws');
                     if (wsBase.startsWith('//')) wsBase = 'ws:' + wsBase;
-                    const wsUrl = `${wsBase}/ws/logs?channel=market`;
+                    const wsUrl = this.deviceId
+                        ? `${wsBase}/ws/logs?channel=market&device_id=${encodeURIComponent(this.deviceId)}`
+                        : `${wsBase}/ws/logs?channel=market`;
                     const ws = new WebSocket(wsUrl);
                     this.marketSocket = ws;
                     this.marketWsConnecting = true;
@@ -3913,6 +3947,10 @@
                         }
                         if (payload.event === 'market_refresh') {
                             this.triggerRefreshByTargets(payload.targets || []);
+                            return;
+                        }
+                        if (payload.event === 'market_sentiment') {
+                            this.applyMarketSentimentPayload(payload.data || {});
                             return;
                         }
                         if (payload.event === 'lhb_status') {
@@ -3954,19 +3992,11 @@
                             this.tabDataLoaded.intra = false;
                         }
                     }
-                    if (list.includes('client_config') && !this._shouldThrottleWsRefresh('client_config', 5000)) {
-                        this.fetchConfig();
-                    }
                     if (list.includes('limit_up_pool') && !this._shouldThrottleWsRefresh('limit_up_pool', 5000)) {
                         if (this.activeTab === 'pool') {
                             this.fetchLimitUpPool();
                         } else {
                             this.tabDataLoaded.pool = false;
-                        }
-                    }
-                    if (list.includes('market_sentiment') && !this._shouldThrottleWsRefresh('market_sentiment', 8000)) {
-                        if (this.activeTab !== 'manual') {
-                            this.fetchMarketSentiment();
                         }
                     }
                 },
@@ -4145,6 +4175,32 @@
                         this.isFetchingLimitUpPool = false;
                     }
                 },
+                applyMarketSentimentPayload(payload) {
+                    const defaultStats = {
+                        limit_up_count: 0,
+                        broken_count: 0,
+                        limit_down_count: 0,
+                        up_count: 0,
+                        down_count: 0,
+                        flat_count: 0,
+                        total_volume: 0,
+                        sentiment: 'Neutral',
+                        suggestion: '观察'
+                    };
+                    const nextStats = (payload && typeof payload.stats === 'object' && payload.stats)
+                        ? payload.stats
+                        : {};
+                    const currentIndices = Array.isArray(this.marketSentiment?.indices) ? this.marketSentiment.indices : [];
+                    this.marketSentiment = {
+                        indices: Array.isArray(payload?.indices) ? payload.indices : currentIndices,
+                        stats: {
+                            ...defaultStats,
+                            ...nextStats
+                        }
+                    };
+                    this.sentimentLastUpdate = new Date().toLocaleTimeString();
+                    this.sentimentLoading = false;
+                },
                 async fetchMarketSentiment() {
                     if (!this.hasDataAccess) return;
                     if (this.isFetchingSentiment) return;
@@ -4156,30 +4212,7 @@
                         if (!response.ok) {
                             throw new Error(payload.detail || '市场情绪接口请求失败');
                         }
-
-                        const defaultStats = {
-                            limit_up_count: 0,
-                            broken_count: 0,
-                            limit_down_count: 0,
-                            up_count: 0,
-                            down_count: 0,
-                            total_volume: 0,
-                            sentiment: 'Neutral',
-                            suggestion: '等待数据'
-                        };
-
-                        const nextStats = (payload && typeof payload.stats === 'object' && payload.stats)
-                            ? payload.stats
-                            : {};
-
-                        this.marketSentiment = {
-                            indices: Array.isArray(payload?.indices) ? payload.indices : (Array.isArray(this.marketSentiment?.indices) ? this.marketSentiment.indices : []),
-                            stats: {
-                                ...defaultStats,
-                                ...nextStats
-                            }
-                        };
-                        this.sentimentLastUpdate = new Date().toLocaleTimeString();
+                        this.applyMarketSentimentPayload(payload);
                     } catch (error) {
                         console.error('Market Sentiment fetch failed:', error);
                     } finally {

@@ -717,16 +717,17 @@ async def set_user_ban_status(
     if not target_username or target_username not in accounts:
         raise HTTPException(status_code=404, detail="Registered account not found for this user")
 
+    banned_flag = bool(payload.banned)
     reason = (payload.reason or "").strip()
     account_store.set_account_ban_status(
         target_username,
-        banned=bool(payload.banned),
+        banned=banned_flag,
         reason=reason,
         accounts=accounts,
     )
 
     add_runtime_log(
-        f"[ADMIN] User ban status changed: username={target_username}, device={target_device_id}, banned={bool(payload.banned)}"
+        f"[ADMIN] User ban status changed: username={target_username}, device={target_device_id}, banned={banned_flag}"
     )
     log_user_operation(
         "set_user_ban",
@@ -738,11 +739,23 @@ async def set_user_ban_status(
         device_id=target_device_id,
         detail=f"banned={bool(payload.banned)}, reason={reason}",
     )
+    if target_device_id:
+        push_payload = {
+            "event": "account_banned" if banned_flag else "account_unbanned",
+            "message": reason or ("账号已被封禁" if banned_flag else "账号封禁已解除"),
+            "reason": reason,
+            "is_banned": banned_flag,
+            "ts": int(time.time()),
+        }
+        try:
+            await ws_hub.push_device_event(target_device_id, push_payload)
+        except Exception:
+            pass
     return {
         "status": "success",
         "username": target_username,
         "device_id": target_device_id,
-        "is_banned": bool(payload.banned),
+        "is_banned": banned_flag,
         "reason": reason,
     }
 

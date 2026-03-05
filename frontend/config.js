@@ -22,7 +22,4 @@ const getApiBaseUrl = () => {
     return '';
 };
 
-// Admin Config
-const ADMIN_BASE_PATH = '/admin'; // Default admin path
-
 const API_BASE_URL = getApiBaseUrl();
