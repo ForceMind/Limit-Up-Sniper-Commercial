@@ -1713,9 +1713,14 @@
 
         createApp({
             data() {
+                const persistedToken = (localStorage.getItem('sniper_token') || '').trim();
+                const persistedDeviceId = (localStorage.getItem('sniper_device_id') || '').trim();
+                const persistedUsername = (localStorage.getItem('sniper_username') || '').trim();
+                const initialDeviceId = persistedToken || persistedDeviceId;
+                const hasPersistedLogin = !!persistedToken;
                 return {
                     // License Data
-                    deviceId: '',
+                    deviceId: initialDeviceId,
                     showActivationModal: false,
                     licenseKey: '',
                     activating: false,
@@ -1845,8 +1850,8 @@
                     loginForm: { username: '', password: '' },
                     showPasswordInLogin: false,
                     registerCredentialModal: { show: false, username: '', password: '' },
-                    displayUsername: '',
-                    isRegisteredAccount: false,
+                    displayUsername: persistedUsername,
+                    isRegisteredAccount: hasPersistedLogin,
                     accountCanApplyTrial: false,
                     fingerprintId: '',
                     frontendVersion: 'v3.0.0',
@@ -1868,7 +1873,7 @@
                     // --- New User & Subscription Data ---
                     userInfo: {
                         version: 'trial', 
-                        is_expired: true,
+                        is_expired: hasPersistedLogin ? false : true,
                         remaining_ai: 0,
                         remaining_raid: 0,
                         remaining_review: 0
@@ -4073,6 +4078,10 @@
                         };
                         this.saveLocalFavorites();
                         await this.fetchLocalFavoriteQuotes(true);
+                        if (this.isMobile) {
+                            this.activeTab = 'manual';
+                        }
+                        this.ensureTabData('manual', true);
                         await this.reportFavoriteStat('add', normalizedCode);
                         this.showMsg('已加入本地自选', 'success');
                     } catch (error) {

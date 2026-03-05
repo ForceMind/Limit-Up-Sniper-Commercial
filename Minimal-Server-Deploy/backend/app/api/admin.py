@@ -54,6 +54,7 @@ ADMIN_SECRET_FILE = DATA_DIR / "admin_token.txt"
 ADMIN_CREDENTIALS_FILE = DATA_DIR / "admin_credentials.json"
 ADMIN_SESSIONS_FILE = DATA_DIR / "admin_sessions.json"
 ADMIN_PANEL_PATH_FILE = DATA_DIR / "admin_panel_path.json"
+ADMIN_API_PREFIX_FILE = DATA_DIR / "admin_api_prefix.json"
 USER_ACCOUNTS_FILE = DATA_DIR / "user_accounts.json"
 SEAT_MAPPINGS_FILE = DATA_DIR / "seat_mappings.json"
 VIP_SEATS_FILE = DATA_DIR / "vip_seats.json"
@@ -204,6 +205,47 @@ def _save_admin_panel_path(path: str):
     )
 
 
+def _normalize_admin_api_prefix(raw_prefix: str) -> str:
+    value = (raw_prefix or "").strip()
+    if not value:
+        return "/api/admin"
+    if not value.startswith("/"):
+        value = "/" + value
+    if not value.startswith("/api/"):
+        value = "/api" + value
+
+    parts = [p for p in value.split("/") if p]
+    value = "/" + "/".join(parts)
+    if value in {"/", "/api"}:
+        raise ValueError("管理员API前缀不能为 / 或 /api")
+    if value.startswith("/api/auth") or value.startswith("/api/payment"):
+        raise ValueError("管理员API前缀不能与 auth/payment 路由冲突")
+    if not re.fullmatch(r"/[A-Za-z0-9/_-]+", value):
+        raise ValueError("管理员API前缀只允许字母、数字、/、_、-")
+    return value
+
+
+def get_admin_api_prefix() -> str:
+    data = _load_json(ADMIN_API_PREFIX_FILE, {})
+    if isinstance(data, dict):
+        try:
+            return _normalize_admin_api_prefix(data.get("prefix", "/api/admin"))
+        except ValueError:
+            return "/api/admin"
+    return "/api/admin"
+
+
+def _save_admin_api_prefix(prefix: str):
+    normalized = _normalize_admin_api_prefix(prefix)
+    _save_json(
+        ADMIN_API_PREFIX_FILE,
+        {
+            "prefix": normalized,
+            "updated_at": datetime.utcnow().isoformat(),
+        },
+    )
+
+
 def _generate_random_password(length: int = 10) -> str:
     alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
     size = max(8, min(int(length or 10), 24))
@@ -331,6 +373,10 @@ class UpdateAdminAccountSchema(BaseModel):
 
 class UpdateAdminPanelPathSchema(BaseModel):
     path: str
+
+
+class UpdateAdminApiPrefixSchema(BaseModel):
+    prefix: str
 
 
 @router.post("/login")
@@ -529,6 +575,37 @@ async def update_admin_panel_path_api(
         detail=final_path,
     )
     return {"status": "success", "path": final_path}
+
+
+@router.get("/api_prefix")
+async def get_admin_api_prefix_api(authorized: bool = Depends(verify_admin)):
+    return {
+        "status": "success",
+        "prefix": get_admin_api_prefix(),
+    }
+
+
+@router.post("/api_prefix")
+async def update_admin_api_prefix_api(
+    payload: UpdateAdminApiPrefixSchema,
+    authorized: bool = Depends(verify_admin),
+):
+    try:
+        _save_admin_api_prefix(payload.prefix)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    final_prefix = get_admin_api_prefix()
+    add_runtime_log(f"[后台] 已更新管理员API前缀: {final_prefix}")
+    log_user_operation(
+        "update_admin_api_prefix",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/api_prefix",
+        detail=final_prefix,
+    )
+    return {"status": "success", "prefix": final_prefix}
 
 
 # --- User / Order Management ---
@@ -1717,6 +1794,47 @@ async def get_today_overview(
             "total_tokens_today": int(ai_total_tokens_today),
             "estimated_cost_cny_today": round(ai_cost_today, 6),
         },
+    }
+
+
+@router.get("/overview/online_users")
+async def get_overview_online_users(
+    authorized: bool = Depends(verify_admin),
+):
+    accounts = _load_user_accounts()
+    device_to_username = _device_username_map(accounts)
+    active_devices = await ws_hub.snapshot_active_devices()
+
+    rows: List[Dict[str, Any]] = []
+    for device_id, conn_count in active_devices.items():
+        username = str(device_to_username.get(device_id, "")).strip()
+        is_registered = bool(username)
+        rows.append(
+            {
+                "device_id": str(device_id),
+                "username": username if is_registered else "",
+                "account_type": "registered" if is_registered else "guest",
+                "connections": int(conn_count or 0),
+            }
+        )
+
+    rows.sort(
+        key=lambda x: (
+            0 if str(x.get("account_type", "")).strip() == "registered" else 1,
+            -int(x.get("connections", 0) or 0),
+            str(x.get("username", "")).lower(),
+            str(x.get("device_id", "")),
+        )
+    )
+
+    registered_count = sum(1 for x in rows if x.get("account_type") == "registered")
+    guest_count = max(0, len(rows) - registered_count)
+    return {
+        "status": "success",
+        "total": len(rows),
+        "registered": registered_count,
+        "guest": guest_count,
+        "items": rows,
     }
 
 

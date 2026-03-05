@@ -1464,49 +1464,174 @@ class DataProvider:
         
         return []
 
+    def _guess_market_prefix(self, clean_code):
+        code = "".join(filter(str.isdigit, str(clean_code or "")))
+        if len(code) > 6:
+            code = code[-6:]
+        if len(code) != 6:
+            return ""
+        if code.startswith("6"):
+            return "sh"
+        if code.startswith("0") or code.startswith("3"):
+            return "sz"
+        if code.startswith("8") or code.startswith("4") or code.startswith("9"):
+            return "bj"
+        return "sz"
+
+    def _iter_local_stock_catalog(self):
+        """
+        Build a local stock catalog for search/name resolution.
+        No remote request is performed here.
+        """
+        catalog = {}
+
+        def _upsert(raw_code, raw_name=""):
+            code_text = str(raw_code or "").strip().lower()
+            if not code_text:
+                return
+            if "." in code_text:
+                code_text = code_text.split(".", 1)[0]
+            clean_code = "".join(filter(str.isdigit, self._strip_code(code_text)))
+            if len(clean_code) > 6:
+                clean_code = clean_code[-6:]
+            if len(clean_code) != 6:
+                return
+
+            full_code = self._format_code(clean_code)
+            fallback_name = full_code
+            name = str(raw_name or "").strip() or fallback_name
+            if name in {"--", "None", "nan"}:
+                name = fallback_name
+
+            prev = catalog.get(full_code)
+            if prev and str(prev.get("name", "")).strip() and prev.get("name") != fallback_name and name == fallback_name:
+                name = prev.get("name")
+
+            catalog[full_code] = {
+                "code": full_code,
+                "name": name,
+                "display_code": clean_code,
+            }
+
+        if isinstance(self._biying_stock_list_map, dict):
+            for clean_code, name in self._biying_stock_list_map.items():
+                prefix = self._guess_market_prefix(clean_code)
+                if not prefix:
+                    continue
+                _upsert(f"{prefix}{clean_code}", name)
+
+        if self._base_info_df is not None and not self._base_info_df.empty:
+            try:
+                for _, row in self._base_info_df.iterrows():
+                    _upsert(row.get("code", ""), row.get("name", ""))
+            except Exception:
+                pass
+
+        if self._last_market_df is not None and not self._last_market_df.empty:
+            try:
+                for _, row in self._last_market_df.iterrows():
+                    _upsert(row.get("code", ""), row.get("name", ""))
+            except Exception:
+                pass
+
+        return list(catalog.values())
+
+    def get_stock_name_local(self, code):
+        """
+        Resolve stock name from local caches only (no remote request).
+        """
+        normalized = self._format_code(str(code or "").strip().lower())
+        clean_code = "".join(filter(str.isdigit, self._strip_code(normalized)))
+        if len(clean_code) > 6:
+            clean_code = clean_code[-6:]
+        if len(clean_code) != 6:
+            return normalized or str(code or "").strip()
+
+        if isinstance(self._biying_stock_list_map, dict):
+            name = str(self._biying_stock_list_map.get(clean_code, "") or "").strip()
+            if name:
+                return name
+
+        if self._base_info_df is not None and not self._base_info_df.empty:
+            try:
+                matched = self._base_info_df[self._base_info_df["code"] == normalized]
+                if not matched.empty:
+                    name = str(matched.iloc[0].get("name", "") or "").strip()
+                    if name:
+                        return name
+            except Exception:
+                pass
+
+        if self._last_market_df is not None and not self._last_market_df.empty:
+            try:
+                for _, row in self._last_market_df.iterrows():
+                    raw_code = str(row.get("code", "")).strip().lower()
+                    if not raw_code:
+                        continue
+                    row_clean = "".join(filter(str.isdigit, self._strip_code(raw_code)))
+                    if len(row_clean) > 6:
+                        row_clean = row_clean[-6:]
+                    if row_clean != clean_code:
+                        continue
+                    name = str(row.get("name", "") or "").strip()
+                    if name:
+                        return name
+            except Exception:
+                pass
+
+        return normalized
+
     def search_stock(self, q):
         """
-        Search stock by code/name/pinyin.
+        Search stock by code/name from local catalogs only.
         """
-        if not q:
+        text = str(q or "").strip().lower()
+        if not text:
             return []
-            
-        url = "https://searchapi.eastmoney.com/api/suggest/get"
-        params = {
-            "input": q,
-            "type": "14", # Stock
-            "token": "D43BF722C8E33BDC906FB84D85E326E8",
-            "count": 5
-        }
-        
-        try:
-            resp = self._call_provider("eastmoney", lambda: requests.get(url, params=params, timeout=3))
-            resp.encoding = 'utf-8'
-            data = resp.json()
-            
-            if "QuotationCodeTable" in data and "Data" in data["QuotationCodeTable"]:
-                results = []
-                for item in data["QuotationCodeTable"]["Data"]:
-                    market_type = item.get("MarketType")
-                    code = item.get("Code")
-                    name = item.get("Name")
-                    
-                    prefix = ""
-                    if market_type == "1": prefix = "sh"
-                    elif market_type == "2": prefix = "sz"
-                    else: continue 
-                    
-                    full_code = f"{prefix}{code}"
-                    results.append({
-                        "code": full_code,
-                        "name": name,
-                        "display_code": code
-                    })
-                return results
-        except Exception as e:
-            self.log(f"[!] 搜索失败: {e}")
-            
-        return []
+
+        q_digits = "".join(filter(str.isdigit, text))
+        catalog = self._iter_local_stock_catalog()
+        if not catalog:
+            try:
+                self._fetch_stock_list_biying(force=False)
+            except Exception:
+                pass
+            catalog = self._iter_local_stock_catalog()
+        if not catalog:
+            return []
+
+        scored = []
+        for item in catalog:
+            code = str(item.get("code", "")).strip().lower()
+            display_code = str(item.get("display_code", "")).strip()
+            name = str(item.get("name", "")).strip()
+            name_l = name.lower()
+            if not code or not display_code:
+                continue
+
+            score = None
+            if text == code or text == display_code:
+                score = 0
+            elif q_digits and q_digits == display_code:
+                score = 1
+            elif code.startswith(text) or display_code.startswith(text) or (q_digits and display_code.startswith(q_digits)):
+                score = 2
+            elif name_l == text:
+                score = 3
+            elif text in name_l:
+                score = 4
+            else:
+                continue
+
+            scored.append((
+                score,
+                abs(len(display_code) - len(q_digits or text)),
+                display_code,
+                item,
+            ))
+
+        scored.sort(key=lambda x: (x[0], x[1], x[2]))
+        return [s[3] for s in scored[:20]]
 
     def get_stock_info(self, code):
         """

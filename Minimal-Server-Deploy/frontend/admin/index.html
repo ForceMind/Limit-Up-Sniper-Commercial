@@ -119,7 +119,12 @@
                         <div class="bg-white border rounded p-4">
                             <div class="text-xs text-gray-500">实时连接</div>
                             <div class="text-2xl font-bold mt-1">{{ (((overviewToday.runtime || {}).ws || {}).total_connections || 0) }}</div>
-                            <div class="text-xs text-gray-500 mt-2">实时用户数 {{ (((overviewToday.runtime || {}).ws || {}).active_devices || 0) }}</div>
+                            <div class="text-xs text-gray-500 mt-2">
+                                实时用户数
+                                <button @click="openRealtimeOnlineModal" class="text-blue-600 hover:text-blue-700 underline underline-offset-2">
+                                    {{ (((overviewToday.runtime || {}).ws || {}).active_devices || 0) }}
+                                </button>
+                            </div>
                             <div class="text-xs text-gray-500">日志连接 {{ (((overviewToday.runtime || {}).ws || {}).log_connections || 0) }}（后台日志WS） · 通知连接 {{ (((overviewToday.runtime || {}).ws || {}).notify_connections || 0) }}（用户通知WS）</div>
                             <div class="text-xs text-gray-500">行情连接 {{ (((overviewToday.runtime || {}).ws || {}).market_connections || 0) }}（行情WS）</div>
                             <div class="text-xs text-gray-500">在线设备(5分钟) {{ ((overviewToday.runtime || {}).online_recent_devices_5m || 0) }}</div>
@@ -161,6 +166,46 @@
                             <div class="text-sm mt-2">总Token <span class="font-bold">{{ (((overviewToday.ai_usage || {}).total_tokens_today || 0)) }}</span></div>
                             <div class="text-xs text-gray-500">Prompt {{ ((overviewToday.ai_usage || {}).prompt_tokens_today || 0) }} · Completion {{ ((overviewToday.ai_usage || {}).completion_tokens_today || 0) }}</div>
                             <div class="text-xs text-gray-500 mt-2">估算成本 ¥{{ Number(((overviewToday.ai_usage || {}).estimated_cost_cny_today || 0)).toFixed(6) }}</div>
+                        </div>
+                    </div>
+
+                    <div v-if="onlineUsersModal.show" class="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+                        <div class="bg-white w-full max-w-5xl rounded shadow-xl">
+                            <div class="p-4 border-b flex items-center justify-between">
+                                <div>
+                                    <div class="text-lg font-bold">实时在线用户</div>
+                                    <div class="text-xs text-gray-500 mt-1">总计 {{ onlineUsersModal.total }} · 注册 {{ onlineUsersModal.registered }} · 游客 {{ onlineUsersModal.guest }}</div>
+                                </div>
+                                <div class="flex items-center gap-3">
+                                    <button @click="fetchRealtimeOnlineUsers" class="text-blue-600 hover:text-blue-700">刷新</button>
+                                    <button @click="onlineUsersModal.show = false" class="text-gray-500 hover:text-gray-700">关闭</button>
+                                </div>
+                            </div>
+                            <div class="p-4 max-h-[60vh] overflow-auto">
+                                <div v-if="onlineUsersModal.loading" class="text-sm text-gray-500">加载中...</div>
+                                <div v-else-if="onlineUsersModal.error" class="text-sm text-red-600">{{ onlineUsersModal.error }}</div>
+                                <table v-else class="w-full text-sm">
+                                    <thead class="bg-gray-50 border-b text-gray-600">
+                                        <tr>
+                                            <th class="p-2 text-left">用户名</th>
+                                            <th class="p-2 text-left">账号类型</th>
+                                            <th class="p-2 text-left">设备ID</th>
+                                            <th class="p-2 text-right">连接数</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y">
+                                        <tr v-for="u in onlineUsersModal.items" :key="`${u.device_id}_${u.username || ''}`">
+                                            <td class="p-2 font-mono">{{ u.username || '-' }}</td>
+                                            <td class="p-2">{{ u.account_type === 'registered' ? '正式注册' : '游客' }}</td>
+                                            <td class="p-2 font-mono text-xs break-all">{{ u.device_id || '-' }}</td>
+                                            <td class="p-2 text-right">{{ Number(u.connections || 0) }}</td>
+                                        </tr>
+                                        <tr v-if="!onlineUsersModal.items || onlineUsersModal.items.length === 0">
+                                            <td colspan="4" class="p-4 text-center text-gray-400">当前暂无在线设备</td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
                         </div>
                     </div>
 
@@ -1514,7 +1559,7 @@
                         <h2 class="text-2xl font-bold">新闻管理</h2>
                         <div class="flex items-center gap-2">
                             <button @click="fetchNews(1)" class="text-blue-500 hover:text-blue-700">刷新</button>
-                            <button @click="clearAllNews" class="text-red-600 hover:text-red-700">清空全部</button>
+                            <button @click="clearAllNews" class="text-gray-400 cursor-not-allowed" title="服务器新闻已改为长期保留">清空全部（已禁用）</button>
                         </div>
                     </div>
                     <div class="bg-white rounded shadow overflow-hidden">
@@ -1895,10 +1940,7 @@
 
         const __rawFetch = window.fetch.bind(window);
         const __savedAdminPrefixHint = localStorage.getItem('admin_api_prefix_hint') || '';
-        const __injectedAdminPrefix = String(window.ADMIN_API_PREFIX || '').trim();
-        window.__ADMIN_API_PREFIX__ = normalizeAdminApiPrefix(
-            __savedAdminPrefixHint || __injectedAdminPrefix || '/api/admin'
-        );
+        window.__ADMIN_API_PREFIX__ = normalizeAdminApiPrefix(__savedAdminPrefixHint || '/api/admin');
         window.fetch = (input, init) => {
             const currentPrefix = normalizeAdminApiPrefix(window.__ADMIN_API_PREFIX__ || '/api/admin');
             const rewriteAdminPath = (url) => String(url || '').replace(/\/api\/admin(?=\/|$)/g, currentPrefix);
@@ -2020,6 +2062,7 @@
                     watchlistStatsStorage: 'backend/data/watchlist_stats.json',
                     watchlistUserModal: { show: false, code: '', name: '', users: [] },
                     watchlistVolModal: { show: false, code: '', name: '', loading: false, error: '', summary: {}, rows: [] },
+                    onlineUsersModal: { show: false, loading: false, error: '', items: [], total: 0, registered: 0, guest: 0 },
                     newsItems: [],
                     newsSources: [],
                     newsFilter: { source: '', ai_status: 'all', keyword: '' },
@@ -2097,19 +2140,7 @@
                 };
                 document.addEventListener('visibilitychange', this._visibilityHandler);
                 if (this.token) {
-                    this.fetchConfig();
-                    this.fetchTodayOverview();
-                    this.startOverviewAutoRefresh();
-                    this.connectAdminWebSocket();
-                    this.fetchAdminPanelPath();
-                    this.fetchAdminApiPrefix();
-                    this.fetchDataFiles();
-                    // Pre-fetch
-                    this.fetchUsers();
-                    this.fetchOrders();
-                    this.fetchOrderStats();
-                    this.fetchReferrals(1);
-                    this.fetchWatchlistStats();
+                    this.bootstrapAuthedSession();
                 }
             },
             beforeUnmount() {
@@ -2253,12 +2284,91 @@
                     }
                     return null;
                 },
-                initAdminApiPrefixFromHint() {
-                    const hint = localStorage.getItem('admin_api_prefix_hint') || '';
-                    const fallback = '/api/admin';
-                    const finalPrefix = normalizeAdminApiPrefix(hint || fallback);
+                deriveAdminApiPrefixFromPanelPath() {
+                    const pathname = String(window.location.pathname || '').trim();
+                    if (!pathname) return '';
+                    const parts = pathname.split('/').filter(Boolean);
+                    if (parts.length === 0) return '';
+                    const lastPart = parts[parts.length - 1] || '';
+                    if (lastPart.includes('.')) {
+                        parts.pop();
+                    }
+                    if (parts.length === 0) return '';
+                    const panelPath = '/' + parts.join('/');
+                    if (panelPath === '/admin' || panelPath.startsWith('/admin/')) {
+                        return '/api/admin';
+                    }
+                    return normalizeAdminApiPrefix('/api' + panelPath);
+                },
+                buildAdminApiPrefixCandidates(extra = []) {
+                    const candidates = [];
+                    const pushCandidate = (raw) => {
+                        const text = String(raw || '').trim();
+                        if (!text) return;
+                        const normalized = normalizeAdminApiPrefix(text);
+                        if (!candidates.includes(normalized)) {
+                            candidates.push(normalized);
+                        }
+                    };
+
+                    pushCandidate(this.adminApiPrefix);
+                    pushCandidate(localStorage.getItem('admin_api_prefix_hint') || '');
+                    pushCandidate(this.deriveAdminApiPrefixFromPanelPath());
+                    if (Array.isArray(extra)) {
+                        for (const item of extra) pushCandidate(item);
+                    }
+                    pushCandidate('/api/admin');
+                    return candidates;
+                },
+                setAdminApiPrefixRuntime(prefix, persist = false) {
+                    const finalPrefix = normalizeAdminApiPrefix(prefix || '/api/admin');
                     this.adminApiPrefix = finalPrefix;
                     window.__ADMIN_API_PREFIX__ = finalPrefix;
+                    if (persist) {
+                        localStorage.setItem('admin_api_prefix_hint', finalPrefix);
+                    }
+                    return finalPrefix;
+                },
+                initAdminApiPrefixFromHint() {
+                    const hint = localStorage.getItem('admin_api_prefix_hint') || '';
+                    const fromPanelPath = this.deriveAdminApiPrefixFromPanelPath();
+                    this.setAdminApiPrefixRuntime(hint || fromPanelPath || '/api/admin', !!hint);
+                },
+                async resolveAdminApiPrefixForSession() {
+                    if (!this.token) {
+                        return this.adminApiPrefix || '/api/admin';
+                    }
+                    const candidates = this.buildAdminApiPrefixCandidates();
+                    for (const candidate of candidates) {
+                        this.setAdminApiPrefixRuntime(candidate, false);
+                        try {
+                            const res = await fetch(API_BASE_URL + '/api/admin/overview/today', { headers: this.getHeaders() });
+                            if (res.status === 404) {
+                                continue;
+                            }
+                            if (res.ok || res.status === 401 || res.status === 403) {
+                                this.setAdminApiPrefixRuntime(candidate, true);
+                                return candidate;
+                            }
+                        } catch (_) {}
+                    }
+                    return this.setAdminApiPrefixRuntime(this.adminApiPrefix || '/api/admin', false);
+                },
+                async bootstrapAuthedSession() {
+                    await this.resolveAdminApiPrefixForSession();
+                    this.fetchConfig();
+                    this.fetchTodayOverview();
+                    this.startOverviewAutoRefresh();
+                    this.connectAdminWebSocket();
+                    this.fetchAdminPanelPath();
+                    this.fetchAdminApiPrefix();
+                    this.fetchDataFiles();
+                    // Pre-fetch
+                    this.fetchUsers();
+                    this.fetchOrders();
+                    this.fetchOrderStats();
+                    this.fetchReferrals(1);
+                    this.fetchWatchlistStats();
                 },
                 snapshotConfigSection(section) {
                     this.configSnapshots[section] = this.stableStringify(this.getConfigSectionValue(section));
@@ -2569,6 +2679,28 @@
                         this.showMsg(e.message || '今日统计加载失败', 'error');
                     }
                 },
+                async openRealtimeOnlineModal() {
+                    this.onlineUsersModal.show = true;
+                    await this.fetchRealtimeOnlineUsers();
+                },
+                async fetchRealtimeOnlineUsers() {
+                    this.onlineUsersModal.loading = true;
+                    this.onlineUsersModal.error = '';
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/overview/online_users', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '在线用户列表加载失败');
+                        this.onlineUsersModal.items = Array.isArray(data.items) ? data.items : [];
+                        this.onlineUsersModal.total = Number(data.total || 0);
+                        this.onlineUsersModal.registered = Number(data.registered || 0);
+                        this.onlineUsersModal.guest = Number(data.guest || 0);
+                    } catch (e) {
+                        this.onlineUsersModal.error = e.message || '在线用户列表加载失败';
+                    } finally {
+                        this.onlineUsersModal.loading = false;
+                    }
+                },
                 async fetchSecurityLogs(page = null) {
                     try {
                         const nextPage = Math.max(1, Number(page || this.securityPagination.page || 1));
@@ -2873,18 +3005,52 @@
                     }
 
                     try {
-                        const res = await fetch(API_BASE_URL + '/api/admin/login', {
-                            method: 'POST',
-                            headers: { 'Content-Type': 'application/json' },
-                            body: JSON.stringify({
-                                username_b64: this.encodeAuthText(username),
-                                password_b64: this.encodeAuthText(password)
-                            })
-                        });
-                        const data = await res.json();
-                        if (!res.ok) throw new Error(data.detail || '登录失败');
+                        const payload = {
+                            username_b64: this.encodeAuthText(username),
+                            password_b64: this.encodeAuthText(password)
+                        };
+                        const candidates = this.buildAdminApiPrefixCandidates();
+                        let matchedPrefix = '';
+                        let lastError = new Error('登录失败');
+                        let pathMismatchOnly = true;
+                        this.token = '';
 
-                        this.token = data.token;
+                        for (const candidate of candidates) {
+                            this.setAdminApiPrefixRuntime(candidate, false);
+                            try {
+                                const res = await fetch(API_BASE_URL + '/api/admin/login', {
+                                    method: 'POST',
+                                    headers: { 'Content-Type': 'application/json' },
+                                    body: JSON.stringify(payload)
+                                });
+                                const data = await res.json().catch(() => ({}));
+                                if (res.ok) {
+                                    matchedPrefix = candidate;
+                                    this.token = data.token;
+                                    pathMismatchOnly = false;
+                                    break;
+                                }
+
+                                const message = String((data && data.detail) || '').trim() || '登录失败';
+                                lastError = new Error(message);
+                                if (res.status !== 404) {
+                                    pathMismatchOnly = false;
+                                    break;
+                                }
+                            } catch (e) {
+                                lastError = e instanceof Error ? e : new Error('登录失败');
+                                pathMismatchOnly = false;
+                            }
+                        }
+
+                        if (!this.token) {
+                            if (pathMismatchOnly) {
+                                throw new Error('管理员接口路径不匹配，请检查后台地址与API前缀配置');
+                            }
+                            throw lastError;
+                        }
+
+                        this.setAdminApiPrefixRuntime(matchedPrefix || this.adminApiPrefix || '/api/admin', true);
                         localStorage.setItem('admin_token', this.token);
                         this.loginForm.password = '';
                         this.showMsg('登录成功', 'success');
@@ -3026,10 +3192,7 @@
                         if (res.status === 403) { this.clearAuth(true); return; }
                         const data = await res.json();
                         if (res.ok) {
-                            const p = normalizeAdminApiPrefix(data.prefix || '/api/admin');
-                            this.adminApiPrefix = p;
-                            window.__ADMIN_API_PREFIX__ = p;
-                            localStorage.setItem('admin_api_prefix_hint', p);
+                            this.setAdminApiPrefixRuntime(data.prefix || '/api/admin', true);
                             this.snapshotConfigSection('admin_path');
                         }
                     } catch (e) {
@@ -3073,10 +3236,7 @@
                         if (res.status === 403) { this.clearAuth(true); return; }
                         const data = await res.json();
                         if (!res.ok) throw new Error(data.detail || '保存管理员API前缀失败');
-                        const finalPrefix = normalizeAdminApiPrefix(data.prefix || prefix);
-                        this.adminApiPrefix = finalPrefix;
-                        window.__ADMIN_API_PREFIX__ = finalPrefix;
-                        localStorage.setItem('admin_api_prefix_hint', finalPrefix);
+                        const finalPrefix = this.setAdminApiPrefixRuntime(data.prefix || prefix, true);
                         this.snapshotConfigSection('admin_path');
                         this.showMsg(`管理员API前缀已更新为 ${finalPrefix}`, 'success');
                     } catch (e) {

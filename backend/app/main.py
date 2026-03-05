@@ -272,8 +272,27 @@ def _should_log_api_path(path: str) -> bool:
     return not any(path.startswith(prefix) for prefix in USER_OP_LOG_SKIP_PREFIXES)
 
 
+def _is_admin_api_path(path: str) -> bool:
+    safe_path = str(path or "").strip()
+    normalized = safe_path.rstrip("/") or "/"
+    if normalized == "/api/admin" or safe_path.startswith("/api/admin/"):
+        return True
+    try:
+        custom_prefix = str(admin.get_admin_api_prefix() or "/api/admin").strip() or "/api/admin"
+    except Exception:
+        custom_prefix = "/api/admin"
+    if custom_prefix != "/api/admin" and (
+        normalized == custom_prefix or normalized.startswith(custom_prefix + "/")
+    ):
+        return True
+    return False
+
+
 def _resolve_actor(path: str, request: Request) -> str:
-    if path.startswith("/api/admin/"):
+    admin_token = (request.headers.get("X-Admin-Token") or "").strip()
+    if admin_token:
+        return "admin"
+    if _is_admin_api_path(path):
         return "admin"
     device_id = (request.headers.get("X-Device-ID") or "").strip()
     if device_id.startswith("guest") or device_id.startswith("visitor_"):
@@ -295,7 +314,7 @@ def _maybe_log_online_presence(
     path = request.url.path
     if not path.startswith("/api/"):
         return
-    if path.startswith("/api/admin/"):
+    if _is_admin_api_path(path):
         return
     if int(status_code or 0) >= 400:
         return
@@ -533,10 +552,12 @@ async def user_operation_logger(request: Request, call_next):
     device_info = _device_info_from_request(request)
     client_ip = _client_ip_from_request(request)
 
+    is_options = str(method or "").upper() == "OPTIONS"
+
     try:
         response = await call_next(request)
     except Exception as e:
-        if _should_log_api_path(path):
+        if (not is_options) and _should_log_api_path(path):
             log_user_operation(
                 "api_call",
                 status="failed",
@@ -551,7 +572,7 @@ async def user_operation_logger(request: Request, call_next):
             )
         raise
 
-    if _should_log_api_path(path):
+    if (not is_options) and _should_log_api_path(path):
         status_code = int(getattr(response, "status_code", 0) or 0)
         latency_ms = int((time.time() - start_ts) * 1000)
         log_user_operation(
@@ -1496,7 +1517,7 @@ async def websocket_endpoint(websocket: WebSocket):
 @app.get("/api/search")
 async def search_stock(q: str, user: models.User = Depends(check_data_permission)):
     """
-    搜索股票（支持代码、拼音、名称）
+    搜索股票（本地索引：支持代码、名称）
     """
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, lambda: data_provider.search_stock(q))
@@ -1537,24 +1558,52 @@ async def api_favorite_quotes(codes: str = "", user: models.User = Depends(check
         return []
 
     unique_codes = list(dict.fromkeys(code_list))
+    await asyncio.to_thread(ensure_stock_quotes_cache)
     cached_quotes = _get_stock_quotes_cache()
     cached_map = {}
+
+    def _store_quote_row(raw_row):
+        if not isinstance(raw_row, dict):
+            return
+        c = normalize_stock_code(str(raw_row.get("code", "")))
+        if not c:
+            return
+        row = copy.deepcopy(raw_row)
+        row["code"] = c
+        cached_map[c] = row
+        digits = "".join(filter(str.isdigit, c))
+        if len(digits) == 6:
+            cached_map[digits] = row
+
     for row in cached_quotes:
-        c = normalize_stock_code(str(row.get("code", "")))
-        if c:
-            cached_map[c] = copy.deepcopy(row)
-            digits = "".join(filter(str.isdigit, c))
-            if len(digits) == 6:
-                cached_map[digits] = copy.deepcopy(row)
+        _store_quote_row(row)
+
+    missing_codes = []
+    for req_code in unique_codes:
+        key = req_code
+        digits = "".join(filter(str.isdigit, req_code))
+        hit = cached_map.get(key) or (cached_map.get(digits) if len(digits) == 6 else None)
+        if not hit:
+            missing_codes.append(req_code)
+
+    if missing_codes:
+        try:
+            fresh_quotes = await asyncio.to_thread(data_provider.fetch_quotes, missing_codes)
+            for row in (fresh_quotes or []):
+                _store_quote_row(row)
+        except Exception:
+            pass
 
     enriched = []
     for req_code in unique_codes:
-        stock = copy.deepcopy(cached_map.get(req_code) or cached_map.get("".join(filter(str.isdigit, req_code))) or {})
+        req_digits = "".join(filter(str.isdigit, req_code))
+        stock = copy.deepcopy(cached_map.get(req_code) or cached_map.get(req_digits) or {})
         code = normalize_stock_code(stock.get("code", req_code))
         if not code:
             continue
         stock["code"] = code
-        stock.setdefault("name", req_code)
+        fallback_name = str(data_provider.get_stock_name_local(code) or "").strip() or req_code
+        stock.setdefault("name", fallback_name)
         stock.setdefault("current", 0)
         stock.setdefault("change_percent", 0)
         stock.setdefault("turnover", 0)

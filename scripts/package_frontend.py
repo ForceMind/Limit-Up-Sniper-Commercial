@@ -41,8 +41,6 @@ def _inject_runtime_overrides(config_path: Path, api_base: str, admin_api_prefix
         flags=re.MULTILINE,
     )
     lines = [marker, f'window.API_PREFIX = "{api_base}";']
-    if admin_api_prefix:
-        lines.append(f'window.ADMIN_API_PREFIX = "{admin_api_prefix}";')
     patched = "\n".join(lines) + "\n" + cleaned
     config_path.write_text(patched, encoding="utf-8")
 
