@@ -778,7 +778,6 @@ params_menu() {
 main_menu() {
     while true; do
         show_status
-        echo "12) 程序更新"
         echo "1) 启动后端服务"
         echo "2) 重启后端服务"
         echo "3) 停止后端服务"
@@ -790,6 +789,7 @@ main_menu() {
         echo "9) 跟踪日志(实时)"
         echo "10) 参数设置"
         echo "11) 管理员账号密码"
+        echo "12) 程序更新"
         echo "0) 退出"
         read -r -p "请选择: " choice
         case "$choice" in
