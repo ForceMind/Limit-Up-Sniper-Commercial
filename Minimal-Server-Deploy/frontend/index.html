@@ -2894,7 +2894,7 @@
                         localStorage.setItem('sniper_username', data.username || username);
                         this.deviceId = data.token;
                         this.isRegisteredAccount = true;
-                        this.connectNotifyWebSocket();
+                        this.connectWebSocket();
                         this.displayUsername = data.username || username;
                         this.accountCanApplyTrial = !!data.can_apply_trial;
                         this.loadLocalFavorites();
@@ -3906,16 +3906,15 @@
                 },
                 
                 connectWebSocket() {
-                    if (!this.hasDataAccess) return;
+                    const shouldConnect = !!this.deviceId && (this.hasDataAccess || this.isRegisteredAccount);
+                    if (!shouldConnect) return;
                     if (this.wsConnected || this.wsConnecting) return;
                     if (this.logSocket && (this.logSocket.readyState === WebSocket.OPEN || this.logSocket.readyState === WebSocket.CONNECTING)) {
                         return;
                     }
                     const wsBase = this.resolveWsBase();
-
-                    const wsUrl = this.deviceId
-                        ? `${wsBase}/ws/logs?device_id=${encodeURIComponent(this.deviceId)}`
-                        : `${wsBase}/ws/logs`;
+                    const encodedDeviceId = encodeURIComponent(this.deviceId);
+                    const wsUrl = `${wsBase}/ws/logs?channel=client&device_id=${encodedDeviceId}&ws_token=${encodedDeviceId}`;
                     const ws = new WebSocket(wsUrl);
                     this.logSocket = ws;
                     this.wsConnecting = true;
@@ -3926,19 +3925,48 @@
                             clearTimeout(this.wsReconnectTimer);
                             this.wsReconnectTimer = null;
                         }
+                        if (this.notifyReconnectTimer) {
+                            clearTimeout(this.notifyReconnectTimer);
+                            this.notifyReconnectTimer = null;
+                        }
+                        if (this.marketReconnectTimer) {
+                            clearTimeout(this.marketReconnectTimer);
+                            this.marketReconnectTimer = null;
+                        }
                         this.wsConnected = true;
+                        this.notifyWsConnected = !!this.isRegisteredAccount;
+                        this.marketWsConnected = !!this.hasDataAccess;
+                        this.stopMarketFallbackPolling();
                         this.addLog('系统连接成功');
                     };
                     
                     ws.onmessage = (event) => {
-                        this.addLog(event.data);
+                        let payload = null;
+                        try {
+                            payload = JSON.parse(event.data);
+                        } catch (_) {
+                            payload = null;
+                        }
+                        if (!payload || !payload.event) {
+                            this.addLog(event.data);
+                            return;
+                        }
+                        this.handleUnifiedWsEvent(payload);
                     };
                     
                     ws.onclose = () => {
                         this.wsConnected = false;
                         this.wsConnecting = false;
+                        this.notifyWsConnected = false;
+                        this.notifyWsConnecting = false;
+                        this.marketWsConnected = false;
+                        this.marketWsConnecting = false;
                         this.logSocket = null;
                         if (this.hasDataAccess) {
+                            this.startMarketFallbackPolling();
+                        }
+                        const keepWs = !!this.deviceId && (this.hasDataAccess || this.isRegisteredAccount);
+                        if (keepWs) {
                             if (this.wsReconnectTimer) return;
                             this.wsReconnectTimer = setTimeout(() => {
                                 this.wsReconnectTimer = null;
@@ -3946,6 +3974,81 @@
                             }, 3000);
                         }
                     };
+                },
+                async handleUnifiedWsEvent(payload) {
+                    if (!payload || !payload.event) return;
+                    if (payload.event === 'log_history') {
+                        const lines = Array.isArray(payload.lines) ? payload.lines : [];
+                        lines.forEach((line) => this.addLog(line));
+                        return;
+                    }
+                    if (payload.event === 'log_line') {
+                        if (payload.line) this.addLog(payload.line);
+                        return;
+                    }
+
+                    if (payload.event === 'membership_approved') {
+                        this.showMsg(payload.message || '会员审批已通过，权益已生效', 'success');
+                        if (payload.referral_bonus_token) {
+                            const days = Number(payload.referral_bonus_days || 0);
+                            const bonusMsg = days > 0
+                                ? `邀请码奖励已触发，赠送口令：${payload.referral_bonus_token}（${days}天）`
+                                : `邀请码奖励已触发，赠送口令：${payload.referral_bonus_token}`;
+                            this.showMsg(bonusMsg, 'info');
+                        }
+                        await this.refreshCurrentUserInfo();
+                        if (this.hasDataAccess) {
+                            this.refreshMarketSnapshots(true);
+                        }
+                        if (this.showSubscriptionModal && this.purchaseStep === 3) {
+                            this.showSubscriptionModal = false;
+                            this.purchaseStep = 1;
+                        }
+                        return;
+                    }
+                    if (payload.event === 'membership_rejected') {
+                        this.showMsg(payload.message || '订单审核未通过', 'error');
+                        return;
+                    }
+                    if (payload.event === 'account_banned') {
+                        const banMsg = payload.message || payload.reason || '账号已被封禁';
+                        this.showMsg(banMsg, 'error');
+                        localStorage.removeItem('sniper_token');
+                        localStorage.removeItem('sniper_username');
+                        this.deviceId = '';
+                        this.displayUsername = '';
+                        this.isRegisteredAccount = false;
+                        this.accountCanApplyTrial = false;
+                        this.userInfo = { ...(this.userInfo || {}), is_expired: true };
+                        if (this.wsReconnectTimer) { clearTimeout(this.wsReconnectTimer); this.wsReconnectTimer = null; }
+                        if (this.notifyReconnectTimer) { clearTimeout(this.notifyReconnectTimer); this.notifyReconnectTimer = null; }
+                        if (this.marketReconnectTimer) { clearTimeout(this.marketReconnectTimer); this.marketReconnectTimer = null; }
+                        if (this.logSocket) { try { this.logSocket.close(); } catch (e) {} this.logSocket = null; }
+                        if (this.marketSocket) { try { this.marketSocket.close(); } catch (e) {} this.marketSocket = null; }
+                        if (this.notifySocket) { try { this.notifySocket.close(); } catch (e) {} this.notifySocket = null; }
+                        this.showLoginModal = true;
+                        return;
+                    }
+                    if (payload.event === 'account_unbanned') {
+                        this.showMsg(payload.message || '账号封禁已解除，请重新登录', 'info');
+                        return;
+                    }
+
+                    if (payload.event === 'quotes_tick') {
+                        this.applyQuoteTick(payload.quotes || []);
+                        return;
+                    }
+                    if (payload.event === 'market_refresh') {
+                        this.triggerRefreshByTargets(payload.targets || []);
+                        return;
+                    }
+                    if (payload.event === 'market_sentiment') {
+                        this.applyMarketSentimentPayload(payload.data || {});
+                        return;
+                    }
+                    if (payload.event === 'lhb_status') {
+                        this.isSyncingLHB = !!payload.is_syncing;
+                    }
                 },
                 async refreshCurrentUserInfo() {
                     if (!this.deviceId) return;
@@ -3967,160 +4070,10 @@
                     }
                 },
                 connectNotifyWebSocket() {
-                    if (!this.deviceId) return;
-                    if (this.notifyWsConnected || this.notifyWsConnecting) return;
-                    if (this.notifySocket && (this.notifySocket.readyState === WebSocket.OPEN || this.notifySocket.readyState === WebSocket.CONNECTING)) {
-                        return;
-                    }
-                    if (this.notifySocket) {
-                        try { this.notifySocket.close(); } catch (e) {}
-                        this.notifySocket = null;
-                    }
-                    const wsBase = this.resolveWsBase();
-                    const wsUrl = `${wsBase}/ws/logs?channel=notify&device_id=${encodeURIComponent(this.deviceId)}`;
-                    const ws = new WebSocket(wsUrl);
-                    this.notifySocket = ws;
-                    this.notifyWsConnecting = true;
-
-                    ws.onopen = () => {
-                        this.notifyWsConnecting = false;
-                        if (this.notifyReconnectTimer) {
-                            clearTimeout(this.notifyReconnectTimer);
-                            this.notifyReconnectTimer = null;
-                        }
-                        this.notifyWsConnected = true;
-                    };
-
-                    ws.onmessage = async (event) => {
-                        let payload = null;
-                        try {
-                            payload = JSON.parse(event.data);
-                        } catch (e) {
-                            return;
-                        }
-                        if (!payload || !payload.event) return;
-
-                        if (payload.event === 'membership_approved') {
-                            this.showMsg(payload.message || '会员审批已通过，权益已生效', 'success');
-                            if (payload.referral_bonus_token) {
-                                const days = Number(payload.referral_bonus_days || 0);
-                                const bonusMsg = days > 0
-                                    ? `邀请码奖励已触发，赠送口令：${payload.referral_bonus_token}（${days}天）`
-                                    : `邀请码奖励已触发，赠送口令：${payload.referral_bonus_token}`;
-                                this.showMsg(bonusMsg, 'info');
-                            }
-                            await this.refreshCurrentUserInfo();
-                            if (this.hasDataAccess) {
-                                this.refreshMarketSnapshots(true);
-                            }
-                            if (this.showSubscriptionModal && this.purchaseStep === 3) {
-                                this.showSubscriptionModal = false;
-                                this.purchaseStep = 1;
-                            }
-                        } else if (payload.event === 'membership_rejected') {
-                            this.showMsg(payload.message || '订单审核未通过', 'error');
-                        } else if (payload.event === 'account_banned') {
-                            const banMsg = payload.message || payload.reason || '账号已被封禁';
-                            this.showMsg(banMsg, 'error');
-                            localStorage.removeItem('sniper_token');
-                            localStorage.removeItem('sniper_username');
-                            this.deviceId = '';
-                            this.displayUsername = '';
-                            this.isRegisteredAccount = false;
-                            this.accountCanApplyTrial = false;
-                            this.userInfo = { ...(this.userInfo || {}), is_expired: true };
-                            if (this.wsReconnectTimer) { clearTimeout(this.wsReconnectTimer); this.wsReconnectTimer = null; }
-                            if (this.notifyReconnectTimer) { clearTimeout(this.notifyReconnectTimer); this.notifyReconnectTimer = null; }
-                            if (this.marketReconnectTimer) { clearTimeout(this.marketReconnectTimer); this.marketReconnectTimer = null; }
-                            if (this.logSocket) { try { this.logSocket.close(); } catch (e) {} this.logSocket = null; }
-                            if (this.marketSocket) { try { this.marketSocket.close(); } catch (e) {} this.marketSocket = null; }
-                            if (this.notifySocket) { try { this.notifySocket.close(); } catch (e) {} this.notifySocket = null; }
-                            this.showLoginModal = true;
-                        } else if (payload.event === 'account_unbanned') {
-                            this.showMsg(payload.message || '账号封禁已解除，请重新登录', 'info');
-                        }
-                    };
-
-                    ws.onclose = () => {
-                        this.notifyWsConnected = false;
-                        this.notifyWsConnecting = false;
-                        this.notifySocket = null;
-                        if (this.deviceId) {
-                            if (this.notifyReconnectTimer) return;
-                            this.notifyReconnectTimer = setTimeout(() => {
-                                this.notifyReconnectTimer = null;
-                                this.connectNotifyWebSocket();
-                            }, 3000);
-                        }
-                    };
+                    this.connectWebSocket();
                 },
                 connectMarketWebSocket() {
-                    if (!this.hasDataAccess) return;
-                    if (this.marketWsConnected || this.marketWsConnecting) return;
-                    if (this.marketSocket && (this.marketSocket.readyState === WebSocket.OPEN || this.marketSocket.readyState === WebSocket.CONNECTING)) {
-                        return;
-                    }
-                    if (this.marketSocket) {
-                        try { this.marketSocket.close(); } catch (e) {}
-                        this.marketSocket = null;
-                    }
-                    const wsBase = this.resolveWsBase();
-                    const wsUrl = this.deviceId
-                        ? `${wsBase}/ws/logs?channel=market&device_id=${encodeURIComponent(this.deviceId)}`
-                        : `${wsBase}/ws/logs?channel=market`;
-                    const ws = new WebSocket(wsUrl);
-                    this.marketSocket = ws;
-                    this.marketWsConnecting = true;
-
-                    ws.onopen = () => {
-                        this.marketWsConnecting = false;
-                        if (this.marketReconnectTimer) {
-                            clearTimeout(this.marketReconnectTimer);
-                            this.marketReconnectTimer = null;
-                        }
-                        this.marketWsConnected = true;
-                        this.stopMarketFallbackPolling();
-                    };
-
-                    ws.onmessage = (event) => {
-                        let payload = null;
-                        try {
-                            payload = JSON.parse(event.data);
-                        } catch (e) {
-                            return;
-                        }
-                        if (!payload || !payload.event) return;
-
-                        if (payload.event === 'quotes_tick') {
-                            this.applyQuoteTick(payload.quotes || []);
-                            return;
-                        }
-                        if (payload.event === 'market_refresh') {
-                            this.triggerRefreshByTargets(payload.targets || []);
-                            return;
-                        }
-                        if (payload.event === 'market_sentiment') {
-                            this.applyMarketSentimentPayload(payload.data || {});
-                            return;
-                        }
-                        if (payload.event === 'lhb_status') {
-                            this.isSyncingLHB = !!payload.is_syncing;
-                        }
-                    };
-
-                    ws.onclose = () => {
-                        this.marketWsConnected = false;
-                        this.marketWsConnecting = false;
-                        this.marketSocket = null;
-                        this.startMarketFallbackPolling();
-                        if (this.hasDataAccess) {
-                            if (this.marketReconnectTimer) return;
-                            this.marketReconnectTimer = setTimeout(() => {
-                                this.marketReconnectTimer = null;
-                                this.connectMarketWebSocket();
-                            }, 3000);
-                        }
-                    };
+                    this.connectWebSocket();
                 },
                 _shouldThrottleWsRefresh(key, intervalMs) {
                     const now = Date.now();
@@ -4408,7 +4361,6 @@
                     }
                     this.ensureTabData(this.activeTab, true);
                     if (!this.wsConnected) this.connectWebSocket();
-                    if (!this.marketWsConnected) this.connectMarketWebSocket();
                 },
                 getSeatName(stock) {
                     if (stock.likely_seats && stock.likely_seats.length > 0) {
@@ -5379,7 +5331,7 @@
                 // Init User
                 this.checkLogin().then(() => {
                     if (this.deviceId && this.isRegisteredAccount) {
-                        this.connectNotifyWebSocket();
+                        this.connectWebSocket();
                     }
                     if (this.hasDataAccess) {
                         this.refreshMarketSnapshots(true);

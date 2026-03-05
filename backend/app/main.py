@@ -1570,12 +1570,17 @@ def refresh_watchlist():
 async def websocket_endpoint(websocket: WebSocket):
     channel = (websocket.query_params.get("channel") or "logs").strip().lower()
     device_id = (websocket.query_params.get("device_id") or "").strip()
+    ws_token = (websocket.query_params.get("ws_token") or "").strip()
     admin_token = (websocket.query_params.get("admin_token") or "").strip()
-    if channel not in ("logs", "notify", "market", "admin"):
+    if channel not in ("logs", "notify", "market", "admin", "client"):
         channel = "logs"
-    if channel in ("logs", "notify", "market") and not device_id:
+    if channel in ("logs", "notify", "market", "client") and not device_id:
         await websocket.close(code=1008)
         return
+    if channel == "client":
+        if not ws_token or ws_token != device_id:
+            await websocket.close(code=1008)
+            return
     if channel == "admin":
         sessions = admin._cleanup_sessions(admin._load_sessions())
         if not admin_token or admin_token not in sessions:
@@ -1596,6 +1601,16 @@ async def websocket_endpoint(websocket: WebSocket):
                     await websocket.send_text(str(line))
                 except Exception:
                     break
+        elif channel == "client":
+            try:
+                await websocket.send_json(
+                    {
+                        "event": "log_history",
+                        "lines": [str(x) for x in _recent_analysis_log_lines(limit=80)],
+                    }
+                )
+            except Exception:
+                pass
         while True:
             await websocket.receive_text()  # Keep connection open
     except WebSocketDisconnect:

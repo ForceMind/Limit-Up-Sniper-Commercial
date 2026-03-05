@@ -558,11 +558,6 @@ class UpdateAdminAccountSchema(BaseModel):
     new_username_b64: Optional[str] = ""
 
 
-class ResetAdminPasswordSchema(BaseModel):
-    new_password: Optional[str] = ""
-    new_password_b64: Optional[str] = ""
-
-
 class UpdateAdminPanelPathSchema(BaseModel):
     path: str
 
@@ -742,71 +737,6 @@ async def update_admin_account(
         detail="admin_account_updated",
     )
     return {"status": "success", "message": "Admin account updated", "username": cred.get("username", "")}
-
-
-@router.get("/account/current")
-async def get_admin_account_current(authorized: bool = Depends(verify_admin)):
-    cred = _load_admin_credentials()
-    username = str(cred.get("username", "")).strip()
-    plain_password = _resolve_admin_plain_password(cred)
-    password_known = bool(plain_password)
-    if password_known and str(cred.get("password_plain", "")).strip() != plain_password:
-        cred["password_plain"] = plain_password
-        _save_json(ADMIN_CREDENTIALS_FILE, cred)
-
-    log_user_operation(
-        "view_admin_account_current",
-        status="success",
-        actor="admin",
-        method="GET",
-        path="/api/admin/account/current",
-        username=username,
-        detail=f"password_known={1 if password_known else 0}",
-    )
-    return {
-        "status": "success",
-        "username": username,
-        "password": plain_password if password_known else "",
-        "password_known": password_known,
-        "updated_at": str(cred.get("updated_at", "")).strip(),
-        "message": "" if password_known else "当前密码为历史加密口令，无法直接回显，请点击重置密码。",
-    }
-
-
-@router.post("/account/reset_password")
-async def reset_admin_account_password(
-    payload: ResetAdminPasswordSchema,
-    authorized: bool = Depends(verify_admin),
-):
-    cred = _load_admin_credentials()
-    username = str(cred.get("username", "")).strip() or "admin"
-    raw_new_password = _read_transport_field(payload.new_password, payload.new_password_b64).strip()
-    next_password = raw_new_password or _generate_random_password(12)
-    if len(next_password) < 6:
-        raise HTTPException(status_code=400, detail="Password must be at least 6 characters")
-
-    salt = os.urandom(8).hex()
-    cred["salt"] = salt
-    cred["password_hash"] = _hash_password(next_password, salt)
-    cred["password_plain"] = next_password
-    cred["updated_at"] = datetime.utcnow().isoformat()
-    _save_json(ADMIN_CREDENTIALS_FILE, cred)
-
-    log_user_operation(
-        "reset_admin_password",
-        status="success",
-        actor="admin",
-        method="POST",
-        path="/api/admin/account/reset_password",
-        username=username,
-        detail="admin_password_reset",
-    )
-    return {
-        "status": "success",
-        "username": username,
-        "new_password": next_password,
-        "updated_at": cred.get("updated_at"),
-    }
 
 
 @router.get("/panel_path")

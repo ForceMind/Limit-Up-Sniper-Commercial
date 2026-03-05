@@ -9,6 +9,8 @@ SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
 BACKEND_DATA_DIR="${APP_DIR}/backend/data"
 ADMIN_PANEL_PATH_FILE="${BACKEND_DATA_DIR}/admin_panel_path.json"
 ADMIN_API_PREFIX_FILE="${BACKEND_DATA_DIR}/admin_api_prefix.json"
+ADMIN_CREDENTIALS_FILE="${BACKEND_DATA_DIR}/admin_credentials.json"
+ADMIN_SECRET_FILE="${BACKEND_DATA_DIR}/admin_token.txt"
 DEFAULT_NGINX_CONF_1="/etc/nginx/sites-available/${APP_NAME}"
 DEFAULT_NGINX_CONF_2="/etc/nginx/conf.d/${APP_NAME}.conf"
 
@@ -167,6 +169,221 @@ except Exception:
     pass
 print(prefix)
 PY
+}
+
+show_admin_account_credential() {
+    run_privileged mkdir -p "$BACKEND_DATA_DIR"
+    local output
+    output="$(run_privileged python3 - "$ADMIN_CREDENTIALS_FILE" "$ADMIN_SECRET_FILE" <<'PY'
+import json
+import os
+import sys
+import hashlib
+
+cred_file = sys.argv[1]
+secret_file = sys.argv[2]
+
+def hash_password(password: str, salt: str) -> str:
+    return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+username = "admin"
+updated_at = ""
+plain = ""
+salt = ""
+password_hash = ""
+
+if os.path.exists(cred_file):
+    try:
+        with open(cred_file, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        if isinstance(obj, dict):
+            username = str(obj.get("username") or username).strip() or "admin"
+            updated_at = str(obj.get("updated_at") or "").strip()
+            plain = str(obj.get("password_plain") or "").strip()
+            salt = str(obj.get("salt") or "").strip()
+            password_hash = str(obj.get("password_hash") or "").strip()
+    except Exception:
+        pass
+
+if not plain and salt and password_hash:
+    candidates = []
+    if os.path.exists(secret_file):
+        try:
+            with open(secret_file, "r", encoding="utf-8") as f:
+                token = str(f.read() or "").strip()
+            if len(token) >= 6:
+                candidates.append(token)
+        except Exception:
+            pass
+    candidates.append("admin123456")
+    seen = set()
+    for candidate in candidates:
+        c = str(candidate or "").strip()
+        if not c or c in seen:
+            continue
+        seen.add(c)
+        if hash_password(c, salt) == password_hash:
+            plain = c
+            break
+
+if plain:
+    print("OK|{}|{}|{}".format(username, plain, updated_at))
+else:
+    print("NEED_RESET|{}||{}".format(username, updated_at))
+PY
+)"
+
+    local status username password updated_at
+    IFS='|' read -r status username password updated_at <<< "$output"
+
+    echo "管理员用户名: ${username:-admin}"
+    if [ "$status" = "OK" ] && [ -n "${password:-}" ]; then
+        echo "管理员密码: $password"
+    else
+        echo "管理员密码: 当前无法直接回显，请先执行密码重置"
+    fi
+    echo "更新时间: ${updated_at:-未知}"
+}
+
+reset_admin_password_core() {
+    local requested_password="${1:-}"
+    run_privileged mkdir -p "$BACKEND_DATA_DIR"
+    run_privileged python3 - "$ADMIN_CREDENTIALS_FILE" "$requested_password" <<'PY'
+import json
+import os
+import sys
+import hashlib
+import secrets
+from datetime import datetime
+
+cred_file = sys.argv[1]
+raw_password = str(sys.argv[2] or "").strip()
+
+def hash_password(password: str, salt: str) -> str:
+    return hashlib.sha256((salt + password).encode("utf-8")).hexdigest()
+
+def random_password(length: int = 12) -> str:
+    alphabet = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    size = max(8, min(int(length or 12), 24))
+    return "".join(secrets.choice(alphabet) for _ in range(size))
+
+cred = {}
+if os.path.exists(cred_file):
+    try:
+        with open(cred_file, "r", encoding="utf-8") as f:
+            obj = json.load(f)
+        if isinstance(obj, dict):
+            cred = obj
+    except Exception:
+        cred = {}
+
+username = str(cred.get("username") or "admin").strip() or "admin"
+new_password = raw_password or random_password(12)
+if len(new_password) < 6:
+    print("ERROR|密码长度必须至少6位")
+    sys.exit(0)
+
+salt = os.urandom(8).hex()
+cred.update(
+    {
+        "username": username,
+        "salt": salt,
+        "password_hash": hash_password(new_password, salt),
+        "password_plain": new_password,
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+)
+
+os.makedirs(os.path.dirname(cred_file), exist_ok=True)
+with open(cred_file, "w", encoding="utf-8") as f:
+    json.dump(cred, f, ensure_ascii=False, indent=2)
+try:
+    os.chmod(cred_file, 0o600)
+except Exception:
+    pass
+
+print("OK|{}|{}|{}".format(username, new_password, cred.get("updated_at", "")))
+PY
+}
+
+reset_admin_password_random() {
+    local output
+    output="$(reset_admin_password_core "")"
+    local status username password updated_at
+    IFS='|' read -r status username password updated_at <<< "$output"
+    if [ "$status" != "OK" ]; then
+        log_error "${username:-重置失败}"
+        pause_enter
+        return
+    fi
+    log_info "管理员密码已重置"
+    echo "管理员用户名: ${username:-admin}"
+    echo "新密码: ${password:-}"
+    echo "更新时间: ${updated_at:-未知}"
+    pause_enter
+}
+
+reset_admin_password_custom() {
+    local p1 p2
+    read -r -s -p "请输入新管理员密码(至少6位): " p1
+    echo ""
+    read -r -s -p "请再次输入新管理员密码: " p2
+    echo ""
+    if [ "$p1" != "$p2" ]; then
+        log_error "两次输入的密码不一致"
+        pause_enter
+        return
+    fi
+    if [ "${#p1}" -lt 6 ]; then
+        log_error "密码长度必须至少6位"
+        pause_enter
+        return
+    fi
+    local output
+    output="$(reset_admin_password_core "$p1")"
+    local status username password updated_at
+    IFS='|' read -r status username password updated_at <<< "$output"
+    if [ "$status" != "OK" ]; then
+        log_error "${username:-重置失败}"
+        pause_enter
+        return
+    fi
+    log_info "管理员密码已重置"
+    echo "管理员用户名: ${username:-admin}"
+    echo "新密码: ${password:-}"
+    echo "更新时间: ${updated_at:-未知}"
+    pause_enter
+}
+
+admin_account_menu() {
+    while true; do
+        clear
+        echo "管理员账号密码管理"
+        echo "1) 查看管理员账号密码"
+        echo "2) 重置管理员密码(随机)"
+        echo "3) 重置管理员密码(自定义)"
+        echo "4) 返回"
+        read -r -p "请选择: " c
+        case "$c" in
+            1)
+                show_admin_account_credential
+                pause_enter
+                ;;
+            2)
+                reset_admin_password_random
+                ;;
+            3)
+                reset_admin_password_custom
+                ;;
+            4)
+                return
+                ;;
+            *)
+                log_warn "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
 }
 
 show_status() {
@@ -478,6 +695,7 @@ main_menu() {
         echo "8) 查看日志(最近)"
         echo "9) 跟踪日志(实时)"
         echo "10) 参数设置"
+        echo "11) 管理员账号密码"
         echo "0) 退出"
         read -r -p "请选择: " choice
         case "$choice" in
@@ -523,6 +741,9 @@ main_menu() {
                 ;;
             10)
                 params_menu
+                ;;
+            11)
+                admin_account_menu
                 ;;
             0)
                 exit 0

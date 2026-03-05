@@ -11,6 +11,7 @@ class WSHub:
         self._market_connections: Set[WebSocket] = set()
         self._admin_connections: Set[WebSocket] = set()
         self._notify_connections: Dict[str, Set[WebSocket]] = defaultdict(set)
+        self._client_connections: Dict[str, Set[WebSocket]] = defaultdict(set)
         self._send_queues: Dict[WebSocket, asyncio.Queue] = {}
         self._send_tasks: Dict[WebSocket, asyncio.Task] = {}
         self._send_queue_maxsize = 200
@@ -68,6 +69,11 @@ class WSHub:
                     conns.discard(websocket)
                 if not conns:
                     self._notify_connections.pop(device_id, None)
+            for device_id, conns in list(self._client_connections.items()):
+                if websocket in conns:
+                    conns.discard(websocket)
+                if not conns:
+                    self._client_connections.pop(device_id, None)
 
             queue = self._send_queues.pop(websocket, None)
             if queue is not None:
@@ -94,6 +100,8 @@ class WSHub:
                 self._market_connections.add(websocket)
             elif channel == "admin":
                 self._admin_connections.add(websocket)
+            elif channel == "client" and device_id:
+                self._client_connections[device_id].add(websocket)
             elif channel == "notify" and device_id:
                 self._notify_connections[device_id].add(websocket)
             else:
@@ -113,6 +121,15 @@ class WSHub:
                     sent += 1
                 else:
                     dead.add(ws)
+            client_targets: Set[WebSocket] = set()
+            for conns in self._client_connections.values():
+                client_targets.update(conns)
+            payload = {"event": "log_line", "line": str(message)}
+            for ws in client_targets:
+                if self._enqueue_send_locked(ws, "json", payload):
+                    sent += 1
+                else:
+                    dead.add(ws)
         for ws in dead:
             await self._cleanup_socket(ws)
         return sent
@@ -123,7 +140,8 @@ class WSHub:
         dead: Set[WebSocket] = set()
         sent = 0
         async with self._lock:
-            targets = list(self._notify_connections.get(device_id, set()))
+            targets = set(self._notify_connections.get(device_id, set()))
+            targets.update(self._client_connections.get(device_id, set()))
             for ws in targets:
                 if self._enqueue_send_locked(ws, "json", payload):
                     sent += 1
@@ -137,7 +155,9 @@ class WSHub:
         dead: Set[WebSocket] = set()
         sent = 0
         async with self._lock:
-            targets = list(self._market_connections)
+            targets = set(self._market_connections)
+            for conns in self._client_connections.values():
+                targets.update(conns)
             for ws in targets:
                 if self._enqueue_send_locked(ws, "json", payload):
                     sent += 1
@@ -149,7 +169,7 @@ class WSHub:
 
     async def has_market_subscribers(self) -> bool:
         async with self._lock:
-            return len(self._market_connections) > 0
+            return len(self._market_connections) > 0 or any(self._client_connections.values())
 
     async def has_admin_subscribers(self) -> bool:
         async with self._lock:
@@ -175,24 +195,35 @@ class WSHub:
             market_count = len(self._market_connections)
             admin_count = len(self._admin_connections)
             notify_count = sum(len(v) for v in self._notify_connections.values())
-            active_devices = len([k for k, v in self._notify_connections.items() if v])
+            client_count = sum(len(v) for v in self._client_connections.values())
+            active_devices_keys = {
+                k for k, v in self._notify_connections.items() if v
+            }
+            active_devices_keys.update({
+                k for k, v in self._client_connections.items() if v
+            })
         return {
             "log_connections": int(log_count),
             "market_connections": int(market_count),
             "admin_connections": int(admin_count),
             "notify_connections": int(notify_count),
-            "active_devices": int(active_devices),
-            "total_connections": int(log_count + market_count + admin_count + notify_count),
+            "client_connections": int(client_count),
+            "active_devices": int(len(active_devices_keys)),
+            "total_connections": int(log_count + market_count + admin_count + notify_count + client_count),
         }
 
     async def snapshot_active_devices(self) -> Dict[str, int]:
         async with self._lock:
-            return {
-                str(device_id): int(len(conns))
-                for device_id, conns in self._notify_connections.items()
-                if device_id and conns
-            }
+            merged: Dict[str, int] = {}
+            for device_id, conns in self._notify_connections.items():
+                if not device_id or not conns:
+                    continue
+                merged[device_id] = int(merged.get(device_id, 0)) + len(conns)
+            for device_id, conns in self._client_connections.items():
+                if not device_id or not conns:
+                    continue
+                merged[device_id] = int(merged.get(device_id, 0)) + len(conns)
+            return merged
 
 
 ws_hub = WSHub()
-
