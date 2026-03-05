@@ -6,6 +6,7 @@ APP_NAME="limit-up-sniper-commercial"
 APP_DIR="/opt/${APP_NAME}"
 SERVICE_NAME="${APP_NAME}"
 SERVICE_FILE="/etc/systemd/system/${SERVICE_NAME}.service"
+SCRIPT_DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
 BACKEND_DATA_DIR="${APP_DIR}/backend/data"
 ADMIN_PANEL_PATH_FILE="${BACKEND_DATA_DIR}/admin_panel_path.json"
 ADMIN_API_PREFIX_FILE="${BACKEND_DATA_DIR}/admin_api_prefix.json"
@@ -386,6 +387,98 @@ admin_account_menu() {
     done
 }
 
+detect_update_script() {
+    local candidates=(
+        "$APP_DIR/scripts/update.sh"
+        "$APP_DIR/Server-Version/update.sh"
+        "$SCRIPT_DIR/update.sh"
+    )
+    local item
+    for item in "${candidates[@]}"; do
+        if [ -f "$item" ]; then
+            echo "$item"
+            return
+        fi
+    done
+    echo ""
+}
+
+run_update_script() {
+    local source_root="${1:-}"
+    local update_script
+    update_script="$(detect_update_script)"
+
+    if [ -z "$update_script" ]; then
+        log_error "未找到 update.sh，请先部署完整安装包"
+        pause_enter
+        return
+    fi
+
+    echo "更新脚本: $update_script"
+    if [ -n "$source_root" ]; then
+        echo "源码目录: $source_root"
+    else
+        echo "源码目录: 使用 update.sh 默认配置"
+    fi
+    read -r -p "确认开始更新并自动重启服务？[y/N]: " confirm
+    if [[ ! "$confirm" =~ ^[Yy]$ ]]; then
+        log_warn "已取消更新"
+        pause_enter
+        return
+    fi
+
+    if [ -n "$source_root" ]; then
+        if ! run_privileged bash "$update_script" "$source_root"; then
+            log_error "更新失败，请查看日志排查"
+            pause_enter
+            return
+        fi
+    else
+        if ! run_privileged bash "$update_script"; then
+            log_error "更新失败，请查看日志排查"
+            pause_enter
+            return
+        fi
+    fi
+
+    log_info "更新完成"
+    echo "后端服务状态: $(backend_state)"
+    health_check
+    pause_enter
+}
+
+update_program_menu() {
+    while true; do
+        clear
+        echo "程序更新"
+        echo "1) 一键更新(默认源码)"
+        echo "2) 指定源码目录更新"
+        echo "3) 返回"
+        read -r -p "请选择: " c
+        case "$c" in
+            1)
+                run_update_script ""
+                ;;
+            2)
+                read -r -p "源码目录(必须包含 backend/frontend): " src
+                if [ -z "${src//[[:space:]]/}" ]; then
+                    log_warn "源码目录不能为空"
+                    pause_enter
+                else
+                    run_update_script "$src"
+                fi
+                ;;
+            3)
+                return
+                ;;
+            *)
+                log_warn "无效选择"
+                sleep 1
+                ;;
+        esac
+    done
+}
+
 show_status() {
     clear
     echo -e "${BLUE}==========================================${NC}"
@@ -685,6 +778,7 @@ params_menu() {
 main_menu() {
     while true; do
         show_status
+        echo "12) 程序更新"
         echo "1) 启动后端服务"
         echo "2) 重启后端服务"
         echo "3) 停止后端服务"
@@ -744,6 +838,9 @@ main_menu() {
                 ;;
             11)
                 admin_account_menu
+                ;;
+            12)
+                update_program_menu
                 ;;
             0)
                 exit 0
