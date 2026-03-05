@@ -3062,12 +3062,16 @@ def refresh_stock_quotes_cache():
                 or limit_up_map.get(raw_code)
             )
             if seat_src:
-                if seat_src.get("likely_seats"):
+                if stock.get("strategy") == "LimitUp" and seat_src.get("likely_seats"):
                     stock["likely_seats"] = seat_src.get("likely_seats")
+                elif stock.get("strategy") != "LimitUp":
+                    stock.pop("likely_seats", None)
                 if (not stock.get("circulation_value")) and seat_src.get("circulation_value"):
                     stock["circulation_value"] = seat_src.get("circulation_value")
                 if not stock.get("concept") and seat_src.get("concept"):
                     stock["concept"] = seat_src.get("concept")
+            elif stock.get("strategy") != "LimitUp":
+                stock.pop("likely_seats", None)
 
             # Final fallback for circulation value from all-market snapshot.
             if not stock.get("circulation_value"):
