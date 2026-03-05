@@ -405,27 +405,15 @@
                 async fetchData() {
                     if (!this.selectedDate) return;
                     this.loading = true;
-                    this.analysisResult = ''; // Clear temporary state, will update if found
+                    this.analysisResult = '';
                     try {
-                        // Parallel fetch: LHB Data and Existing Analysis
-                        const [lhbRes, analysisRes] = await Promise.all([
-                            fetch(API_BASE_URL + `/api/lhb/history?date=${this.selectedDate}`),
-                            fetch(API_BASE_URL + `/api/lhb/analysis?date=${this.selectedDate}`)
-                        ]);
+                        const lhbRes = await fetch(API_BASE_URL + `/api/lhb/history?date=${this.selectedDate}`);
 
                         if (!lhbRes.ok) {
                             const payload = await lhbRes.json().catch(() => ({}));
                             throw new Error(payload.detail || `Server Error: ${lhbRes.status} ${lhbRes.statusText}`);
                         }
                         this.lhbData = await lhbRes.json();
-
-                        // Process Analysis Result
-                        if (analysisRes.ok) {
-                            const analysisData = await analysisRes.json();
-                            if (analysisData.status === 'ok' && analysisData.analysis) {
-                                this.analysisResult = analysisData.analysis;
-                            }
-                        }
                     } catch (e) {
                         console.error(e);
                         this.lhbData = [];
@@ -547,17 +535,12 @@
 
                 this.ensureSession().finally(() => {
                     this.fetchDates();
-                    this.connectWebSocket();
                 });
             },
             beforeUnmount() {
                 if (this.authErrorHandler) {
                     window.removeEventListener('auth-error', this.authErrorHandler);
                     this.authErrorHandler = null;
-                }
-                if (this.lhbRefreshTimer) {
-                    clearTimeout(this.lhbRefreshTimer);
-                    this.lhbRefreshTimer = null;
                 }
             }
         }).mount('#app')
