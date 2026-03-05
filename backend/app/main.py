@@ -1,7 +1,8 @@
-﻿from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends, HTTPException
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends, HTTPException, Response
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy.orm import Session
 from app.db.database import get_db
 import requests
@@ -72,6 +73,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 app.include_router(admin.router, prefix="/api/admin", tags=["admin"])
@@ -784,6 +786,9 @@ indices_refresh_guard = threading.Lock()
 market_sentiment_cache = {}
 market_sentiment_cache_ts = 0.0
 market_sentiment_refresh_guard = threading.Lock()
+market_circ_map_cache = {}
+market_circ_map_cache_ts = 0.0
+market_circ_map_refresh_guard = threading.Lock()
 market_ws_last_stock_hash = ""
 market_ws_last_pool_hash = ""
 market_ws_last_sentiment_hash = ""
@@ -912,6 +917,85 @@ def _set_stock_quotes_cache(rows):
 def _get_stock_quotes_cache():
     with cache_lock:
         return copy.deepcopy(stock_quotes_cache)
+
+
+def _normalize_market_code(value: str) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    if raw.startswith(("sh", "sz", "bj")):
+        return raw
+    digits = "".join(filter(str.isdigit, raw))
+    if len(digits) == 6:
+        if digits.startswith("6"):
+            return f"sh{digits}"
+        if digits.startswith(("0", "3")):
+            return f"sz{digits}"
+        if digits.startswith(("8", "4", "9")):
+            return f"bj{digits}"
+    return raw
+
+
+def _safe_float_number(value) -> float:
+    try:
+        return float(value or 0)
+    except Exception:
+        return 0.0
+
+
+def _set_market_circ_map_cache(payload: dict):
+    global market_circ_map_cache, market_circ_map_cache_ts
+    now_ts = time.time()
+    with cache_lock:
+        market_circ_map_cache = payload if isinstance(payload, dict) else {}
+        market_circ_map_cache_ts = now_ts
+
+
+def _get_market_circ_map_cache() -> dict:
+    with cache_lock:
+        return copy.deepcopy(market_circ_map_cache)
+
+
+def refresh_market_circ_map_cache():
+    market_map = {}
+    try:
+        market_df = data_provider.fetch_all_market_data()
+        if market_df is None or market_df.empty:
+            return
+
+        for _, row in market_df.iterrows():
+            raw_code = str(row.get("code", "")).strip().lower()
+            if not raw_code:
+                continue
+            circ_mv = _safe_float_number(row.get("circ_mv", 0))
+            norm_code = _normalize_market_code(raw_code)
+            digits = "".join(filter(str.isdigit, norm_code or raw_code))
+            market_map[raw_code] = circ_mv
+            if norm_code:
+                market_map[norm_code] = circ_mv
+            if len(digits) == 6:
+                market_map[digits] = circ_mv
+    except Exception:
+        return
+    _set_market_circ_map_cache(market_map)
+
+
+def ensure_market_circ_map_cache(max_age_sec: int = 600):
+    now_ts = time.time()
+    with cache_lock:
+        has_rows = bool(market_circ_map_cache)
+        cache_age = (now_ts - market_circ_map_cache_ts) if market_circ_map_cache_ts > 0 else float("inf")
+    if has_rows and cache_age <= max_age_sec:
+        return
+
+    with market_circ_map_refresh_guard:
+        now_ts = time.time()
+        with cache_lock:
+            has_rows = bool(market_circ_map_cache)
+            cache_age = (now_ts - market_circ_map_cache_ts) if market_circ_map_cache_ts > 0 else float("inf")
+        if has_rows and cache_age <= max_age_sec:
+            return
+        refresh_market_circ_map_cache()
 
 
 def _normalize_indices_rows(rows):
@@ -1795,6 +1879,21 @@ def _market_hash_obj(value) -> str:
     return hashlib.md5(encoded.encode("utf-8")).hexdigest()
 
 
+def _json_etag(value) -> str:
+    try:
+        encoded = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        encoded = str(value)
+    return f'W/"{hashlib.md5(encoded.encode("utf-8")).hexdigest()}"'
+
+
+def _is_not_modified(request: Request, etag: str) -> bool:
+    inm = str(request.headers.get("if-none-match") or "").strip()
+    if not inm or not etag:
+        return False
+    return inm == etag
+
+
 def _compact_quote_ticks(rows):
     compact = []
     for row in rows or []:
@@ -2603,26 +2702,7 @@ def refresh_stock_quotes_cache():
         raw_stocks = data_provider.fetch_quotes(WATCH_LIST)
         
         def _norm_code(value: str) -> str:
-            raw = str(value or "").strip().lower()
-            if not raw:
-                return ""
-            if raw.startswith(("sh", "sz", "bj")):
-                return raw
-            digits = "".join(filter(str.isdigit, raw))
-            if len(digits) == 6:
-                if digits.startswith("6"):
-                    return f"sh{digits}"
-                if digits.startswith(("0", "3")):
-                    return f"sz{digits}"
-                if digits.startswith(("8", "4", "9")):
-                    return f"bj{digits}"
-            return raw
-
-        def _safe_float(value) -> float:
-            try:
-                return float(value or 0)
-            except Exception:
-                return 0.0
+            return _normalize_market_code(value)
 
         # Build quick maps for enrichment: /api/stocks should inherit seats/flow value from pool scanners.
         limit_up_map = {}
@@ -2646,20 +2726,8 @@ def refresh_stock_quotes_cache():
                 intraday_map[norm_code] = s
         market_map = {}
         try:
-            market_df = data_provider.fetch_all_market_data()
-            if market_df is not None and not market_df.empty:
-                for _, row in market_df.iterrows():
-                    raw_code = str(row.get("code", "")).strip().lower()
-                    if not raw_code:
-                        continue
-                    circ_mv = _safe_float(row.get("circ_mv", 0))
-                    norm_code = _norm_code(raw_code)
-                    digits = "".join(filter(str.isdigit, norm_code or raw_code))
-                    market_map[raw_code] = circ_mv
-                    if norm_code:
-                        market_map[norm_code] = circ_mv
-                    if len(digits) == 6:
-                        market_map[digits] = circ_mv
+            ensure_market_circ_map_cache()
+            market_map = _get_market_circ_map_cache()
         except Exception:
             market_map = {}
         
@@ -2819,22 +2887,34 @@ async def remove_from_watchlist(request: Request, authorized: bool = Depends(adm
         return {"status": "error", "message": str(e)}
 
 @app.get("/api/stocks")
-async def api_stocks(user: models.User = Depends(check_data_permission)):
+async def api_stocks(request: Request, user: models.User = Depends(check_data_permission)):
     await asyncio.to_thread(ensure_stock_quotes_cache)
-    return get_stock_quotes()
+    payload = get_stock_quotes()
+    etag = _json_etag(payload)
+    if _is_not_modified(request, etag):
+        return Response(status_code=304, headers={"ETag": etag})
+    return JSONResponse(content=payload, headers={"ETag": etag, "Cache-Control": "private, max-age=1"})
 
 @app.get("/api/indices")
-async def api_indices(user: models.User = Depends(check_data_permission)):
+async def api_indices(request: Request, user: models.User = Depends(check_data_permission)):
     """快速获取大盘指数"""
     await asyncio.to_thread(ensure_indices_cache)
-    return get_indices_cache()
+    payload = get_indices_cache()
+    etag = _json_etag(payload)
+    if _is_not_modified(request, etag):
+        return Response(status_code=304, headers={"ETag": etag})
+    return JSONResponse(content=payload, headers={"ETag": etag, "Cache-Control": "private, max-age=3"})
 
 @app.get("/api/limit_up_pool")
-async def api_limit_up_pool(user: models.User = Depends(check_data_permission)):
-    return {
+async def api_limit_up_pool(request: Request, user: models.User = Depends(check_data_permission)):
+    payload = {
         "limit_up": limit_up_pool_data,
         "broken": broken_limit_pool_data
     }
+    etag = _json_etag(payload)
+    if _is_not_modified(request, etag):
+        return Response(status_code=304, headers={"ETag": etag})
+    return JSONResponse(content=payload, headers={"ETag": etag, "Cache-Control": "private, max-age=2"})
 
 @app.get("/api/intraday_pool")
 async def api_intraday_pool(user: models.User = Depends(check_data_permission)):
@@ -2842,10 +2922,14 @@ async def api_intraday_pool(user: models.User = Depends(check_data_permission)):
     return intraday_pool_data or []
 
 @app.get("/api/market_sentiment")
-async def api_market_sentiment(user: models.User = Depends(check_data_permission)):
+async def api_market_sentiment(request: Request, user: models.User = Depends(check_data_permission)):
     """获取大盘情绪数据"""
     await asyncio.to_thread(ensure_market_sentiment_cache)
-    return get_market_sentiment_cache()
+    payload = get_market_sentiment_cache()
+    etag = _json_etag(payload)
+    if _is_not_modified(request, etag):
+        return Response(status_code=304, headers={"ETag": etag})
+    return JSONResponse(content=payload, headers={"ETag": etag, "Cache-Control": "private, max-age=3"})
 
 class StockAnalysisRequest(BaseModel):
     code: str
@@ -2996,6 +3080,59 @@ async def get_lhb_status(user: models.User = Depends(check_data_permission)):
         "today_has_data": bool(today_status.get("today_has_data")),
         "before_sync_time": bool(today_status.get("before_sync_time")),
         "message": today_status.get("message", ""),
+    }
+
+
+def _resolve_lhb_default_date(status: dict, dates: list) -> str:
+    dates_list = [str(x or "").strip() for x in (dates or []) if str(x or "").strip()]
+    today = str((status or {}).get("today") or "").strip()
+    before_sync_time = bool((status or {}).get("before_sync_time"))
+    today_has_data = bool((status or {}).get("today_has_data"))
+
+    if today_has_data and today:
+        return today
+    if before_sync_time:
+        for d in dates_list:
+            if d != today:
+                return d
+    if today and today in dates_list:
+        return today
+    if dates_list:
+        return dates_list[0]
+    return today
+
+
+@app.get("/api/lhb/bootstrap")
+async def get_lhb_bootstrap(
+    date: Optional[str] = Query(None),
+    user: models.User = Depends(check_data_permission),
+):
+    status = lhb_manager.get_today_sync_status()
+    dates = lhb_manager.get_available_dates() or []
+    today = str(status.get("today") or "")
+    now = datetime.now()
+    if is_market_open_day() and now.hour >= 15 and today and today not in dates:
+        dates = [today] + dates
+
+    requested_date = str(date or "").strip()
+    selected_date = requested_date or _resolve_lhb_default_date(status, dates)
+
+    history = []
+    if selected_date:
+        history = lhb_manager.get_daily_data(selected_date) or []
+
+    return {
+        "status": {
+            "is_syncing": lhb_manager.is_syncing,
+            "sync_time": str(status.get("sync_time") or "18:00"),
+            "today": today,
+            "today_has_data": bool(status.get("today_has_data")),
+            "before_sync_time": bool(status.get("before_sync_time")),
+            "message": str(status.get("message") or ""),
+        },
+        "dates": dates,
+        "selected_date": selected_date,
+        "history": history,
     }
 
 @app.get("/api/lhb/dates")

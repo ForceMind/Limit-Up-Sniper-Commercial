@@ -3,6 +3,7 @@ import json
 import re
 import secrets
 import threading
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
@@ -21,10 +22,49 @@ INVITE_CODE_RE = re.compile(r"^[A-Z0-9]{6,20}$")
 INVITE_CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 _account_table_ready = False
 _account_table_lock = threading.Lock()
+_DEVICE_BAN_CACHE_TTL_SEC = 60
+_device_ban_cache: Dict[str, Dict[str, Any]] = {}
+_device_ban_cache_lock = threading.Lock()
 
 
 def _ensure_data_dir():
     DATA_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _get_device_ban_cache(device_id: str):
+    did = str(device_id or "").strip()
+    if not did:
+        return None
+    now_ts = time.time()
+    with _device_ban_cache_lock:
+        payload = _device_ban_cache.get(did)
+        if not isinstance(payload, dict):
+            return None
+        ts = float(payload.get("ts", 0) or 0)
+        if ts <= 0 or now_ts - ts > _DEVICE_BAN_CACHE_TTL_SEC:
+            _device_ban_cache.pop(did, None)
+            return None
+        return bool(payload.get("banned", False)), str(payload.get("reason", "") or "").strip()
+
+
+def _set_device_ban_cache(device_id: str, banned: bool, reason: str = ""):
+    did = str(device_id or "").strip()
+    if not did:
+        return
+    with _device_ban_cache_lock:
+        _device_ban_cache[did] = {
+            "ts": time.time(),
+            "banned": bool(banned),
+            "reason": str(reason or "").strip(),
+        }
+
+
+def _clear_device_ban_cache(device_id: str):
+    did = str(device_id or "").strip()
+    if not did:
+        return
+    with _device_ban_cache_lock:
+        _device_ban_cache.pop(did, None)
 
 
 def _load_json(path: Path, default):
@@ -436,6 +476,9 @@ def is_device_banned(device_id: str, accounts: Optional[Dict[str, dict]] = None)
         return False, ""
 
     if not isinstance(accounts, dict):
+        cached = _get_device_ban_cache(did)
+        if isinstance(cached, tuple):
+            return cached
         try:
             _ensure_account_table()
             db: Session = database.SessionLocal()
@@ -443,8 +486,11 @@ def is_device_banned(device_id: str, accounts: Optional[Dict[str, dict]] = None)
                 row = db.query(models.AccountCredential).filter(models.AccountCredential.device_id == did).first()
                 if row:
                     if not bool(row.is_banned):
+                        _set_device_ban_cache(did, False, "")
                         return False, ""
-                    return True, str(row.banned_reason or "").strip()
+                    reason = str(row.banned_reason or "").strip()
+                    _set_device_ban_cache(did, True, reason)
+                    return True, reason
             finally:
                 db.close()
         except Exception:
@@ -452,10 +498,13 @@ def is_device_banned(device_id: str, accounts: Optional[Dict[str, dict]] = None)
 
     _, account = get_account_by_device_id(did, accounts=accounts)
     if not account:
+        _set_device_ban_cache(did, False, "")
         return False, ""
     if not bool(account.get("is_banned")):
+        _set_device_ban_cache(did, False, "")
         return False, ""
     reason = str(account.get("banned_reason", "")).strip()
+    _set_device_ban_cache(did, True, reason)
     return True, reason
 
 
@@ -478,6 +527,7 @@ def set_account_ban_status(
     account = data.get(username)
     if not isinstance(account, dict):
         raise ValueError("Account not found")
+    device_id = str(account.get("device_id", "")).strip()
 
     account["is_banned"] = bool(banned)
     if banned:
@@ -492,6 +542,7 @@ def set_account_ban_status(
         _dump_accounts_snapshot(data)
     else:
         save_accounts(data)
+    _set_device_ban_cache(device_id, bool(banned), reason if bool(banned) else "")
     return account
 
 

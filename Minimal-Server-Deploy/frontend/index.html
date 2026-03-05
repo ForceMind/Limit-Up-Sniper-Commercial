@@ -2630,7 +2630,7 @@
                     this.loadLocalFavorites();
                     this.loadNewsCache();
                     await this.fetchLocalFavoriteQuotes(true);
-                    await this.fetchConfig();
+                    await this.fetchConfig(true);
                     this.tabDataLoaded = { pre: false, intra: false, manual: false, pool: false };
                 },
                 getFavoritesStorageKey() {
@@ -2736,13 +2736,11 @@
                             if (!res.ok) throw new Error(data.detail || 'Session restore failed');
                             this.userInfo = data;
 
-                            const metaRes = await fetch(`${API_BASE_URL}/api/auth/account_meta`);
-                            const meta = await metaRes.json();
-
-                            if (!metaRes.ok) {
-                                throw new Error(meta.detail || 'Account metadata request failed');
-                            }
-                            if (!meta.is_registered) {
+                            const bootstrap = await this.fetchConfig(true);
+                            const meta = (bootstrap && typeof bootstrap === 'object' && bootstrap.account_meta && typeof bootstrap.account_meta === 'object')
+                                ? bootstrap.account_meta
+                                : null;
+                            if (!meta || !meta.is_registered) {
                                 console.warn('Session restore skipped: registered account metadata missing, fallback to guest session');
                                 localStorage.removeItem('sniper_token');
                                 localStorage.removeItem('sniper_username');
@@ -2756,9 +2754,7 @@
                             this.loadLocalFavorites();
                             this.loadNewsCache();
                             await this.fetchLocalFavoriteQuotes(true);
-                            await this.fetchConfig();
                             this.tabDataLoaded = { pre: false, intra: false, manual: false, pool: false };
-                            await this.fetchInviteInfo();
                             this.maybeStartOnboarding(false);
                             return;
                         } catch (e) {
@@ -2840,9 +2836,8 @@
                         this.accountCanApplyTrial = !!data.can_apply_trial;
                         this.loadLocalFavorites();
                         await this.fetchLocalFavoriteQuotes(true);
-                        await this.fetchConfig();
+                        await this.fetchConfig(true);
                         this.tabDataLoaded = { pre: false, intra: false, manual: false, pool: false };
-                        await this.fetchInviteInfo();
                         this.showLoginModal = false;
                         this.showSettingsModal = false;
                         if (this.hasDataAccess) {
@@ -3620,6 +3615,73 @@
                         this.marketFallbackSlowTimer = null;
                     }
                 },
+                applyMarketStatusPayload(statusPayload = null) {
+                    const now = new Date();
+                    const day = now.getDay();
+                    const h = now.getHours();
+                    const m = now.getMinutes();
+                    const timeVal = h * 100 + m;
+                    const localOpenDay = (day !== 0 && day !== 6);
+                    const payload = (statusPayload && typeof statusPayload === 'object') ? statusPayload : {};
+                    const isMarketOpenDay = (typeof payload.is_market_open_day === 'boolean')
+                        ? payload.is_market_open_day
+                        : localOpenDay;
+                    const isTradingTime = (typeof payload.is_trading_time === 'boolean')
+                        ? payload.is_trading_time
+                        : (localOpenDay && timeVal >= 930 && timeVal < 1500);
+
+                    const versionText = payload.server_version || payload.version || payload.app_version;
+                    if (versionText) {
+                        this.serverVersion = String(versionText);
+                    }
+
+                    if (this.isMobile) {
+                        this.activeTab = (isMarketOpenDay && isTradingTime) ? 'intra' : 'pre';
+                    } else {
+                        this.showAggressivePanel = !isMarketOpenDay;
+                    }
+                },
+                applyBootstrapPayload(data) {
+                    const payload = (data && typeof data === 'object') ? data : {};
+                    const sysCfg = (payload.system_config && typeof payload.system_config === 'object')
+                        ? payload.system_config
+                        : {};
+                    this.systemConfig = { ...(this.systemConfig || {}), ...sysCfg };
+
+                    const community = (payload.community_config && typeof payload.community_config === 'object')
+                        ? payload.community_config
+                        : {};
+                    this.qqInviteInfo = {
+                        qq_group_number: String(community.qq_group_number || this.qqInviteInfo.qq_group_number || '').trim(),
+                        qq_group_link: String(community.qq_group_link || this.qqInviteInfo.qq_group_link || '').trim(),
+                        qq_group_welcome_text: String(community.welcome_text || this.qqInviteInfo.qq_group_welcome_text || '').trim()
+                    };
+
+                    if (payload.user && typeof payload.user === 'object') {
+                        this.userInfo = { ...(this.userInfo || {}), ...payload.user };
+                    }
+
+                    const accountMeta = (payload.account_meta && typeof payload.account_meta === 'object')
+                        ? payload.account_meta
+                        : null;
+                    if (accountMeta) {
+                        this.isRegisteredAccount = !!accountMeta.is_registered;
+                        if (this.isRegisteredAccount) {
+                            this.displayUsername = String(accountMeta.username || localStorage.getItem('sniper_username') || '').trim();
+                            this.accountCanApplyTrial = !!accountMeta.can_apply_trial;
+                        } else {
+                            this.displayUsername = '游客';
+                            this.accountCanApplyTrial = false;
+                        }
+                    }
+
+                    const marketStatus = (payload.market_status && typeof payload.market_status === 'object')
+                        ? payload.market_status
+                        : null;
+                    if (marketStatus) {
+                        this.applyMarketStatusPayload(marketStatus);
+                    }
+                },
                 resolveWsBase() {
                     const raw = String(API_BASE_URL || '').trim();
                     if (raw) {
@@ -3643,24 +3705,12 @@
                         if (!response.ok) {
                             throw new Error(data.detail || data.message || '基础信息加载失败');
                         }
-                        const sysCfg = (data && typeof data === 'object' && data.system_config && typeof data.system_config === 'object')
-                            ? data.system_config
-                            : {};
-                        this.systemConfig = { ...(this.systemConfig || {}), ...sysCfg };
-                        const community = (data && typeof data === 'object' && data.community_config && typeof data.community_config === 'object')
-                            ? data.community_config
-                            : {};
-                        this.qqInviteInfo = {
-                            qq_group_number: String(community.qq_group_number || this.qqInviteInfo.qq_group_number || '').trim(),
-                            qq_group_link: String(community.qq_group_link || this.qqInviteInfo.qq_group_link || '').trim(),
-                            qq_group_welcome_text: String(community.welcome_text || this.qqInviteInfo.qq_group_welcome_text || '').trim()
-                        };
-                        if (data && typeof data.user === 'object') {
-                            this.userInfo = { ...(this.userInfo || {}), ...data.user };
-                        }
+                        this.applyBootstrapPayload(data);
                         this.bootstrapConfigLoaded = true;
+                        return data;
                     } catch (e) {
                         console.error('Failed to fetch config:', e);
+                        return null;
                     }
                 },
                 async saveConfig() {
@@ -4169,7 +4219,9 @@
                         });
 
                         this.stocks = data;
-                        await this.fetchLocalFavoriteQuotes();
+                        if (this.activeTab === 'manual') {
+                            await this.fetchLocalFavoriteQuotes();
+                        }
                         this.lastUpdated = new Date().toLocaleTimeString();
                     } catch (error) {
                         console.error('Data fetch failed:', error);
@@ -5254,7 +5306,7 @@
                 
                 // Init User
                 this.checkLogin().then(() => {
-                    if (this.deviceId) {
+                    if (this.deviceId && this.isRegisteredAccount) {
                         this.connectNotifyWebSocket();
                     }
                     if (this.hasDataAccess) {
@@ -5301,69 +5353,15 @@
                     this.displayUsername = savedUsername;
                 }
 
-                // Initialize activeTab based on time for Mobile
-                const now = new Date();
-                const day = now.getDay();
-                const h = now.getHours();
-                const m = now.getMinutes();
-                const timeVal = h * 100 + m;
-                const isWeekend = (day === 0 || day === 6);
-                
                 // Update isMobile on mount to be sure
                 this.isMobile = window.innerWidth < 768;
-
-                // Check Market Status first
-                fetch(API_BASE_URL + '/api/status')
-                    .then(res => res.json())
-                    .then(data => {
-                        this.serverVersion = data.server_version || data.version || data.app_version || 'v3.0.0';
-                        if (data.status === 'success') {
-                            const isMarketOpenDay = data.is_market_open_day;
-                            
-                            if (this.isMobile) {
-                                if (isMarketOpenDay && timeVal >= 930 && timeVal < 1500) {
-                                    this.activeTab = 'intra';
-                                } else {
-                                    this.activeTab = 'pre';
-                                }
-                            } else {
-                                // Desktop: If holiday/closed, maybe show Aggressive panel by default?
-                                // Current logic: showAggressivePanel = false if trading hours
-                                if (!isMarketOpenDay) {
-                                    this.showAggressivePanel = true;
-                                }
-                            }
-                            
-                            // Add visual indicator for holiday if needed
-                            if (!isMarketOpenDay) {
-                                console.log("Today is a holiday/closed market day.");
-                            }
-                        }
-                    })
-                    .catch(e => {
-                        console.error("Failed to check market status", e);
-                        this.serverVersion = '未连接';
-                        // Fallback to local logic
-                        if (this.isMobile) {
-                            if (!isWeekend && timeVal >= 930 && timeVal < 1500) {
-                                this.activeTab = 'intra';
-                            } else {
-                                this.activeTab = 'pre';
-                            }
-                        }
-                    });
+                // Use local default first; bootstrap will override with server-side market_status.
+                this.applyMarketStatusPayload(null);
 
                 // Update time every second for trial countdown / visibility logic
                 this.clockTimer = setInterval(() => {
                     this.currentTime = new Date();
                 }, 1000);
-                
-                // Initialize visibility based on time
-                // Reuse time variables calculated above
-                const isTradingHours = timeVal >= 930 && timeVal < 1500;
-                if (!isWeekend && isTradingHours) {
-                    this.showAggressivePanel = false;
-                }
 
                 window.addEventListener('resize', () => {
                     this.isMobile = window.innerWidth < 768;

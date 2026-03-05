@@ -1,9 +1,9 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>龙虎榜指挥中心 - 涨停狙击手</title>
+    <title>榫欒檸姒滄寚鎸ヤ腑蹇?- 娑ㄥ仠鐙欏嚮鎵?/title>
     <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -73,7 +73,7 @@
                     </svg>
                 </a>
                 <h1 class="text-lg md:text-xl font-bold text-red-600 dark:text-red-500 flex items-center gap-2 whitespace-nowrap">
-                    <span>🐉</span> 龙虎榜<span class="hidden md:inline">指挥中心</span>
+                    <span>馃悏</span> 榫欒檸姒?span class="hidden md:inline">鎸囨尌涓績</span>
                 </h1>
             </div>
             
@@ -96,7 +96,7 @@
                 <button @click="analyzeDaily" :disabled="analyzing"
                         class="px-3 py-1.5 md:px-4 md:py-2 bg-purple-600 hover:bg-purple-700 text-white text-xs md:text-sm rounded shadow transition-colors flex items-center gap-1 md:gap-2 disabled:opacity-50 whitespace-nowrap">
                     <span v-if="analyzing" class="w-3 h-3 md:w-4 md:h-4 border-2 border-white border-t-transparent rounded-full animate-spin"></span>
-                    <span>{{ analyzing ? '...' : (isMobile ? 'AI复盘' : '🤖 AI 深度复盘') }}</span>
+                    <span>{{ analyzing ? '...' : (isMobile ? 'AI澶嶇洏' : '馃 AI 娣卞害澶嶇洏') }}</span>
                 </button>
             </div>
         </header>
@@ -113,15 +113,15 @@
                     <div class="p-2 bg-gray-50 dark:bg-gray-900 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
                         <span class="text-xs font-bold flex items-center gap-2">
                             <span class="w-2 h-2 rounded-full" :class="wsConnected ? 'bg-green-500' : 'bg-red-500'"></span>
-                            系统运行日志
+                            绯荤粺杩愯鏃ュ織
                         </span>
-                        <button @click="showLogPanel = false" class="text-gray-400 hover:text-gray-600">×</button>
+                        <button @click="showLogPanel = false" class="text-gray-400 hover:text-gray-600">脳</button>
                     </div>
                     <div ref="logContainer" class="flex-1 overflow-y-auto p-2 font-mono text-[10px] space-y-1 bg-black text-green-400">
                         <div v-for="(log, idx) in logs" :key="idx" class="break-words">
                             <span class="text-gray-500">[{{ log.time }}]</span> {{ log.msg }}
                         </div>
-                        <div v-if="logs.length === 0" class="text-gray-600 italic">暂无日志内容...</div>
+                        <div v-if="logs.length === 0" class="text-gray-600 italic">鏆傛棤鏃ュ織鍐呭...</div>
                     </div>
                 </div>
             </transition>
@@ -130,20 +130,20 @@
             <div class="flex-1 flex flex-col min-w-0 border-r border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 h-full">
                 <!-- Toolbar/Stats -->
                 <div class="p-3 bg-gray-50 dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center text-sm">
-                    <span class="font-bold">上榜个股 ({{ lhbData.length }})</span>
+                    <span class="font-bold">涓婃涓偂 ({{ lhbData.length }})</span>
                     <div class="flex gap-4 text-gray-500">
-                        <span>净买入>0: <span class="text-red-500 font-bold">{{ netBuyPositiveCount }}</span></span>
-                        <span>净卖出: <span class="text-green-500 font-bold">{{ lhbData.length - netBuyPositiveCount }}</span></span>
+                        <span>鍑€涔板叆>0: <span class="text-red-500 font-bold">{{ netBuyPositiveCount }}</span></span>
+                        <span>鍑€鍗栧嚭: <span class="text-green-500 font-bold">{{ lhbData.length - netBuyPositiveCount }}</span></span>
                     </div>
                 </div>
                 
                 <!-- Table Header -->
                 <div class="grid grid-cols-12 gap-2 px-3 md:px-4 py-2 text-xs font-bold text-gray-500 border-b border-gray-200 dark:border-gray-700 bg-gray-100 dark:bg-gray-900 sticky top-0 z-10">
-                    <div class="col-span-3 md:col-span-2">代码/名称</div>
-                    <div class="col-span-3 md:col-span-2 text-right cursor-pointer hover:text-red-500 select-none" @click="toggleSort" title="点击排序">
-                        净买入(万) <span class="text-[10px]">{{ sortOrder === 'desc' ? '▼' : '▲' }}</span>
+                    <div class="col-span-3 md:col-span-2">浠ｇ爜/鍚嶇О</div>
+                    <div class="col-span-3 md:col-span-2 text-right cursor-pointer hover:text-red-500 select-none" @click="toggleSort" title="鐐瑰嚮鎺掑簭">
+                        鍑€涔板叆(涓? <span class="text-[10px]">{{ sortOrder === 'desc' ? '鈻? : '鈻? }}</span>
                     </div>
-                    <div class="col-span-6 md:col-span-8 pl-2">核心席位 (前5买入)</div>
+                    <div class="col-span-6 md:col-span-8 pl-2">鏍稿績甯綅 (鍓?涔板叆)</div>
                 </div>
 
                 <!-- List -->
@@ -152,7 +152,7 @@
                         <div class="w-8 h-8 border-4 border-gray-300 border-t-red-500 rounded-full animate-spin"></div>
                     </div>
                     <div v-else-if="lhbData.length === 0" class="text-center py-10 text-gray-500">
-                        暂无数据，请选择其他日期或等待同步。
+                        鏆傛棤鏁版嵁锛岃閫夋嫨鍏朵粬鏃ユ湡鎴栫瓑寰呭悓姝ャ€?
                     </div>
                     
                     <div v-for="stock in sortedLhbData" :key="stock.code"
@@ -169,9 +169,9 @@
                             <span v-for="seat in stock.seats.slice(0, 5)" :key="seat.name"
                                   class="px-1.5 py-0.5 md:px-2 md:py-1 rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300 border border-gray-200 dark:border-gray-600 flex items-center gap-1 max-w-full"
                                   :class="{'ring-1 ring-red-400 bg-red-50 dark:bg-red-900/20': seat.hot_money}">
-                                <span v-if="seat.hot_money" class="text-red-500 font-bold shrink-0">★</span>
+                                <span v-if="seat.hot_money" class="text-red-500 font-bold shrink-0">鈽?/span>
                                 <span class="truncate" :class="{'font-bold text-red-700 dark:text-red-400': seat.hot_money}" :title="seat.name">
-                                    {{ seat.hot_money ? seat.hot_money : seat.name.replace(/(证券|股份|有限|公司|营业部|分公司)/g, '') }}
+                                    {{ seat.hot_money ? seat.hot_money : seat.name.replace(/(璇佸埜|鑲′唤|鏈夐檺|鍏徃|钀ヤ笟閮▅鍒嗗叕鍙?/g, '') }}
                                 </span>
                                 <span class="font-mono ml-auto pl-1" :class="seat.buy > 0 ? 'text-red-500' : ''">{{ (seat.buy/10000).toFixed(0) }}</span>
                             </span>
@@ -187,7 +187,7 @@
                 
                 <div class="p-4 bg-white dark:bg-gray-800 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center shrink-0">
                     <h2 class="font-bold text-lg text-purple-600 dark:text-purple-400 flex items-center gap-2">
-                        🤖 AI 深度复盘日报
+                        馃 AI 娣卞害澶嶇洏鏃ユ姤
                     </h2>
                     <div class="flex items-center gap-3">
                         <span class="text-xs text-gray-500">{{ selectedDate }}</span>
@@ -203,14 +203,14 @@
                 <div class="flex-1 overflow-y-auto p-6 text-sm leading-relaxed text-gray-800 dark:text-gray-200 relative bg-gray-50 dark:bg-gray-900">
                     <div v-if="analyzing" class="absolute inset-0 flex flex-col items-center justify-center bg-white/50 dark:bg-gray-900/50 backdrop-blur-sm">
                         <div class="w-10 h-10 border-4 border-purple-500 border-t-transparent rounded-full animate-spin mb-4"></div>
-                        <p class="text-purple-600 font-bold animate-pulse">AI 正在阅读榜单数据...</p>
+                        <p class="text-purple-600 font-bold animate-pulse">AI 姝ｅ湪闃呰姒滃崟鏁版嵁...</p>
                     </div>
                     
                     <div v-if="!analysisResult && !analyzing" class="h-full flex flex-col items-center justify-center text-gray-400 gap-4">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 opacity-20" fill="none" viewBox="0 0 24 24" stroke="currentColor">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12h-1M4 12H3m3.343-5.657l-.707-.707m2.828 9.9a5 5 0 117.072 0l-.548.547A3.374 3.374 0 0014 18.469V19a2 2 0 11-4 0v-.531c0-.895-.356-1.754-.988-2.386l-.548-.547z" />
                         </svg>
-                        <p>点击上方“AI 深度复盘”生成今日报告</p>
+                        <p>鐐瑰嚮涓婃柟鈥淎I 娣卞害澶嶇洏鈥濈敓鎴愪粖鏃ユ姤鍛?/p>
                     </div>
 
                     <div v-if="analysisResult" v-html="renderMarkdown(analysisResult)" class="markdown-content"></div>
@@ -221,12 +221,12 @@
     <div v-if="errorModal.show" class="fixed inset-0 z-[120] flex items-center justify-center p-4 bg-black/55 backdrop-blur-sm" @click.self="closeErrorModal">
         <div class="bg-white dark:bg-gray-800 rounded-lg shadow-xl w-full max-w-md p-6">
             <div class="flex items-center gap-2 mb-2">
-                <span class="text-red-500">⚠️</span>
-                <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">提示</h3>
+                <span class="text-red-500">鈿狅笍</span>
+                <h3 class="text-lg font-bold text-gray-900 dark:text-gray-100">鎻愮ず</h3>
             </div>
             <p class="text-sm text-gray-700 dark:text-gray-300 whitespace-pre-wrap">{{ errorModal.message }}</p>
             <div class="mt-5 text-right">
-                <button @click="closeErrorModal" class="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700">确定</button>
+                <button @click="closeErrorModal" class="px-4 py-2 text-sm bg-red-600 text-white rounded hover:bg-red-700">纭畾</button>
             </div>
         </div>
     </div>
@@ -343,14 +343,14 @@
                     const payload = (event && event.detail) ? event.detail : {};
                     const status = Number(payload.status || 0);
                     const detail = String(payload.detail || '');
-                    this.showErrorModal(status === 403 ? (detail || '当前功能需要会员权限，请先购买会员。') : (detail || '登录状态失效，请先登录。'));
+                    this.showErrorModal(status === 403 ? (detail || '褰撳墠鍔熻兘闇€瑕佷細鍛樻潈闄愶紝璇峰厛璐拱浼氬憳銆?) : (detail || '鐧诲綍鐘舵€佸け鏁堬紝璇峰厛鐧诲綍銆?));
                     localStorage.setItem('sniper_open_subscription', '1');
                     setTimeout(() => {
                         window.location.href = 'index.html';
                     }, 300);
                 },
                 showErrorModal(message) {
-                    const text = String(message || '操作失败');
+                    const text = String(message || '鎿嶄綔澶辫触');
                     this.errorModal.message = text;
                     this.errorModal.show = true;
                     fetch(API_BASE_URL + '/api/client/error_popup', {
@@ -384,36 +384,33 @@
                     } catch (e) {}
                 },
                 async fetchDates() {
-                    try {
-                        await this.fetchStatus();
-                        const res = await fetch(API_BASE_URL + '/api/lhb/dates');
-                        if (!res.ok) {
-                            const err = await res.json().catch(() => ({}));
-                            throw new Error(err.detail || `LHB dates load failed (${res.status})`);
-                        }
-                        this.availableDates = await res.json();
-                        if (this.availableDates.length > 0) {
-                            if (!this.availableDates.includes(this.selectedDate)) {
-                                this.selectedDate = this.availableDates[0];
-                            }
-                            this.fetchData();
-                        }
-                    } catch (e) {
-                        console.error(e);
-                    }
-                },
-                async fetchData() {
-                    if (!this.selectedDate) return;
                     this.loading = true;
                     this.analysisResult = '';
                     try {
-                        const lhbRes = await fetch(API_BASE_URL + `/api/lhb/history?date=${this.selectedDate}`);
-
-                        if (!lhbRes.ok) {
-                            const payload = await lhbRes.json().catch(() => ({}));
-                            throw new Error(payload.detail || `Server Error: ${lhbRes.status} ${lhbRes.statusText}`);
+                        const selected = String(this.selectedDate || '').trim();
+                        const qs = selected ? `?date=${encodeURIComponent(selected)}` : '';
+                        const res = await fetch(API_BASE_URL + `/api/lhb/bootstrap${qs}`);
+                        if (!res.ok) {
+                            const err = await res.json().catch(() => ({}));
+                            throw new Error(err.detail || `LHB bootstrap load failed (${res.status})`);
                         }
-                        this.lhbData = await lhbRes.json();
+                        const payload = await res.json().catch(() => ({}));
+                        const status = (payload && typeof payload.status === 'object') ? payload.status : {};
+                        this.lhbStatus = {
+                            today: String(status.today || ''),
+                            sync_time: String(status.sync_time || '18:00'),
+                            today_has_data: !!status.today_has_data,
+                            before_sync_time: !!status.before_sync_time,
+                            message: String(status.message || '')
+                        };
+                        this.availableDates = Array.isArray(payload.dates) ? payload.dates : [];
+                        const selectedDate = String(payload.selected_date || '').trim();
+                        if (selectedDate) {
+                            this.selectedDate = selectedDate;
+                        } else if (this.availableDates.length > 0 && !this.availableDates.includes(this.selectedDate)) {
+                            this.selectedDate = this.availableDates[0];
+                        }
+                        this.lhbData = Array.isArray(payload.history) ? payload.history : [];
                     } catch (e) {
                         console.error(e);
                         this.lhbData = [];
@@ -424,6 +421,10 @@
                         this.loading = false;
                     }
                 },
+                async fetchData() {
+                    if (!this.selectedDate) return;
+                    await this.fetchDates();
+                },
                 async fetchLHB() {
                     this.fetchingLHB = true;
                     this.awaitingLhbRefresh = true;
@@ -432,10 +433,10 @@
                         const res = await fetch(API_BASE_URL + '/api/lhb/fetch', { method: 'POST' });
                         const data = await res.json();
                         if (data.status !== 'success') {
-                            this.addLog('错误: ' + data.message);
+                            this.addLog('閿欒: ' + data.message);
                         }
                     } catch (e) {
-                        this.addLog('请求异常: ' + e.message);
+                        this.addLog('璇锋眰寮傚父: ' + e.message);
                     } finally {
                         this.fetchingLHB = false;
                     }
@@ -457,16 +458,16 @@
                     
                     ws.onopen = () => {
                         this.wsConnected = true;
-                        this.addLog('系统连接成功 (LHB同步通道)');
+                        this.addLog('绯荤粺杩炴帴鎴愬姛 (LHB鍚屾閫氶亾)');
                     };
                     
                     ws.onmessage = (event) => {
                         this.addLog(event.data);
                         const msg = String(event.data || '');
                         const isLhbFinished = (
-                            (msg.includes('龙虎榜') && (msg.includes('完成') || msg.includes('同步'))) ||
-                            msg.includes('同步已完成') ||
-                            msg.includes('画像构建完成')
+                            (msg.includes('榫欒檸姒?) && (msg.includes('瀹屾垚') || msg.includes('鍚屾'))) ||
+                            msg.includes('鍚屾宸插畬鎴?) ||
+                            msg.includes('鐢诲儚鏋勫缓瀹屾垚')
                         );
                         if (this.awaitingLhbRefresh && isLhbFinished) {
                             this.awaitingLhbRefresh = false;
@@ -504,10 +505,10 @@
                         if (data.status === 'ok') {
                             this.analysisResult = data.result || data.analysis || '';
                         } else {
-                            this.analysisResult = '分析失败: ' + data.message;
+                            this.analysisResult = '鍒嗘瀽澶辫触: ' + data.message;
                         }
                     } catch (e) {
-                        this.analysisResult = '请求异常: ' + e.message;
+                        this.analysisResult = '璇锋眰寮傚父: ' + e.message;
                     } finally {
                         this.analyzing = false;
                     }
@@ -551,3 +552,4 @@
     </style>
 </body>
 </html>
+

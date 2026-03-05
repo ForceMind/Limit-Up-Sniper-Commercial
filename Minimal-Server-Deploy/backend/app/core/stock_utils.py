@@ -1,6 +1,79 @@
-import json
 from datetime import datetime, time
+import threading
+import time as time_module
 from app.core.data_provider import data_provider
+
+
+_METRICS_CACHE_LOCK = threading.Lock()
+_METRICS_CACHE = {}
+_METRICS_CACHE_MAX_ITEMS = 4096
+_METRICS_CACHE_TTL_TRADING_SEC = 20 * 60
+_METRICS_CACHE_TTL_OFFHOURS_SEC = 6 * 60 * 60
+
+
+def _normalize_stock_code(code: str) -> str:
+    raw = str(code or "").strip().lower()
+    if not raw:
+        return ""
+    if raw.startswith(("sh", "sz", "bj")):
+        return raw
+    digits = "".join(filter(str.isdigit, raw))
+    if len(digits) != 6:
+        return raw
+    if digits.startswith("6"):
+        return f"sh{digits}"
+    if digits.startswith(("0", "3")):
+        return f"sz{digits}"
+    if digits.startswith(("8", "4", "9")):
+        return f"bj{digits}"
+    return raw
+
+
+def _metrics_ttl_sec() -> int:
+    return _METRICS_CACHE_TTL_TRADING_SEC if is_trading_time() else _METRICS_CACHE_TTL_OFFHOURS_SEC
+
+
+def _zero_metrics() -> dict:
+    return {
+        "seal_rate": 0,
+        "broken_rate": 0,
+        "next_day_premium": 0,
+        "limit_up_days": 0,
+    }
+
+
+def _get_metrics_cache(code: str):
+    if not code:
+        return None
+    now_ts = time_module.time()
+    ttl = _metrics_ttl_sec()
+    with _METRICS_CACHE_LOCK:
+        item = _METRICS_CACHE.get(code)
+        if not isinstance(item, dict):
+            return None
+        ts = float(item.get("ts", 0) or 0)
+        if ts <= 0 or now_ts - ts > ttl:
+            _METRICS_CACHE.pop(code, None)
+            return None
+        data = item.get("data")
+        if isinstance(data, dict):
+            return dict(data)
+    return None
+
+
+def _set_metrics_cache(code: str, data: dict):
+    if not code or not isinstance(data, dict):
+        return
+    now_ts = time_module.time()
+    with _METRICS_CACHE_LOCK:
+        _METRICS_CACHE[code] = {"ts": now_ts, "data": dict(data)}
+        if len(_METRICS_CACHE) <= _METRICS_CACHE_MAX_ITEMS:
+            return
+        # Keep memory bounded: evict oldest 10%.
+        evict_count = max(1, int(_METRICS_CACHE_MAX_ITEMS * 0.1))
+        oldest = sorted(_METRICS_CACHE.items(), key=lambda x: float((x[1] or {}).get("ts", 0) or 0))[:evict_count]
+        for key, _ in oldest:
+            _METRICS_CACHE.pop(key, None)
 
 def is_trading_time():
     """
@@ -60,37 +133,75 @@ def fetch_history_data(code, days=300):
     """
     Fetch last N days of K-line data.
     """
-    return data_provider.fetch_history_data(code, days)
+    safe_days = max(60, int(days or 300))
+    try:
+        day_rows = data_provider.fetch_day_kline_history(code, days=safe_days)
+        if isinstance(day_rows, list) and day_rows:
+            normalized = []
+            for row in day_rows:
+                if not isinstance(row, dict):
+                    continue
+                day = str(row.get("date") or row.get("day") or "").strip()
+                if not day:
+                    continue
+                normalized.append({
+                    "day": day,
+                    "open": row.get("open", 0),
+                    "high": row.get("high", 0),
+                    "low": row.get("low", 0),
+                    "close": row.get("close", 0),
+                    "volume": row.get("volume", 0),
+                })
+            if normalized:
+                return normalized[-safe_days:]
+    except Exception:
+        pass
+    return data_provider.fetch_history_data(code, safe_days)
 
 def calculate_metrics(code):
     """
     Calculate advanced metrics based on history.
     """
-    klines = fetch_history_data(code, days=300)
+    norm_code = _normalize_stock_code(code)
+    cached = _get_metrics_cache(norm_code)
+    if isinstance(cached, dict):
+        return cached
+
+    klines = fetch_history_data(norm_code, days=300)
     if not klines:
-        return {
-            "seal_rate": 0,
-            "broken_rate": 0,
-            "next_day_premium": 0,
-            "limit_up_days": 0
-        }
+        result = _zero_metrics()
+        _set_metrics_cache(norm_code, result)
+        return result
     
     # Parse data
     # Sina Format: [{"day":"2023-01-01","open":"10.0","high":"10.5","low":"9.9","close":"10.2","volume":"1000"}, ...]
     
     parsed_data = []
     for item in klines:
-        parsed_data.append({
-            "date": item['day'],
-            "open": float(item['open']),
-            "close": float(item['close']),
-            "high": float(item['high']),
-            "low": float(item['low'])
-        })
+        if not isinstance(item, dict):
+            continue
+        day = str(item.get('day') or item.get('date') or '').strip()
+        if not day:
+            continue
+        try:
+            parsed_data.append({
+                "date": day,
+                "open": float(item.get('open') or 0),
+                "close": float(item.get('close') or 0),
+                "high": float(item.get('high') or 0),
+                "low": float(item.get('low') or 0),
+            })
+        except Exception:
+            continue
+
+    if len(parsed_data) < 2:
+        result = _zero_metrics()
+        _set_metrics_cache(norm_code, result)
+        return result
         
     # Determine limit up threshold
     # 20% for 688(sh) and 300(sz), 30% for 8xx(bj - ignored for now), 10% others
-    is_20cm = code.startswith('sh688') or code.startswith('sz30')
+    is_20cm = norm_code.startswith('sh688') or norm_code.startswith('sz30')
     limit_threshold = 1.195 if is_20cm else 1.095
     
     first_board_attempts = 0
@@ -165,9 +276,11 @@ def calculate_metrics(code):
         else:
             break
             
-    return {
+    result = {
         "seal_rate": round(seal_rate, 1),
         "broken_rate": round(broken_rate, 1),
         "next_day_premium": round(next_day_premium, 2),
         "limit_up_days": limit_up_days
     }
+    _set_metrics_cache(norm_code, result)
+    return result

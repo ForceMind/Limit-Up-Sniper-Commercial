@@ -2383,7 +2383,7 @@
                     for (const candidate of candidates) {
                         this.setAdminApiPrefixRuntime(candidate, false);
                         try {
-                            const res = await fetch(API_BASE_URL + '/api/admin/overview/today', { headers: this.getHeaders() });
+                            const res = await fetch(API_BASE_URL + '/api/admin/config', { headers: this.getHeaders() });
                             if (res.status === 404) {
                                 continue;
                             }
@@ -2397,19 +2397,9 @@
                 },
                 async bootstrapAuthedSession() {
                     await this.resolveAdminApiPrefixForSession();
-                    this.fetchConfig();
                     this.fetchTodayOverview();
                     this.startOverviewAutoRefresh();
                     this.connectAdminWebSocket();
-                    this.fetchAdminPanelPath();
-                    this.fetchAdminApiPrefix();
-                    this.fetchDataFiles();
-                    // Pre-fetch
-                    this.fetchUsers();
-                    this.fetchOrders();
-                    this.fetchOrderStats();
-                    this.fetchReferrals(1);
-                    this.fetchWatchlistStats();
                 },
                 snapshotConfigSection(section) {
                     this.configSnapshots[section] = this.stableStringify(this.getConfigSectionValue(section));
