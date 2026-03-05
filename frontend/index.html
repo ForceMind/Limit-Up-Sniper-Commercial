@@ -1823,6 +1823,12 @@
                     wsConnecting: false,
                     wsReconnectTimer: null,
                     logSocket: null,
+                    wsAuthToken: '',
+                    wsAuthTokenDeviceId: '',
+                    wsAuthExpireAtMs: 0,
+                    wsAuthRenewAheadSec: 90,
+                    wsAuthRefreshTimer: null,
+                    wsAuthTokenPromise: null,
                     notifyWsConnected: false,
                     notifyWsConnecting: false,
                     notifyReconnectTimer: null,
@@ -2222,6 +2228,7 @@
                 if (this.wsReconnectTimer) clearTimeout(this.wsReconnectTimer);
                 if (this.notifyReconnectTimer) clearTimeout(this.notifyReconnectTimer);
                 if (this.marketReconnectTimer) clearTimeout(this.marketReconnectTimer);
+                if (this.wsAuthRefreshTimer) clearTimeout(this.wsAuthRefreshTimer);
                 this.marketFallbackFastTimer = null;
                 this.marketFallbackSlowTimer = null;
                 this.lhbStatusPollTimer = null;
@@ -2230,6 +2237,8 @@
                 this.wsReconnectTimer = null;
                 this.notifyReconnectTimer = null;
                 this.marketReconnectTimer = null;
+                this.wsAuthRefreshTimer = null;
+                this.wsAuthTokenPromise = null;
                 if (this.globalAuthErrorHandler) {
                     window.removeEventListener('auth-error', this.globalAuthErrorHandler);
                     this.globalAuthErrorHandler = null;
@@ -2983,6 +2992,8 @@
                     localStorage.removeItem('sniper_token');
                     localStorage.removeItem('sniper_device_id');
                     localStorage.removeItem('sniper_username');
+                    this.clearWsAuthTokenState();
+                    this.wsAuthTokenPromise = null;
                     this.displayUsername = '';
                     this.deviceId = '';
                     this.accountCanApplyTrial = false;
@@ -3904,20 +3915,132 @@
                     this.searchResults = [];
                     await this.addStock(item.code);
                 },
+                clearWsAuthTokenState() {
+                    this.wsAuthToken = '';
+                    this.wsAuthTokenDeviceId = '';
+                    this.wsAuthExpireAtMs = 0;
+                    if (this.wsAuthRefreshTimer) {
+                        clearTimeout(this.wsAuthRefreshTimer);
+                        this.wsAuthRefreshTimer = null;
+                    }
+                },
+                scheduleWsAuthRefresh() {
+                    if (this.wsAuthRefreshTimer) {
+                        clearTimeout(this.wsAuthRefreshTimer);
+                        this.wsAuthRefreshTimer = null;
+                    }
+                    const expireAt = Number(this.wsAuthExpireAtMs || 0);
+                    if (!expireAt) return;
+                    const now = Date.now();
+                    const renewAheadMs = Math.max(30000, Number(this.wsAuthRenewAheadSec || 90) * 1000);
+                    let delayMs = expireAt - now - renewAheadMs;
+                    if (delayMs < 5000) delayMs = 5000;
+                    this.wsAuthRefreshTimer = setTimeout(() => {
+                        this.refreshWsAuthToken();
+                    }, delayMs);
+                },
+                async ensureWsAuthToken(force = false) {
+                    if (!this.deviceId) {
+                        throw new Error('Missing device id');
+                    }
+                    const now = Date.now();
+                    const currentDid = String(this.deviceId || '').trim();
+                    const hasValid = !!this.wsAuthToken
+                        && this.wsAuthTokenDeviceId === currentDid
+                        && Number(this.wsAuthExpireAtMs || 0) - now > 45000;
+                    if (!force && hasValid) {
+                        return this.wsAuthToken;
+                    }
+                    if (this.wsAuthTokenPromise) {
+                        return this.wsAuthTokenPromise;
+                    }
+
+                    const requestPromise = (async () => {
+                        const res = await fetch(`${API_BASE_URL}/api/ws/token`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'X-Device-ID': this.deviceId
+                            },
+                            body: JSON.stringify({ channel: 'client' })
+                        });
+                        const data = await res.json().catch(() => ({}));
+                        if (!res.ok) {
+                            throw new Error(data.detail || data.message || 'WS token issue failed');
+                        }
+                        const token = String(data.token || '').trim();
+                        const expiresAtSec = Number(data.expires_at || 0);
+                        if (!token || !expiresAtSec) {
+                            throw new Error('Invalid WS token payload');
+                        }
+                        const freshDid = String(this.deviceId || '').trim();
+                        if (!freshDid) {
+                            throw new Error('Missing device id');
+                        }
+                        this.wsAuthToken = token;
+                        this.wsAuthTokenDeviceId = freshDid;
+                        this.wsAuthExpireAtMs = expiresAtSec * 1000;
+                        this.wsAuthRenewAheadSec = Math.max(30, Number(data.renew_ahead_sec || this.wsAuthRenewAheadSec || 90));
+                        this.scheduleWsAuthRefresh();
+                        return token;
+                    })();
+
+                    this.wsAuthTokenPromise = requestPromise;
+                    try {
+                        return await requestPromise;
+                    } finally {
+                        this.wsAuthTokenPromise = null;
+                    }
+                },
+                async refreshWsAuthToken() {
+                    if (!this.deviceId) return;
+                    try {
+                        await this.ensureWsAuthToken(true);
+                    } catch (e) {
+                        console.warn('WS token auto refresh failed:', e);
+                        if (this.wsAuthRefreshTimer) {
+                            clearTimeout(this.wsAuthRefreshTimer);
+                            this.wsAuthRefreshTimer = null;
+                        }
+                        this.wsAuthRefreshTimer = setTimeout(() => {
+                            this.refreshWsAuthToken();
+                        }, 10000);
+                    }
+                },
                 
-                connectWebSocket() {
+                async connectWebSocket() {
                     const shouldConnect = !!this.deviceId && (this.hasDataAccess || this.isRegisteredAccount);
                     if (!shouldConnect) return;
                     if (this.wsConnected || this.wsConnecting) return;
                     if (this.logSocket && (this.logSocket.readyState === WebSocket.OPEN || this.logSocket.readyState === WebSocket.CONNECTING)) {
                         return;
                     }
+                    const currentDeviceId = String(this.deviceId || '').trim();
+                    this.wsConnecting = true;
+                    let wsTicket = '';
+                    try {
+                        wsTicket = await this.ensureWsAuthToken(false);
+                    } catch (e) {
+                        console.error('Failed to obtain WS token:', e);
+                        this.wsConnecting = false;
+                        const keepWs = !!this.deviceId && (this.hasDataAccess || this.isRegisteredAccount);
+                        if (keepWs && !this.wsReconnectTimer) {
+                            this.wsReconnectTimer = setTimeout(() => {
+                                this.wsReconnectTimer = null;
+                                this.connectWebSocket();
+                            }, 3000);
+                        }
+                        return;
+                    }
+                    if (!this.deviceId || String(this.deviceId || '').trim() !== currentDeviceId) {
+                        this.wsConnecting = false;
+                        return;
+                    }
                     const wsBase = this.resolveWsBase();
-                    const encodedDeviceId = encodeURIComponent(this.deviceId);
-                    const wsUrl = `${wsBase}/ws/logs?channel=client&device_id=${encodedDeviceId}&ws_token=${encodedDeviceId}`;
+                    const encodedDeviceId = encodeURIComponent(currentDeviceId);
+                    const wsUrl = `${wsBase}/ws/logs?channel=client&device_id=${encodedDeviceId}&ws_token=${encodeURIComponent(wsTicket)}`;
                     const ws = new WebSocket(wsUrl);
                     this.logSocket = ws;
-                    this.wsConnecting = true;
                     
                     ws.onopen = () => {
                         this.wsConnecting = false;
@@ -3937,6 +4060,7 @@
                         this.notifyWsConnected = !!this.isRegisteredAccount;
                         this.marketWsConnected = !!this.hasDataAccess;
                         this.stopMarketFallbackPolling();
+                        this.scheduleWsAuthRefresh();
                         this.addLog('系统连接成功');
                     };
                     
@@ -3954,7 +4078,7 @@
                         this.handleUnifiedWsEvent(payload);
                     };
                     
-                    ws.onclose = () => {
+                    ws.onclose = (event) => {
                         this.wsConnected = false;
                         this.wsConnecting = false;
                         this.notifyWsConnected = false;
@@ -3962,6 +4086,9 @@
                         this.marketWsConnected = false;
                         this.marketWsConnecting = false;
                         this.logSocket = null;
+                        if (event && Number(event.code || 0) === 1008) {
+                            this.clearWsAuthTokenState();
+                        }
                         if (this.hasDataAccess) {
                             this.startMarketFallbackPolling();
                         }
@@ -4023,6 +4150,8 @@
                         if (this.wsReconnectTimer) { clearTimeout(this.wsReconnectTimer); this.wsReconnectTimer = null; }
                         if (this.notifyReconnectTimer) { clearTimeout(this.notifyReconnectTimer); this.notifyReconnectTimer = null; }
                         if (this.marketReconnectTimer) { clearTimeout(this.marketReconnectTimer); this.marketReconnectTimer = null; }
+                        this.clearWsAuthTokenState();
+                        this.wsAuthTokenPromise = null;
                         if (this.logSocket) { try { this.logSocket.close(); } catch (e) {} this.logSocket = null; }
                         if (this.marketSocket) { try { this.marketSocket.close(); } catch (e) {} this.marketSocket = null; }
                         if (this.notifySocket) { try { this.notifySocket.close(); } catch (e) {} this.notifySocket = null; }

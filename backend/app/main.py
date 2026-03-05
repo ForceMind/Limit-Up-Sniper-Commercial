@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends, HTTPException, Response
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect, BackgroundTasks, Query, Depends, HTTPException, Response, Header
 from fastapi.responses import HTMLResponse, StreamingResponse, FileResponse, JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,17 +9,20 @@ from app.db.database import get_db
 import requests
 import json
 import hashlib
+import hmac
+import base64
 import os
 import shutil
 import asyncio
 import time
 import copy
+import secrets
 import threading
 import socket
 import re
 from pathlib import Path
 from datetime import datetime, timedelta
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
 from app.core.news_analyzer import generate_watchlist, analyze_single_stock, analyze_daily_lhb
 from app.core.market_scanner import scan_limit_up_pool, scan_broken_limit_pool, get_market_overview
@@ -117,6 +120,7 @@ USER_OP_LOG_SKIP_PREFIXES = (
     "/api/auth/register",
     "/api/auth/apply_trial",
     "/api/auth/invite_info",
+    "/api/ws/token",
     "/api/client/error_popup",
 )
 
@@ -138,6 +142,13 @@ _status_rate_limit_lock = threading.Lock()
 ADMIN_REFRESH_THROTTLE_SECONDS = float(os.getenv("ADMIN_REFRESH_THROTTLE_SECONDS", "1.5") or 1.5)
 _admin_refresh_last_push_ts: dict = {}
 _admin_refresh_lock = threading.Lock()
+WS_TOKEN_SECRET_FILE = DATA_DIR / "ws_token_secret.txt"
+WS_TOKEN_TTL_SECONDS = int(os.getenv("WS_TOKEN_TTL_SECONDS", "600") or 600)
+WS_TOKEN_TTL_SECONDS = min(3600, max(120, WS_TOKEN_TTL_SECONDS))
+WS_TOKEN_CLOCK_SKEW_SECONDS = int(os.getenv("WS_TOKEN_CLOCK_SKEW_SECONDS", "30") or 30)
+WS_TOKEN_RENEW_AHEAD_SECONDS = int(os.getenv("WS_TOKEN_RENEW_AHEAD_SECONDS", "90") or 90)
+WS_TOKEN_RENEW_AHEAD_SECONDS = min(300, max(30, WS_TOKEN_RENEW_AHEAD_SECONDS))
+_ws_token_secret_cache = None
 
 
 def _bool_env(name: str, default: bool = True) -> bool:
@@ -177,6 +188,158 @@ def _client_ip_from_request(request: Request) -> str:
     if request.client and request.client.host:
         return request.client.host
     return ""
+
+
+def _client_ip_from_websocket(websocket: WebSocket) -> str:
+    forwarded = str(websocket.headers.get("x-forwarded-for") or "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip()
+    if websocket.client and websocket.client.host:
+        return str(websocket.client.host).strip()
+    return ""
+
+
+def _normalize_ws_ua(raw: str) -> str:
+    return " ".join(str(raw or "").strip().lower().split())[:240]
+
+
+def _urlsafe_b64encode(data: bytes) -> str:
+    return base64.urlsafe_b64encode(data).decode("ascii").rstrip("=")
+
+
+def _urlsafe_b64decode(text: str) -> bytes:
+    safe = str(text or "").strip()
+    if not safe:
+        return b""
+    padding = "=" * ((4 - (len(safe) % 4)) % 4)
+    return base64.urlsafe_b64decode((safe + padding).encode("ascii"))
+
+
+def _load_ws_token_secret() -> bytes:
+    global _ws_token_secret_cache
+    if isinstance(_ws_token_secret_cache, bytes) and _ws_token_secret_cache:
+        return _ws_token_secret_cache
+    raw = ""
+    try:
+        if WS_TOKEN_SECRET_FILE.exists():
+            raw = str(WS_TOKEN_SECRET_FILE.read_text(encoding="utf-8") or "").strip()
+    except Exception:
+        raw = ""
+    if not raw:
+        raw = secrets.token_urlsafe(48)
+        try:
+            WS_TOKEN_SECRET_FILE.parent.mkdir(parents=True, exist_ok=True)
+            WS_TOKEN_SECRET_FILE.write_text(raw, encoding="utf-8")
+            try:
+                os.chmod(WS_TOKEN_SECRET_FILE, 0o600)
+            except Exception:
+                pass
+        except Exception:
+            pass
+    _ws_token_secret_cache = raw.encode("utf-8")
+    return _ws_token_secret_cache
+
+
+def _ws_token_sign(text: str) -> str:
+    secret = _load_ws_token_secret()
+    digest = hmac.new(secret, text.encode("utf-8"), hashlib.sha256).digest()
+    return _urlsafe_b64encode(digest)
+
+
+def _build_ws_bind(device_id: str, client_ip: str, user_agent: str) -> str:
+    did = str(device_id or "").strip()
+    ip = str(client_ip or "").strip()
+    ua = _normalize_ws_ua(user_agent)
+    base = f"{did}|{ip}|{ua}"
+    return hashlib.sha256(base.encode("utf-8")).hexdigest()
+
+
+def _mint_ws_token(
+    *,
+    device_id: str,
+    channel: str,
+    client_ip: str,
+    user_agent: str,
+) -> Dict[str, Any]:
+    now_ts = int(time.time())
+    exp_ts = now_ts + int(WS_TOKEN_TTL_SECONDS)
+    header = {"alg": "HS256", "typ": "WST"}
+    payload = {
+        "v": 1,
+        "did": str(device_id or "").strip(),
+        "ch": str(channel or "").strip().lower(),
+        "iat": now_ts,
+        "exp": exp_ts,
+        "nonce": secrets.token_hex(8),
+        "bind": _build_ws_bind(device_id, client_ip, user_agent),
+    }
+    header_b64 = _urlsafe_b64encode(
+        json.dumps(header, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    payload_b64 = _urlsafe_b64encode(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    )
+    signing_input = f"{header_b64}.{payload_b64}"
+    signature = _ws_token_sign(signing_input)
+    return {
+        "token": f"{signing_input}.{signature}",
+        "expires_at": exp_ts,
+        "issued_at": now_ts,
+    }
+
+
+def _verify_ws_token(
+    *,
+    token: str,
+    device_id: str,
+    channel: str,
+    client_ip: str,
+    user_agent: str,
+) -> bool:
+    raw = str(token or "").strip()
+    if not raw:
+        return False
+    parts = raw.split(".")
+    if len(parts) != 3:
+        return False
+    header_b64, payload_b64, signature_b64 = parts
+    signing_input = f"{header_b64}.{payload_b64}"
+    expected_sig = _ws_token_sign(signing_input)
+    if not hmac.compare_digest(signature_b64, expected_sig):
+        return False
+    try:
+        payload_raw = _urlsafe_b64decode(payload_b64).decode("utf-8")
+        payload = json.loads(payload_raw)
+    except Exception:
+        return False
+    if not isinstance(payload, dict):
+        return False
+
+    did = str(payload.get("did") or "").strip()
+    ch = str(payload.get("ch") or "").strip().lower()
+    if did != str(device_id or "").strip():
+        return False
+    if ch != str(channel or "").strip().lower():
+        return False
+
+    now_ts = int(time.time())
+    try:
+        exp_ts = int(payload.get("exp") or 0)
+        iat_ts = int(payload.get("iat") or 0)
+    except Exception:
+        return False
+    if exp_ts <= 0 or iat_ts <= 0:
+        return False
+    if exp_ts < now_ts - int(WS_TOKEN_CLOCK_SKEW_SECONDS):
+        return False
+    if iat_ts > now_ts + int(WS_TOKEN_CLOCK_SKEW_SECONDS):
+        return False
+
+    expected_bind = _build_ws_bind(device_id, client_ip, user_agent)
+    token_bind = str(payload.get("bind") or "").strip()
+    if not token_bind or not hmac.compare_digest(token_bind, expected_bind):
+        return False
+    return True
 
 
 def _is_status_rate_limited(request: Request) -> bool:
@@ -1566,6 +1729,42 @@ def refresh_watchlist():
     if not WATCH_LIST:
         WATCH_LIST = ['sh600519', 'sz002405', 'sz300059']
 
+class WsTokenIssueRequest(BaseModel):
+    channel: Optional[str] = "client"
+
+
+@app.post("/api/ws/token")
+async def issue_ws_token(
+    request: Request,
+    payload: WsTokenIssueRequest,
+    x_device_id: str = Header(None, alias="X-Device-ID"),
+):
+    device_id = str(x_device_id or "").strip()
+    if not device_id:
+        raise HTTPException(status_code=400, detail="Missing Device ID")
+    account_store.ensure_device_not_banned(device_id)
+
+    channel = str(payload.channel or "client").strip().lower()
+    if channel != "client":
+        raise HTTPException(status_code=400, detail="Unsupported channel")
+
+    issued = _mint_ws_token(
+        device_id=device_id,
+        channel=channel,
+        client_ip=_client_ip_from_request(request),
+        user_agent=str(request.headers.get("user-agent") or ""),
+    )
+    return {
+        "status": "success",
+        "channel": channel,
+        "token": issued["token"],
+        "issued_at": int(issued["issued_at"]),
+        "expires_at": int(issued["expires_at"]),
+        "ttl_sec": int(WS_TOKEN_TTL_SECONDS),
+        "renew_ahead_sec": int(WS_TOKEN_RENEW_AHEAD_SECONDS),
+    }
+
+
 @app.websocket("/ws/logs")
 async def websocket_endpoint(websocket: WebSocket):
     channel = (websocket.query_params.get("channel") or "logs").strip().lower()
@@ -1578,7 +1777,13 @@ async def websocket_endpoint(websocket: WebSocket):
         await websocket.close(code=1008)
         return
     if channel == "client":
-        if not ws_token or ws_token != device_id:
+        if not _verify_ws_token(
+            token=ws_token,
+            device_id=device_id,
+            channel="client",
+            client_ip=_client_ip_from_websocket(websocket),
+            user_agent=str(websocket.headers.get("user-agent") or ""),
+        ):
             await websocket.close(code=1008)
             return
     if channel == "admin":
