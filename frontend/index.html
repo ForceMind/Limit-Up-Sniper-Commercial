@@ -1756,6 +1756,7 @@
                     marketFallbackSlowTimer: null,
                     lhbStatusPollTimer: null,
                     configPollTimer: null,
+                    bootstrapConfigLoaded: false,
                     tabDataLoaded: { pre: false, intra: false, manual: false, pool: false },
                     clockTimer: null,
                     lhbStatusLastCheckTs: 0,
@@ -2112,7 +2113,7 @@
                     },
                     showSettingsModal(isOpen) {
                         if (!isOpen || !this.hasDataAccess) return;
-                        this.fetchConfig();
+                        this.fetchConfig(true);
                         this.fetchLHBConfig();
                     },
                 },
@@ -2891,6 +2892,7 @@
                     this.inviteCodeDeleted = [];
                     this.selectedInviteHistoryCode = '';
                     this.inviteInfo = { enabled: true, invite_code: '', invite_link: '', share_text: '', reward_days: 30 };
+                    this.bootstrapConfigLoaded = false;
                     this.showOnboardingModal = false;
                     this.showMsg('已退出登录', 'info');
                     window.location.reload();
@@ -3564,25 +3566,8 @@
                     }
                 },
                 startMarketFallbackPolling() {
-                    if (this.marketFallbackFastTimer || this.marketFallbackSlowTimer) return;
-                    this.marketFallbackFastTimer = setInterval(() => {
-                        if (!this.hasDataAccess || this.marketWsConnected) return;
-                        if (['pre', 'intra'].includes(this.activeTab)) {
-                            this.fetchData();
-                        } else if (this.activeTab === 'manual') {
-                            this.fetchLocalFavoriteQuotes();
-                        }
-                    }, 15000);
-
-                    this.marketFallbackSlowTimer = setInterval(() => {
-                        if (!this.hasDataAccess || this.marketWsConnected) return;
-                        if (this.activeTab === 'pool') {
-                            this.fetchLimitUpPool();
-                        }
-                        if (this.activeTab !== 'manual') {
-                            this.fetchMarketSentiment();
-                        }
-                    }, 45000);
+                    // 关闭 HTTP 轮询回退，统一由 WS 驱动。
+                    return;
                 },
                 stopMarketFallbackPolling() {
                     if (this.marketFallbackFastTimer) {
@@ -3594,8 +3579,23 @@
                         this.marketFallbackSlowTimer = null;
                     }
                 },
-                async fetchConfig() {
+                resolveWsBase() {
+                    const raw = String(API_BASE_URL || '').trim();
+                    if (raw) {
+                        if (/^https?:\/\//i.test(raw)) {
+                            return raw.replace(/^http/i, 'ws').replace(/\/+$/, '');
+                        }
+                        if (raw.startsWith('//')) {
+                            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                            return (proto + raw).replace(/\/+$/, '');
+                        }
+                    }
+                    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+                    return `${proto}://${window.location.host}`;
+                },
+                async fetchConfig(force = false) {
                     if (!this.deviceId) return;
+                    if (this.bootstrapConfigLoaded && !force) return;
                     try {
                         const response = await fetch(API_BASE_URL + '/api/auth/bootstrap');
                         const data = await response.json();
@@ -3617,6 +3617,7 @@
                         if (data && typeof data.user === 'object') {
                             this.userInfo = { ...(this.userInfo || {}), ...data.user };
                         }
+                        this.bootstrapConfigLoaded = true;
                     } catch (e) {
                         console.error('Failed to fetch config:', e);
                     }
@@ -3756,10 +3757,7 @@
                     if (this.logSocket && (this.logSocket.readyState === WebSocket.OPEN || this.logSocket.readyState === WebSocket.CONNECTING)) {
                         return;
                     }
-                    // Use API_BASE_URL to determine WS URL
-                    let wsBase = API_BASE_URL.replace(/^http/, 'ws');
-                    // Handle case where API_BASE_URL has no protocol (e.g. relative path, though unlikely in this setup)
-                    if (wsBase.startsWith('//')) wsBase = 'ws:' + wsBase;
+                    const wsBase = this.resolveWsBase();
 
                     const wsUrl = this.deviceId
                         ? `${wsBase}/ws/logs?device_id=${encodeURIComponent(this.deviceId)}`
@@ -3824,8 +3822,7 @@
                         try { this.notifySocket.close(); } catch (e) {}
                         this.notifySocket = null;
                     }
-                    let wsBase = API_BASE_URL.replace(/^http/, 'ws');
-                    if (wsBase.startsWith('//')) wsBase = 'ws:' + wsBase;
+                    const wsBase = this.resolveWsBase();
                     const wsUrl = `${wsBase}/ws/logs?channel=notify&device_id=${encodeURIComponent(this.deviceId)}`;
                     const ws = new WebSocket(wsUrl);
                     this.notifySocket = ws;
@@ -3913,8 +3910,7 @@
                         try { this.marketSocket.close(); } catch (e) {}
                         this.marketSocket = null;
                     }
-                    let wsBase = API_BASE_URL.replace(/^http/, 'ws');
-                    if (wsBase.startsWith('//')) wsBase = 'ws:' + wsBase;
+                    const wsBase = this.resolveWsBase();
                     const wsUrl = this.deviceId
                         ? `${wsBase}/ws/logs?channel=market&device_id=${encodeURIComponent(this.deviceId)}`
                         : `${wsBase}/ws/logs?channel=market`;
