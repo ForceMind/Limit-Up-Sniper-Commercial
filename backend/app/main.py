@@ -4,6 +4,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from sqlalchemy.orm import Session
+from sqlalchemy import text
 from app.db.database import get_db
 import requests
 import json
@@ -1891,6 +1892,21 @@ def _is_not_modified(request: Request, etag: str) -> bool:
     inm = str(request.headers.get("if-none-match") or "").strip()
     if not inm or not etag:
         return False
+
+
+def ensure_runtime_indexes():
+    """Create hot-path indexes when missing (idempotent)."""
+    stmts = [
+        "CREATE INDEX IF NOT EXISTS ix_users_created_at_runtime ON users (created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_purchase_orders_created_at_runtime ON purchase_orders (created_at)",
+        "CREATE INDEX IF NOT EXISTS ix_purchase_orders_status_runtime ON purchase_orders (status)",
+    ]
+    try:
+        with database.engine.begin() as conn:
+            for stmt in stmts:
+                conn.execute(text(stmt))
+    except Exception as e:
+        print(f"创建运行时索引失败: {e}")
     return inm == etag
 
 
@@ -2094,6 +2110,7 @@ def update_limit_up_pool_task():
 async def startup_event():
     # Load caches
     load_analysis_cache()
+    ensure_runtime_indexes()
 
     # Always start lightweight websocket log broadcaster.
     asyncio.create_task(log_broadcaster())
@@ -2855,6 +2872,33 @@ def ensure_stock_quotes_cache(max_age_sec: int = max(30, REALTIME_CACHE_INTERVAL
             reload_watchlist_globals()
         refresh_stock_quotes_cache()
 
+
+def _project_rows(rows, selected_fields: set) -> list:
+    if not isinstance(rows, list):
+        return []
+    output = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        item = {}
+        for key in selected_fields:
+            if key in row:
+                item[key] = row.get(key)
+        if "code" not in item and "code" in row:
+            item["code"] = row.get("code")
+        output.append(item)
+    return output
+
+
+def _resolve_selected_fields(fields_text: str, default_fields: tuple) -> set:
+    text = str(fields_text or "").strip()
+    if not text:
+        return set(default_fields)
+    picked = {str(x).strip() for x in text.split(",") if str(x).strip()}
+    if "code" not in picked:
+        picked.add("code")
+    return picked
+
 @app.post("/api/watchlist/remove")
 async def remove_from_watchlist(request: Request, authorized: bool = Depends(admin.verify_admin)):
     """从自选列表中移除股票"""
@@ -2887,9 +2931,37 @@ async def remove_from_watchlist(request: Request, authorized: bool = Depends(adm
         return {"status": "error", "message": str(e)}
 
 @app.get("/api/stocks")
-async def api_stocks(request: Request, user: models.User = Depends(check_data_permission)):
+async def api_stocks(
+    request: Request,
+    lite: bool = Query(False),
+    fields: str = Query(""),
+    user: models.User = Depends(check_data_permission),
+):
     await asyncio.to_thread(ensure_stock_quotes_cache)
     payload = get_stock_quotes()
+    if lite or fields:
+        selected = _resolve_selected_fields(
+            fields,
+            (
+                "code",
+                "name",
+                "current",
+                "change_percent",
+                "strategy",
+                "is_favorite",
+                "added_time",
+                "concept",
+                "turnover",
+                "circulation_value",
+                "time",
+                "likely_seats",
+                "seal_rate",
+                "broken_rate",
+                "next_day_premium",
+                "limit_up_days",
+            ),
+        )
+        payload = _project_rows(payload, selected)
     etag = _json_etag(payload)
     if _is_not_modified(request, etag):
         return Response(status_code=304, headers={"ETag": etag})
@@ -2906,11 +2978,40 @@ async def api_indices(request: Request, user: models.User = Depends(check_data_p
     return JSONResponse(content=payload, headers={"ETag": etag, "Cache-Control": "private, max-age=3"})
 
 @app.get("/api/limit_up_pool")
-async def api_limit_up_pool(request: Request, user: models.User = Depends(check_data_permission)):
+async def api_limit_up_pool(
+    request: Request,
+    lite: bool = Query(False),
+    fields: str = Query(""),
+    user: models.User = Depends(check_data_permission),
+):
     payload = {
         "limit_up": limit_up_pool_data,
         "broken": broken_limit_pool_data
     }
+    if lite or fields:
+        selected = _resolve_selected_fields(
+            fields,
+            (
+                "code",
+                "name",
+                "current",
+                "change_percent",
+                "turnover",
+                "circulation_value",
+                "concept",
+                "reason",
+                "time",
+                "likely_seats",
+                "seal_rate",
+                "broken_rate",
+                "next_day_premium",
+                "limit_up_days",
+            ),
+        )
+        payload = {
+            "limit_up": _project_rows(payload.get("limit_up", []), selected),
+            "broken": _project_rows(payload.get("broken", []), selected),
+        }
     etag = _json_etag(payload)
     if _is_not_modified(request, etag):
         return Response(status_code=304, headers={"ETag": etag})

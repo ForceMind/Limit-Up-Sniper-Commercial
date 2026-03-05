@@ -64,8 +64,15 @@ SESSION_EXPIRE_HOURS = 24
 failed_attempts: Dict[str, List[float]] = {}
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 EXPORT_TICKET_TTL_SECONDS = 120
+ADMIN_OVERVIEW_CACHE_TTL_SECONDS = float(os.getenv("ADMIN_OVERVIEW_CACHE_TTL_SECONDS", "5") or 5)
 _export_ticket_lock = threading.Lock()
 _export_tickets: Dict[str, Dict[str, Any]] = {}
+_admin_overview_cache_lock = threading.Lock()
+_admin_overview_cache: Dict[str, Any] = {
+    "ts": 0.0,
+    "date": "",
+    "payload": None,
+}
 
 
 def _load_json(path: Path, default):
@@ -1485,6 +1492,20 @@ async def get_today_overview(
     authorized: bool = Depends(verify_admin),
 ):
     now_sh, start_sh, end_sh, start_utc, end_utc = _today_range_utc_naive()
+    date_key = start_sh.strftime("%Y-%m-%d")
+    now_ts = time.time()
+
+    with _admin_overview_cache_lock:
+        cached_payload = _admin_overview_cache.get("payload")
+        cached_date = str(_admin_overview_cache.get("date") or "")
+        cached_ts = float(_admin_overview_cache.get("ts", 0) or 0)
+    if (
+        isinstance(cached_payload, dict)
+        and cached_date == date_key
+        and cached_ts > 0
+        and now_ts - cached_ts <= ADMIN_OVERVIEW_CACHE_TTL_SECONDS
+    ):
+        return cached_payload
 
     # Users
     new_users = (
@@ -1729,7 +1750,7 @@ async def get_today_overview(
     runtime_metrics = _collect_system_runtime_metrics(today_text)
     ws_stats = await ws_hub.snapshot_stats()
 
-    return {
+    payload = {
         "date": start_sh.strftime("%Y-%m-%d"),
         "server_time": now_sh.strftime("%Y-%m-%d %H:%M:%S"),
         "users": {
@@ -1795,6 +1816,11 @@ async def get_today_overview(
             "estimated_cost_cny_today": round(ai_cost_today, 6),
         },
     }
+    with _admin_overview_cache_lock:
+        _admin_overview_cache["ts"] = time.time()
+        _admin_overview_cache["date"] = date_key
+        _admin_overview_cache["payload"] = payload
+    return payload
 
 
 @router.get("/overview/online_users")
