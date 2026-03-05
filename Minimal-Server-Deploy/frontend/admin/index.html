@@ -3078,7 +3078,11 @@
 
                                 const message = String((data && data.detail) || '').trim() || '登录失败';
                                 lastError = new Error(message);
-                                if (res.status !== 404) {
+                                const isPrefixMismatchLike = (
+                                    res.status === 404
+                                    || (res.status === 401 && message === 'Missing Device ID')
+                                );
+                                if (!isPrefixMismatchLike) {
                                     pathMismatchOnly = false;
                                     break;
                                 }
