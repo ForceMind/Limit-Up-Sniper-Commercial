@@ -8,13 +8,29 @@
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script>
+        const normalizeHttpBase = (value) => {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            if (!/^https?:\/\//i.test(raw)) return '';
+            return raw.replace(/\/+$/, '');
+        };
+        const guessApiBaseFromHost = () => {
+            const protocol = location.protocol === 'https:' ? 'https:' : 'http:';
+            const hostname = String(location.hostname || '').trim().toLowerCase();
+            if (!hostname || hostname === 'localhost' || hostname === '127.0.0.1') return '';
+            if (hostname.startsWith('www.') && hostname.length > 4) {
+                return `${protocol}//api.${hostname.slice(4)}`;
+            }
+            return '';
+        };
         const getApiBaseUrl = () => {
-            const injected = String(window.__API_PREFIX__ || '').trim();
-            if (injected) return injected.replace(/\/+$/, '');
+            const guessed = guessApiBaseFromHost();
+            const injected = normalizeHttpBase(window.__API_PREFIX__);
+            if (injected) return injected;
 
             try {
-                const fromStorage = String(localStorage.getItem('sniper_api_base') || '').trim();
-                if (/^https?:\/\//i.test(fromStorage)) return fromStorage.replace(/\/+$/, '');
+                const fromStorage = normalizeHttpBase(localStorage.getItem('sniper_api_base'));
+                if (fromStorage) return fromStorage;
             } catch (_) {}
 
             const protocol = location.protocol;
@@ -25,6 +41,7 @@
             if (hostname === 'localhost' || hostname === '127.0.0.1') {
                 if (port !== '8000') return 'http://localhost:8000';
             }
+            if (guessed) return guessed;
             return '';
         };
         const API_BASE_URL = getApiBaseUrl();
@@ -2627,11 +2644,25 @@
                         if (this.currentView === 'config') this.fetchDataFiles();
                     }
                 },
+                resolveWsBase() {
+                    const raw = String(API_BASE_URL || '').trim();
+                    if (raw) {
+                        if (/^https?:\/\//i.test(raw)) {
+                            return raw.replace(/^http/i, 'ws').replace(/\/+$/, '');
+                        }
+                        if (raw.startsWith('//')) {
+                            const proto = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                            return (proto + raw).replace(/\/+$/, '');
+                        }
+                    }
+                    const proto = window.location.protocol === 'https:' ? 'wss' : 'ws';
+                    return `${proto}://${window.location.host}`;
+                },
                 connectAdminWebSocket() {
                     if (!this.token) return;
                     if (this.adminWsConnected || this.adminWsConnecting) return;
 
-                    const wsBase = String(API_BASE_URL || '').replace(/^http/i, 'ws');
+                    const wsBase = this.resolveWsBase();
                     const wsUrl = `${wsBase}/ws/logs?channel=admin&admin_token=${encodeURIComponent(this.token)}`;
                     this.adminWsConnecting = true;
 

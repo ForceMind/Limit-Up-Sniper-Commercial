@@ -9,6 +9,12 @@ from zoneinfo import ZoneInfo
 from pathlib import Path
 from urllib.parse import urlsplit
 
+try:
+    from pypinyin import Style, lazy_pinyin
+except Exception:
+    Style = None
+    lazy_pinyin = None
+
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 DATA_DIR = BASE_DIR / "data"
 DATA_DIR.mkdir(exist_ok=True)
@@ -65,7 +71,9 @@ class DataProvider:
         self._biying_stock_info_cache_file = DATA_DIR / "biying_stock_info_cache.json"
         self._biying_stock_list_file = DATA_DIR / "biying_stock_list.json"
         self._biying_stock_list_map = {}
+        self._biying_stock_alias_map = {}
         self._biying_stock_list_last_refresh = ""
+        self._name_pinyin_cache = {}
         self._biying_all_market_cache_df = None
         self._biying_all_market_cache_ts = 0.0
         self._biying_all_market_min_interval_sec = 60
@@ -115,6 +123,96 @@ class DataProvider:
                     return value
         return default
 
+    def _normalize_search_token(self, value):
+        text = str(value or "").strip().lower()
+        if not text:
+            return ""
+        token = "".join(ch for ch in text if ch.isalnum())
+        if len(token) < 2:
+            return ""
+        return token
+
+    def _split_alias_tokens(self, raw_value):
+        values = []
+        if isinstance(raw_value, (list, tuple, set)):
+            values.extend(raw_value)
+        else:
+            values.append(raw_value)
+
+        out = set()
+        for value in values:
+            text = str(value or "").strip()
+            if not text:
+                continue
+            for sep in (",", ";", "|", "/", "\\", "，", "；", "、"):
+                text = text.replace(sep, " ")
+            for part in text.split():
+                token = self._normalize_search_token(part)
+                if token:
+                    out.add(token)
+        return out
+
+    def _build_name_pinyin_tokens(self, name):
+        text = str(name or "").strip()
+        if not text:
+            return set()
+        cached = self._name_pinyin_cache.get(text)
+        if isinstance(cached, (list, tuple, set)):
+            return set(cached)
+
+        tokens = set()
+        if lazy_pinyin is None:
+            self._name_pinyin_cache[text] = []
+            return tokens
+
+        parts = []
+        try:
+            if Style is not None:
+                parts = lazy_pinyin(text, style=Style.NORMAL, errors="ignore", strict=False)
+            else:
+                parts = lazy_pinyin(text, errors="ignore")
+        except Exception:
+            parts = []
+
+        if parts:
+            full = self._normalize_search_token("".join(parts))
+            if full:
+                tokens.add(full)
+            initials = self._normalize_search_token("".join((p[0] if p else "") for p in parts))
+            if initials:
+                tokens.add(initials)
+
+        self._name_pinyin_cache[text] = sorted(tokens)
+        return tokens
+
+    def _extract_alias_tokens_from_row(self, row, name_hint=""):
+        if not isinstance(row, dict):
+            return set()
+
+        keys = (
+            "pinyin",
+            "py",
+            "jp",
+            "jianpin",
+            "abbr",
+            "abbr_name",
+            "spell",
+            "spell_name",
+            "拼音",
+            "简拼",
+            "拼音简称",
+            "股票拼音",
+            "股票简拼",
+        )
+        tokens = set()
+        for key in keys:
+            if key not in row:
+                continue
+            tokens.update(self._split_alias_tokens(row.get(key)))
+
+        tokens.update(self._build_name_pinyin_tokens(name_hint))
+        return tokens
+
     def _throttle_provider_request(self, provider_key, min_interval_sec=None):
         key = str(provider_key or "generic").strip().lower() or "generic"
         interval = self._provider_min_interval_sec.get(key, 0.2) if min_interval_sec is None else max(0.0, float(min_interval_sec))
@@ -158,9 +256,33 @@ class DataProvider:
                     loaded = json.load(f)
                 if isinstance(loaded, dict):
                     stock_map = loaded.get("stocks", {})
+                    alias_map = loaded.get("aliases", {})
                     refresh_date = str(loaded.get("refresh_date", "") or "")
                     if isinstance(stock_map, dict):
-                        self._biying_stock_list_map = {str(k): str(v) for k, v in stock_map.items() if str(k).isdigit()}
+                        parsed_stock_map = {}
+                        parsed_alias_map = {}
+                        for k, v in stock_map.items():
+                            code = str(k or "").strip()
+                            if not code.isdigit():
+                                continue
+                            if isinstance(v, dict):
+                                name = str(v.get("name", code) or code).strip() or code
+                                parsed_stock_map[code] = name
+                                alias_tokens = self._split_alias_tokens(v.get("aliases", []))
+                                if alias_tokens:
+                                    parsed_alias_map[code] = sorted(alias_tokens)
+                            else:
+                                parsed_stock_map[code] = str(v or code).strip() or code
+                        self._biying_stock_list_map = parsed_stock_map
+                        if isinstance(alias_map, dict):
+                            for k, v in alias_map.items():
+                                code = str(k or "").strip()
+                                if not code.isdigit():
+                                    continue
+                                alias_tokens = self._split_alias_tokens(v)
+                                if alias_tokens:
+                                    parsed_alias_map[code] = sorted(alias_tokens)
+                        self._biying_stock_alias_map = parsed_alias_map
                     self._biying_stock_list_last_refresh = refresh_date
         except Exception:
             pass
@@ -184,6 +306,7 @@ class DataProvider:
             payload = {
                 "refresh_date": self._biying_stock_list_last_refresh,
                 "stocks": self._biying_stock_list_map,
+                "aliases": self._biying_stock_alias_map,
             }
             with open(self._biying_stock_list_file, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
@@ -455,6 +578,7 @@ class DataProvider:
             return self._biying_stock_list_map
 
         stock_map = {}
+        stock_alias_map = {}
         for row in rows:
             if not isinstance(row, dict):
                 continue
@@ -466,9 +590,13 @@ class DataProvider:
                 continue
             name = str(self._first_value(row, ["name", "mc", "stock_name", "简称", "股票简称"], clean_code) or clean_code).strip()
             stock_map[clean_code] = name
+            alias_tokens = self._extract_alias_tokens_from_row(row, name_hint=name)
+            if alias_tokens:
+                stock_alias_map[clean_code] = sorted(alias_tokens)
 
         if stock_map:
             self._biying_stock_list_map = stock_map
+            self._biying_stock_alias_map = stock_alias_map
             self._biying_stock_list_last_refresh = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
             self._save_biying_stock_list_cache()
         return self._biying_stock_list_map
@@ -1485,7 +1613,7 @@ class DataProvider:
         """
         catalog = {}
 
-        def _upsert(raw_code, raw_name=""):
+        def _upsert(raw_code, raw_name="", alias_tokens=None):
             code_text = str(raw_code or "").strip().lower()
             if not code_text:
                 return
@@ -1507,10 +1635,15 @@ class DataProvider:
             if prev and str(prev.get("name", "")).strip() and prev.get("name") != fallback_name and name == fallback_name:
                 name = prev.get("name")
 
+            alias_set = set(prev.get("aliases", []) if isinstance(prev, dict) else [])
+            alias_set.update(self._split_alias_tokens(alias_tokens or []))
+            alias_set.update(self._build_name_pinyin_tokens(name))
+
             catalog[full_code] = {
                 "code": full_code,
                 "name": name,
                 "display_code": clean_code,
+                "aliases": sorted(alias_set),
             }
 
         if isinstance(self._biying_stock_list_map, dict):
@@ -1518,7 +1651,11 @@ class DataProvider:
                 prefix = self._guess_market_prefix(clean_code)
                 if not prefix:
                     continue
-                _upsert(f"{prefix}{clean_code}", name)
+                _upsert(
+                    f"{prefix}{clean_code}",
+                    name,
+                    alias_tokens=(self._biying_stock_alias_map or {}).get(str(clean_code), []),
+                )
 
         if self._base_info_df is not None and not self._base_info_df.empty:
             try:
@@ -1589,6 +1726,7 @@ class DataProvider:
         if not text:
             return []
 
+        text_token = self._normalize_search_token(text)
         q_digits = "".join(filter(str.isdigit, text))
         catalog = self._iter_local_stock_catalog()
         if not catalog:
@@ -1606,6 +1744,7 @@ class DataProvider:
             display_code = str(item.get("display_code", "")).strip()
             name = str(item.get("name", "")).strip()
             name_l = name.lower()
+            aliases = self._split_alias_tokens(item.get("aliases", []))
             if not code or not display_code:
                 continue
 
@@ -1618,8 +1757,14 @@ class DataProvider:
                 score = 2
             elif name_l == text:
                 score = 3
-            elif text in name_l:
+            elif text_token and text_token in aliases:
                 score = 4
+            elif text in name_l:
+                score = 5
+            elif text_token and any(a.startswith(text_token) for a in aliases):
+                score = 6
+            elif text_token and any(text_token in a for a in aliases):
+                score = 7
             else:
                 continue
 
@@ -1631,7 +1776,14 @@ class DataProvider:
             ))
 
         scored.sort(key=lambda x: (x[0], x[1], x[2]))
-        return [s[3] for s in scored[:20]]
+        return [
+            {
+                "code": str(s[3].get("code", "")),
+                "name": str(s[3].get("name", "")),
+                "display_code": str(s[3].get("display_code", "")),
+            }
+            for s in scored[:20]
+        ]
 
     def get_stock_info(self, code):
         """

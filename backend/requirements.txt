@@ -11,3 +11,4 @@ numpy
 sqlalchemy
 aiofiles
 python-multipart
+pypinyin

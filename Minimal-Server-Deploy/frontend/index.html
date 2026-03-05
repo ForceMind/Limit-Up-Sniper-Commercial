@@ -16,13 +16,29 @@
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <script>
+        const normalizeHttpBase = (value) => {
+            const raw = String(value || '').trim();
+            if (!raw) return '';
+            if (!/^https?:\/\//i.test(raw)) return '';
+            return raw.replace(/\/+$/, '');
+        };
+        const guessApiBaseFromHost = () => {
+            const protocol = location.protocol === 'https:' ? 'https:' : 'http:';
+            const hostname = String(location.hostname || '').trim().toLowerCase();
+            if (!hostname || hostname === 'localhost' || hostname === '127.0.0.1') return '';
+            if (hostname.startsWith('www.') && hostname.length > 4) {
+                return `${protocol}//api.${hostname.slice(4)}`;
+            }
+            return '';
+        };
         const getApiBaseUrl = () => {
-            const injected = String(window.__API_PREFIX__ || '').trim();
-            if (injected) return injected.replace(/\/+$/, '');
+            const guessed = guessApiBaseFromHost();
+            const injected = normalizeHttpBase(window.__API_PREFIX__);
+            if (injected) return injected;
 
             try {
-                const fromStorage = String(localStorage.getItem('sniper_api_base') || '').trim();
-                if (/^https?:\/\//i.test(fromStorage)) return fromStorage.replace(/\/+$/, '');
+                const fromStorage = normalizeHttpBase(localStorage.getItem('sniper_api_base'));
+                if (fromStorage) return fromStorage;
             } catch (_) {}
 
             const protocol = location.protocol;
@@ -33,6 +49,7 @@
             if (hostname === 'localhost' || hostname === '127.0.0.1') {
                 if (port !== '8000') return 'http://localhost:8000';
             }
+            if (guessed) return guessed;
             return '';
         };
         const API_BASE_URL = getApiBaseUrl();
