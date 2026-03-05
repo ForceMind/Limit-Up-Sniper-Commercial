@@ -132,6 +132,9 @@ STATUS_RATE_LIMIT_WINDOW_SECONDS = int(os.getenv("STATUS_RATE_LIMIT_WINDOW_SECON
 STATUS_RATE_LIMIT_MAX_REQUESTS = int(os.getenv("STATUS_RATE_LIMIT_MAX_REQUESTS", "30") or 30)
 _status_rate_limit_hits: dict = {}
 _status_rate_limit_lock = threading.Lock()
+ADMIN_REFRESH_THROTTLE_SECONDS = float(os.getenv("ADMIN_REFRESH_THROTTLE_SECONDS", "1.5") or 1.5)
+_admin_refresh_last_push_ts: dict = {}
+_admin_refresh_lock = threading.Lock()
 
 
 def _bool_env(name: str, default: bool = True) -> bool:
@@ -334,6 +337,88 @@ def _safe_bool_text(value: Optional[bool]) -> str:
     return "unknown"
 
 
+def _resolve_admin_refresh_targets(path: str, method: str, status_code: int) -> List[str]:
+    safe_path = str(path or "").strip().lower()
+    safe_method = str(method or "").upper()
+    if int(status_code or 0) >= 400:
+        return []
+    if safe_method not in {"POST", "PUT", "PATCH", "DELETE"}:
+        return []
+
+    targets: List[str] = []
+
+    if safe_path.startswith("/api/admin/"):
+        targets.append("overview")
+        if "/orders" in safe_path:
+            targets.extend(["orders", "referrals", "users"])
+        if "/users" in safe_path:
+            targets.append("users")
+        if "/watchlist" in safe_path:
+            targets.append("watchlist")
+        if "/news" in safe_path:
+            targets.append("news")
+        if "/lhb" in safe_path:
+            targets.append("lhb")
+        if "/config" in safe_path or "/panel_path" in safe_path or "/api_prefix" in safe_path:
+            targets.append("config")
+        if "/data/" in safe_path:
+            targets.append("data_files")
+        if "/login" in safe_path or "/logout" in safe_path:
+            targets.append("online_users")
+
+    if safe_path.startswith("/api/payment/"):
+        targets.extend(["overview", "orders", "referrals", "users"])
+    if safe_path in {"/api/auth/register", "/api/auth/login_user", "/api/auth/apply_trial"}:
+        targets.extend(["overview", "users", "online_users"])
+    if safe_path.startswith("/api/watchlist/stat/") or safe_path in {
+        "/api/add_watchlist",
+        "/api/remove_watchlist",
+        "/api/add_stock",
+        "/api/watchlist/remove",
+    }:
+        targets.extend(["overview", "watchlist"])
+    if safe_path.startswith("/api/lhb/"):
+        targets.extend(["overview", "lhb"])
+
+    if not targets:
+        return []
+    # Deduplicate while preserving order.
+    unique: List[str] = []
+    seen = set()
+    for item in targets:
+        if item in seen:
+            continue
+        seen.add(item)
+        unique.append(item)
+    return unique
+
+
+async def _maybe_emit_admin_refresh_event(path: str, method: str, status_code: int) -> None:
+    targets = _resolve_admin_refresh_targets(path, method, status_code)
+    if not targets:
+        return
+
+    key = "|".join(sorted(targets))
+    now_ts = time.time()
+    with _admin_refresh_lock:
+        last_ts = float(_admin_refresh_last_push_ts.get(key, 0) or 0)
+        if now_ts - last_ts < max(0.2, ADMIN_REFRESH_THROTTLE_SECONDS):
+            return
+        _admin_refresh_last_push_ts[key] = now_ts
+
+    try:
+        await ws_hub.broadcast_admin_event(
+            {
+                "event": "admin_refresh",
+                "targets": targets,
+                "source": "api_write",
+                "ts": int(now_ts),
+            }
+        )
+    except Exception:
+        pass
+
+
 def _log_ai_quota_event(
     request: Request,
     user: models.User,
@@ -469,6 +554,7 @@ async def user_operation_logger(request: Request, call_next):
         device_info=device_info,
         client_ip=client_ip,
     )
+    await _maybe_emit_admin_refresh_event(path=path, method=method, status_code=status_code)
 
     return response
 
@@ -655,6 +741,10 @@ market_ws_last_stock_hash = ""
 market_ws_last_pool_hash = ""
 market_ws_last_sentiment_hash = ""
 market_ws_last_lhb_syncing = None
+market_ws_last_client_config_hash = ""
+market_ws_last_quote_state = {}
+admin_ws_last_overview_hint_hash = ""
+admin_ws_last_online_users_hash = ""
 day_kline_refresh_ts = {}
 day_kline_attempt_ts = {}
 kline_update_cursor = 0
@@ -1018,7 +1108,7 @@ async def update_intraday_pool():
     # Placeholder, actual logic is in endpoints or separate scanner calls
 
 @app.get("/api/add_watchlist")
-async def add_to_watchlist_api(code: str, name: str, reason: str = "手动添加", user: models.User = Depends(check_data_permission)):
+async def add_to_watchlist_api(code: str, name: str, reason: str = "手动添加", authorized: bool = Depends(admin.verify_admin)):
     global favorites_data, watchlist_map
     
     # Check if exists in favorites
@@ -1056,7 +1146,7 @@ async def add_to_watchlist_api(code: str, name: str, reason: str = "手动添加
     return {"status": "ok", "msg": "添加成功"}
 
 @app.get("/api/remove_watchlist")
-async def remove_from_watchlist_api(code: str, user: models.User = Depends(check_data_permission)):
+async def remove_from_watchlist_api(code: str, authorized: bool = Depends(admin.verify_admin)):
     global favorites_data, watchlist_data
     
     removed = False
@@ -1244,10 +1334,16 @@ def refresh_watchlist():
 async def websocket_endpoint(websocket: WebSocket):
     channel = (websocket.query_params.get("channel") or "logs").strip().lower()
     device_id = (websocket.query_params.get("device_id") or "").strip()
-    if channel not in ("logs", "notify", "market"):
+    admin_token = (websocket.query_params.get("admin_token") or "").strip()
+    if channel not in ("logs", "notify", "market", "admin"):
         channel = "logs"
     if channel == "notify" and not device_id:
         channel = "logs"
+    if channel == "admin":
+        sessions = admin._cleanup_sessions(admin._load_sessions())
+        if not admin_token or admin_token not in sessions:
+            await websocket.close(code=1008)
+            return
 
     await ws_hub.register(websocket, channel=channel, device_id=device_id)
     try:
@@ -1410,7 +1506,7 @@ async def remove_watchlist_stat(payload: FavoriteStatRequest, user: models.User 
     return {"status": "success"}
 
 @app.post("/api/add_stock")
-async def add_stock(code: str, user: models.User = Depends(check_data_permission)):
+async def add_stock(code: str, authorized: bool = Depends(admin.verify_admin)):
     """手动添加股票到监控列表"""
     global watchlist_data, watchlist_map, WATCH_LIST
     
@@ -1533,7 +1629,8 @@ def _compact_quote_ticks(rows):
 
 
 async def market_event_broadcaster():
-    global market_ws_last_stock_hash, market_ws_last_pool_hash, market_ws_last_sentiment_hash, market_ws_last_lhb_syncing
+    global market_ws_last_stock_hash, market_ws_last_pool_hash, market_ws_last_sentiment_hash
+    global market_ws_last_lhb_syncing, market_ws_last_client_config_hash, market_ws_last_quote_state
     while True:
         try:
             if not await ws_hub.has_market_subscribers():
@@ -1541,16 +1638,36 @@ async def market_event_broadcaster():
                 market_ws_last_pool_hash = ""
                 market_ws_last_sentiment_hash = ""
                 market_ws_last_lhb_syncing = None
+                market_ws_last_client_config_hash = ""
+                market_ws_last_quote_state = {}
                 await asyncio.sleep(2)
                 continue
 
             quotes = _get_stock_quotes_cache()
             if quotes:
-                await ws_hub.broadcast_market_event({
-                    "event": "quotes_tick",
-                    "ts": int(time.time()),
-                    "quotes": _compact_quote_ticks(quotes),
-                })
+                compact_quotes = _compact_quote_ticks(quotes)
+                next_quote_state = {}
+                changed_quotes = []
+                for row in compact_quotes:
+                    code = str(row.get("code", "")).strip()
+                    if not code:
+                        continue
+                    signature = (
+                        row.get("current", 0),
+                        row.get("change_percent", 0),
+                        row.get("time", ""),
+                    )
+                    next_quote_state[code] = signature
+                    if market_ws_last_quote_state.get(code) != signature:
+                        changed_quotes.append(row)
+                market_ws_last_quote_state = next_quote_state
+
+                if changed_quotes:
+                    await ws_hub.broadcast_market_event({
+                        "event": "quotes_tick",
+                        "ts": int(time.time()),
+                        "quotes": changed_quotes,
+                    })
 
             refresh_targets = []
 
@@ -1583,6 +1700,11 @@ async def market_event_broadcaster():
                 market_ws_last_sentiment_hash = sentiment_hash
                 refresh_targets.append("market_sentiment")
 
+            client_config_hash = _market_hash_obj(_public_client_config())
+            if client_config_hash != market_ws_last_client_config_hash:
+                market_ws_last_client_config_hash = client_config_hash
+                refresh_targets.append("client_config")
+
             lhb_syncing = bool(lhb_manager.is_syncing)
             if lhb_syncing != market_ws_last_lhb_syncing:
                 market_ws_last_lhb_syncing = lhb_syncing
@@ -1601,6 +1723,55 @@ async def market_event_broadcaster():
             print(f"市场WS广播任务错误: {e}")
 
         await asyncio.sleep(2)
+
+
+async def admin_event_broadcaster():
+    global admin_ws_last_overview_hint_hash, admin_ws_last_online_users_hash
+    while True:
+        try:
+            if not await ws_hub.has_admin_subscribers():
+                admin_ws_last_overview_hint_hash = ""
+                admin_ws_last_online_users_hash = ""
+                await asyncio.sleep(2)
+                continue
+
+            ws_stats = await ws_hub.snapshot_stats()
+            overview_hint = {
+                "watchlist_size": len(watchlist_data or []),
+                "favorites_size": len(favorites_data or []),
+                "quotes_bucket": int((stock_quotes_cache_ts or 0) // 30),
+                "indices_bucket": int((indices_cache_ts or 0) // 60),
+                "sentiment_bucket": int((market_sentiment_cache_ts or 0) // 60),
+                "limit_up_count": len(limit_up_pool_data or []),
+                "broken_count": len(broken_limit_pool_data or []),
+                "ws": ws_stats,
+            }
+            hint_hash = _market_hash_obj(overview_hint)
+
+            active_devices = await ws_hub.snapshot_active_devices()
+            online_hash = _market_hash_obj(active_devices)
+
+            targets = []
+            if hint_hash != admin_ws_last_overview_hint_hash:
+                admin_ws_last_overview_hint_hash = hint_hash
+                targets.append("overview")
+            if online_hash != admin_ws_last_online_users_hash:
+                admin_ws_last_online_users_hash = online_hash
+                targets.append("online_users")
+
+            if targets:
+                await ws_hub.broadcast_admin_event(
+                    {
+                        "event": "admin_refresh",
+                        "targets": targets,
+                        "source": "runtime",
+                        "ts": int(time.time()),
+                    }
+                )
+        except Exception as e:
+            print(f"后台管理WS广播任务错误: {e}")
+
+        await asyncio.sleep(3)
 
 def update_limit_up_pool_task():
     """更新涨停股票池"""
@@ -1646,6 +1817,7 @@ async def startup_event():
     # Always start lightweight websocket log broadcaster.
     asyncio.create_task(log_broadcaster())
     asyncio.create_task(market_event_broadcaster())
+    asyncio.create_task(admin_event_broadcaster())
 
     if not _bool_env("ENABLE_BACKGROUND_TASKS", True):
         msg = "启动：已禁用后台任务（ENABLE_BACKGROUND_TASKS=0）"
@@ -1839,9 +2011,23 @@ def _public_system_config():
     return safe
 
 
+def _public_client_config():
+    community = SYSTEM_CONFIG.get("community_config", {}) or {}
+    if not isinstance(community, dict):
+        community = {}
+    return {
+        "auto_analysis_enabled": bool(SYSTEM_CONFIG.get("auto_analysis_enabled", True)),
+        "community_config": {
+            "qq_group_number": str(community.get("qq_group_number", "") or "").strip(),
+            "qq_group_link": str(community.get("qq_group_link", "") or "").strip(),
+            "welcome_text": str(community.get("welcome_text", "") or "").strip(),
+        },
+    }
+
+
 @app.get("/api/config")
 async def get_config(user: models.User = Depends(check_data_permission)):
-    return _public_system_config()
+    return _public_client_config()
 
 class ConfigUpdate(BaseModel):
     auto_analysis_enabled: bool
@@ -1852,7 +2038,7 @@ class ConfigUpdate(BaseModel):
     news_auto_clean_days: Optional[int] = 14
 
 @app.post("/api/config")
-async def update_config(config: ConfigUpdate, user: models.User = Depends(check_data_permission)):
+async def update_config(config: ConfigUpdate, authorized: bool = Depends(admin.verify_admin)):
     global SYSTEM_CONFIG
     SYSTEM_CONFIG["auto_analysis_enabled"] = config.auto_analysis_enabled
     SYSTEM_CONFIG["use_smart_schedule"] = config.use_smart_schedule
@@ -1870,7 +2056,7 @@ async def update_config(config: ConfigUpdate, user: models.User = Depends(check_
     SYSTEM_CONFIG["last_run_time"] = time.time()
     
     save_config() # Persist changes
-    return {"status": "success", "config": _public_system_config()}
+    return {"status": "success", "config": _public_client_config()}
 
 async def scheduler_loop():
     """Background scheduler for periodic tasks"""
@@ -2422,7 +2608,7 @@ def ensure_stock_quotes_cache(max_age_sec: int = max(30, REALTIME_CACHE_INTERVAL
         refresh_stock_quotes_cache()
 
 @app.post("/api/watchlist/remove")
-async def remove_from_watchlist(request: Request, user: models.User = Depends(check_data_permission)):
+async def remove_from_watchlist(request: Request, authorized: bool = Depends(admin.verify_admin)):
     """从自选列表中移除股票"""
     global watchlist_data, watchlist_map, WATCH_LIST, favorites_data, favorites_map
     try:
@@ -2565,27 +2751,41 @@ class LHBConfigRequest(BaseModel):
     sync_time: Optional[str] = None
 
 @app.get("/api/lhb/config")
-async def get_lhb_config(user: models.User = Depends(check_data_permission)):
+async def get_lhb_config(authorized: bool = Depends(admin.verify_admin)):
     lhb_manager.load_config()
-    payload = dict(lhb_manager.config or {})
+    raw_cfg = dict(lhb_manager.config or {})
     try:
         dates = lhb_manager.get_available_dates() or []
-        payload["latest_trade_date"] = dates[0] if dates else ""
+        latest_trade_date = dates[0] if dates else ""
     except Exception:
-        payload["latest_trade_date"] = ""
-    payload["last_update_time"] = str(payload.get("last_update", "") or "")
+        latest_trade_date = ""
     status = lhb_manager.get_today_sync_status()
-    payload["today_sync_status"] = status
-    return payload
+    try:
+        days = int(raw_cfg.get("days", 0) or 0)
+    except Exception:
+        days = 0
+    try:
+        min_amount = int(raw_cfg.get("min_amount", 0) or 0)
+    except Exception:
+        min_amount = 0
+    return {
+        "enabled": bool(raw_cfg.get("enabled", False)),
+        "days": days,
+        "min_amount": min_amount,
+        "sync_time": str(raw_cfg.get("sync_time", "18:00") or "18:00"),
+        "last_update_time": str(raw_cfg.get("last_update", "") or ""),
+        "latest_trade_date": latest_trade_date,
+        "today_sync_status": status,
+    }
 
 @app.post("/api/lhb/config")
-async def update_lhb_config(config: LHBConfigRequest, user: models.User = Depends(check_data_permission)):
+async def update_lhb_config(config: LHBConfigRequest, authorized: bool = Depends(admin.verify_admin)):
     lhb_manager.update_settings(config.enabled, config.days, config.min_amount, config.sync_time)
-    payload = await get_lhb_config(user)
+    payload = await get_lhb_config()
     return {"status": "ok", "config": payload}
 
 @app.post("/api/lhb/sync")
-async def sync_lhb_data(background_tasks: BackgroundTasks, days: Optional[int] = Query(None), user: models.User = Depends(check_data_permission)):
+async def sync_lhb_data(background_tasks: BackgroundTasks, days: Optional[int] = Query(None), authorized: bool = Depends(admin.verify_admin)):
     """Trigger LHB sync in background"""
     if lhb_manager.is_syncing:
         return {"status": "error", "message": "同步任务正在进行中"}
@@ -2692,7 +2892,7 @@ async def get_lhb_analysis_api(date: str, user: models.User = Depends(get_curren
     return {"status": "ok", "analysis": cached}
 
 @app.get("/api/data/backup")
-async def download_data_backup(user: models.User = Depends(check_data_permission)):
+async def download_data_backup(authorized: bool = Depends(admin.verify_admin)):
     """
     Pack 'data' directory into a zip file and return for download
     """
@@ -2739,7 +2939,7 @@ class AnalyzeRequest(BaseModel):
     kline_data: Optional[List] = None
 
 @app.post("/api/lhb/fetch")
-async def fetch_lhb_data(background_tasks: BackgroundTasks, user: models.User = Depends(check_data_permission)):
+async def fetch_lhb_data(background_tasks: BackgroundTasks, authorized: bool = Depends(admin.verify_admin)):
     """手动触发龙虎榜数据抓取"""
     if lhb_manager.is_syncing:
         return {"status": "error", "message": "同步任务正在进行中，请稍后再试"}

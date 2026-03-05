@@ -2055,6 +2055,12 @@
                     providerTestFilter: { date_from: '', date_to: '', batch_keyword: '' },
                     providerTestPagination: { page: 1, page_size: 1, total: 0, total_pages: 1 },
                     overviewAutoRefreshTimer: null,
+                    adminSocket: null,
+                    adminWsConnected: false,
+                    adminWsConnecting: false,
+                    adminReconnectTimer: null,
+                    adminWsRefreshLastTs: {},
+                    _visibilityHandler: null,
                     watchlistStats: [],
                     watchlistStatsStorage: 'backend/data/watchlist_stats.json',
                     watchlistUserModal: { show: false, code: '', name: '', users: [] },
@@ -2128,10 +2134,19 @@
                     event.returnValue = '';
                 };
                 window.addEventListener('beforeunload', this._beforeUnloadHandler);
+                this._visibilityHandler = () => {
+                    if (document.hidden) return;
+                    if (this.currentView === 'overview') {
+                        this.fetchTodayOverview();
+                        this.startOverviewAutoRefresh();
+                    }
+                };
+                document.addEventListener('visibilitychange', this._visibilityHandler);
                 if (this.token) {
                     this.fetchConfig();
                     this.fetchTodayOverview();
                     this.startOverviewAutoRefresh();
+                    this.connectAdminWebSocket();
                     this.fetchAdminPanelPath();
                     this.fetchAdminApiPrefix();
                     this.fetchDataFiles();
@@ -2147,7 +2162,11 @@
                 if (this._beforeUnloadHandler) {
                     window.removeEventListener('beforeunload', this._beforeUnloadHandler);
                 }
+                if (this._visibilityHandler) {
+                    document.removeEventListener('visibilitychange', this._visibilityHandler);
+                }
                 this.stopOverviewAutoRefresh();
+                this.disconnectAdminWebSocket();
             },
             watch: {
                 currentView(val) {
@@ -2459,15 +2478,131 @@
                 startOverviewAutoRefresh() {
                     this.stopOverviewAutoRefresh();
                     if (!this.token) return;
+                    if (this.adminWsConnected) return;
                     this.overviewAutoRefreshTimer = setInterval(() => {
                         if (!this.token || this.currentView !== 'overview') return;
+                        if (this.adminWsConnected || document.hidden) return;
                         this.fetchTodayOverview();
-                    }, 15000);
+                    }, 45000);
                 },
                 stopOverviewAutoRefresh() {
                     if (!this.overviewAutoRefreshTimer) return;
                     clearInterval(this.overviewAutoRefreshTimer);
                     this.overviewAutoRefreshTimer = null;
+                },
+                _shouldThrottleAdminRefresh(key, intervalMs) {
+                    const now = Date.now();
+                    const last = Number(this.adminWsRefreshLastTs[key] || 0);
+                    if (last && now - last < intervalMs) return true;
+                    this.adminWsRefreshLastTs[key] = now;
+                    return false;
+                },
+                triggerAdminRefreshByTargets(targets) {
+                    const list = Array.isArray(targets) ? targets : [];
+                    if (!list.length) return;
+
+                    if (list.includes('overview') && !this._shouldThrottleAdminRefresh('overview', 3000)) {
+                        if (this.currentView === 'overview' && !document.hidden) {
+                            this.fetchTodayOverview();
+                        }
+                    }
+                    if (list.includes('online_users') && !this._shouldThrottleAdminRefresh('online_users', 3000)) {
+                        if (this.onlineUsersModal.show && typeof this.fetchRealtimeOnlineUsers === 'function') {
+                            this.fetchRealtimeOnlineUsers();
+                        }
+                    }
+                    if (list.includes('users') && !this._shouldThrottleAdminRefresh('users', 5000)) {
+                        if (this.currentView === 'users') this.fetchUsers();
+                    }
+                    if (list.includes('orders') && !this._shouldThrottleAdminRefresh('orders', 5000)) {
+                        if (this.currentView === 'orders') {
+                            this.fetchOrders();
+                            this.fetchOrderStats();
+                        }
+                    }
+                    if (list.includes('referrals') && !this._shouldThrottleAdminRefresh('referrals', 5000)) {
+                        if (this.currentView === 'referrals') this.fetchReferrals(this.referralPagination.page || 1);
+                    }
+                    if (list.includes('watchlist') && !this._shouldThrottleAdminRefresh('watchlist', 5000)) {
+                        if (this.currentView === 'watchlist') this.fetchWatchlistStats();
+                    }
+                    if (list.includes('news') && !this._shouldThrottleAdminRefresh('news', 5000)) {
+                        if (this.currentView === 'news') this.fetchNews(this.newsPagination.page || 1);
+                    }
+                    if (list.includes('lhb') && !this._shouldThrottleAdminRefresh('lhb', 5000)) {
+                        if (this.currentView === 'lhb') this.fetchLHBOverview();
+                    }
+                    if (list.includes('config') && !this._shouldThrottleAdminRefresh('config', 8000)) {
+                        if (this.currentView === 'config') this.fetchConfig();
+                    }
+                    if (list.includes('data_files') && !this._shouldThrottleAdminRefresh('data_files', 8000)) {
+                        if (this.currentView === 'config') this.fetchDataFiles();
+                    }
+                },
+                connectAdminWebSocket() {
+                    if (!this.token) return;
+                    if (this.adminWsConnected || this.adminWsConnecting) return;
+
+                    const wsBase = String(API_BASE_URL || '').replace(/^http/i, 'ws');
+                    const wsUrl = `${wsBase}/ws/logs?channel=admin&admin_token=${encodeURIComponent(this.token)}`;
+                    this.adminWsConnecting = true;
+
+                    let ws = null;
+                    try {
+                        ws = new WebSocket(wsUrl);
+                    } catch (_) {
+                        this.adminWsConnecting = false;
+                        this.startOverviewAutoRefresh();
+                        return;
+                    }
+
+                    this.adminSocket = ws;
+
+                    ws.onopen = () => {
+                        this.adminWsConnecting = false;
+                        this.adminWsConnected = true;
+                        this.stopOverviewAutoRefresh();
+                        if (this.adminReconnectTimer) {
+                            clearTimeout(this.adminReconnectTimer);
+                            this.adminReconnectTimer = null;
+                        }
+                    };
+
+                    ws.onmessage = (event) => {
+                        let payload = null;
+                        try {
+                            payload = JSON.parse(event.data);
+                        } catch (_) {
+                            return;
+                        }
+                        if (!payload || payload.event !== 'admin_refresh') return;
+                        this.triggerAdminRefreshByTargets(payload.targets || []);
+                    };
+
+                    ws.onclose = () => {
+                        this.adminWsConnected = false;
+                        this.adminWsConnecting = false;
+                        this.adminSocket = null;
+                        this.startOverviewAutoRefresh();
+                        if (!this.token) return;
+                        if (this.adminReconnectTimer) return;
+                        this.adminReconnectTimer = setTimeout(() => {
+                            this.adminReconnectTimer = null;
+                            this.connectAdminWebSocket();
+                        }, 3000);
+                    };
+                },
+                disconnectAdminWebSocket() {
+                    this.adminWsConnected = false;
+                    this.adminWsConnecting = false;
+                    if (this.adminReconnectTimer) {
+                        clearTimeout(this.adminReconnectTimer);
+                        this.adminReconnectTimer = null;
+                    }
+                    if (this.adminSocket) {
+                        try { this.adminSocket.close(); } catch (_) {}
+                        this.adminSocket = null;
+                    }
                 },
                 async fetchTodayOverview() {
                     try {
@@ -2791,6 +2926,7 @@
                     }
                 },
                 clearAuth(showTip = false) {
+                    this.disconnectAdminWebSocket();
                     this.token = '';
                     this.stopOverviewAutoRefresh();
                     localStorage.removeItem('admin_token');
@@ -2823,6 +2959,7 @@
                         this.currentView = this.initialViewFromQuery || 'overview';
                         this.fetchTodayOverview();
                         this.startOverviewAutoRefresh();
+                        this.connectAdminWebSocket();
                         this.fetchConfig();
                         this.fetchAdminPanelPath();
                         this.fetchDataFiles();

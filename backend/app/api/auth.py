@@ -217,6 +217,21 @@ def _referral_config() -> dict:
     return cfg if isinstance(cfg, dict) else {}
 
 
+def _client_bootstrap_payload() -> dict:
+    community = _community_config()
+    return {
+        "system_config": {
+            "auto_analysis_enabled": bool(SYSTEM_CONFIG.get("auto_analysis_enabled", True)),
+        },
+        "community_config": {
+            "qq_group_number": str(community.get("qq_group_number", "") or "").strip(),
+            "qq_group_link": str(community.get("qq_group_link", "") or "").strip(),
+            "welcome_text": str(community.get("welcome_text", "") or "").strip(),
+        },
+        "server_time_utc": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+    }
+
+
 def _default_share_template() -> str:
     return "我在用涨停狙击手，注册链接：{invite_link}，邀请码：{invite_code}。注册后在充值页填写邀请码，可获得赠送权益。"
 
@@ -492,6 +507,18 @@ async def account_meta(x_device_id: str = Header(None), db: Session = Depends(ge
         "can_apply_trial": _can_apply_trial(matched, user),
         "user": _build_user_payload(user),
     }
+
+
+@router.get("/bootstrap")
+async def bootstrap(x_device_id: str = Header(None, alias="X-Device-ID"), db: Session = Depends(get_db)):
+    if not x_device_id:
+        raise HTTPException(status_code=400, detail="Missing Device ID")
+
+    account_store.ensure_device_not_banned(x_device_id)
+    user = user_service.get_or_create_user(db, x_device_id)
+    payload = _client_bootstrap_payload()
+    payload["user"] = _build_user_payload(user)
+    return payload
 
 
 @router.get("/invite_info")

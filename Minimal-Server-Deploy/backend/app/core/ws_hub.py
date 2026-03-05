@@ -9,6 +9,7 @@ class WSHub:
     def __init__(self):
         self._log_connections: Set[WebSocket] = set()
         self._market_connections: Set[WebSocket] = set()
+        self._admin_connections: Set[WebSocket] = set()
         self._notify_connections: Dict[str, Set[WebSocket]] = defaultdict(set)
         self._lock = asyncio.Lock()
 
@@ -17,6 +18,8 @@ class WSHub:
         async with self._lock:
             if channel == "market":
                 self._market_connections.add(websocket)
+            elif channel == "admin":
+                self._admin_connections.add(websocket)
             elif channel == "notify" and device_id:
                 self._notify_connections[device_id].add(websocket)
             else:
@@ -26,6 +29,8 @@ class WSHub:
         async with self._lock:
             if channel == "market":
                 self._market_connections.discard(websocket)
+            elif channel == "admin":
+                self._admin_connections.discard(websocket)
             elif channel == "notify" and device_id:
                 conns = self._notify_connections.get(device_id)
                 if conns and websocket in conns:
@@ -105,18 +110,45 @@ class WSHub:
         async with self._lock:
             return len(self._market_connections) > 0
 
+    async def has_admin_subscribers(self) -> bool:
+        async with self._lock:
+            return len(self._admin_connections) > 0
+
+    async def broadcast_admin_event(self, payload: Any) -> int:
+        async with self._lock:
+            targets = list(self._admin_connections)
+        if not targets:
+            return 0
+
+        dead: Set[WebSocket] = set()
+        sent = 0
+        for ws in targets:
+            try:
+                await ws.send_json(payload)
+                sent += 1
+            except Exception:
+                dead.add(ws)
+
+        if dead:
+            async with self._lock:
+                for ws in dead:
+                    self._admin_connections.discard(ws)
+        return sent
+
     async def snapshot_stats(self) -> Dict[str, int]:
         async with self._lock:
             log_count = len(self._log_connections)
             market_count = len(self._market_connections)
+            admin_count = len(self._admin_connections)
             notify_count = sum(len(v) for v in self._notify_connections.values())
             active_devices = len([k for k, v in self._notify_connections.items() if v])
         return {
             "log_connections": int(log_count),
             "market_connections": int(market_count),
+            "admin_connections": int(admin_count),
             "notify_connections": int(notify_count),
             "active_devices": int(active_devices),
-            "total_connections": int(log_count + market_count + notify_count),
+            "total_connections": int(log_count + market_count + admin_count + notify_count),
         }
 
 

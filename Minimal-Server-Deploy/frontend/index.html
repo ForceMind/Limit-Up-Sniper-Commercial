@@ -1756,6 +1756,7 @@
                     marketFallbackSlowTimer: null,
                     lhbStatusPollTimer: null,
                     configPollTimer: null,
+                    tabDataLoaded: { pre: false, intra: false, manual: false, pool: false },
                     clockTimer: null,
                     lhbStatusLastCheckTs: 0,
                     globalAuthErrorHandler: null,
@@ -1873,6 +1874,7 @@
                     },
                     localFavorites: {},
                     localFavoriteQuotes: [],
+                    localFavoriteQuotesLastFetchTs: 0,
                     showSubscriptionModal: false,
                     purchaseStep: 1, // 1: Pricing, 2: Payment, 3: Completed/Waiting
                     subscriptionTab: 'plans',
@@ -2104,7 +2106,15 @@
                                 this.selectedDuration = available[0];
                             }
                         }
-                    }
+                    },
+                    activeTab(newVal) {
+                        this.ensureTabData(newVal, false);
+                    },
+                    showSettingsModal(isOpen) {
+                        if (!isOpen || !this.hasDataAccess) return;
+                        this.fetchConfig();
+                        this.fetchLHBConfig();
+                    },
                 },
                 beforeUnmount() {
                 if(this.trialTimer) clearTimeout(this.trialTimer);
@@ -2566,7 +2576,9 @@
                     this.accountCanApplyTrial = false;
                     this.loadLocalFavorites();
                     this.loadNewsCache();
-                    await this.fetchLocalFavoriteQuotes();
+                    await this.fetchLocalFavoriteQuotes(true);
+                    await this.fetchConfig();
+                    this.tabDataLoaded = { pre: false, intra: false, manual: false, pool: false };
                 },
                 getFavoritesStorageKey() {
                     if (!this.isRegisteredAccount) {
@@ -2608,7 +2620,7 @@
                 saveLocalFavorites() {
                     localStorage.setItem(this.getFavoritesStorageKey(), JSON.stringify(this.localFavorites));
                 },
-                async fetchLocalFavoriteQuotes() {
+                async fetchLocalFavoriteQuotes(force = false) {
                     if (!this.hasDataAccess) {
                         this.localFavoriteQuotes = [];
                         return;
@@ -2616,6 +2628,10 @@
                     const codes = Object.keys(this.localFavorites || {});
                     if (codes.length === 0) {
                         this.localFavoriteQuotes = [];
+                        return;
+                    }
+                    const now = Date.now();
+                    if (!force && this.localFavoriteQuotesLastFetchTs && (now - this.localFavoriteQuotesLastFetchTs < 10000)) {
                         return;
                     }
                     try {
@@ -2633,6 +2649,7 @@
                             return String(a.code || '').localeCompare(String(b.code || ''));
                         });
                         this.localFavoriteQuotes = enriched;
+                        this.localFavoriteQuotesLastFetchTs = Date.now();
                     } catch (e) {
                         console.error('Failed to fetch local favorite quotes', e);
                     }
@@ -2685,7 +2702,9 @@
                             this.accountCanApplyTrial = !!meta.can_apply_trial;
                             this.loadLocalFavorites();
                             this.loadNewsCache();
-                            await this.fetchLocalFavoriteQuotes();
+                            await this.fetchLocalFavoriteQuotes(true);
+                            await this.fetchConfig();
+                            this.tabDataLoaded = { pre: false, intra: false, manual: false, pool: false };
                             await this.fetchInviteInfo();
                             this.maybeStartOnboarding(false);
                             return;
@@ -2767,7 +2786,9 @@
                         this.displayUsername = data.username || username;
                         this.accountCanApplyTrial = !!data.can_apply_trial;
                         this.loadLocalFavorites();
-                        await this.fetchLocalFavoriteQuotes();
+                        await this.fetchLocalFavoriteQuotes(true);
+                        await this.fetchConfig();
+                        this.tabDataLoaded = { pre: false, intra: false, manual: false, pool: false };
                         await this.fetchInviteInfo();
                         this.showLoginModal = false;
                         this.showSettingsModal = false;
@@ -3449,15 +3470,15 @@
                 async fetchLHBConfig() {
                     if (!this.hasDataAccess) return;
                     try {
-                        const response = await fetch(API_BASE_URL + '/api/lhb/config');
+                        const response = await fetch(API_BASE_URL + '/api/lhb/status');
                         const data = await response.json();
                         this.lhbConfig = {
-                            enabled: data.enabled,
-                            days: data.days,
-                            min_amount_wan: data.min_amount / 10000,
-                            last_update_time: data.last_update_time || '',
-                            latest_trade_date: data.latest_trade_date || ''
+                            ...this.lhbConfig,
+                            enabled: !!data.today_has_data,
+                            last_update_time: (data.today_has_data && data.sync_time) ? `${data.today || ''} ${data.sync_time}`.trim() : '',
+                            latest_trade_date: data.today || ''
                         };
+                        this.isSyncingLHB = !!data.is_syncing;
                     } catch (e) {
                         console.error('Failed to fetch LHB config:', e);
                     }
@@ -3471,7 +3492,7 @@
                     this.isSyncingLHB = true;
                     // Save config first
                     try {
-                        await fetch(API_BASE_URL + '/api/lhb/config', {
+                        const saveRes = await fetch(API_BASE_URL + '/api/lhb/config', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -3480,16 +3501,25 @@
                                 min_amount: this.lhbConfig.min_amount_wan * 10000
                             })
                         });
-                        
+                        if (!saveRes.ok) {
+                            let payload = {};
+                            try { payload = await saveRes.json(); } catch (_) {}
+                            throw new Error(payload.detail || payload.message || '无权限修改龙虎榜配置');
+                        }
+
                         const response = await fetch(API_BASE_URL + '/api/lhb/sync', { method: 'POST' });
-                        const result = await response.json();
+                        let result = {};
+                        try { result = await response.json(); } catch (_) {}
+                        if (!response.ok) {
+                            throw new Error(result.detail || result.message || '无权限触发龙虎榜同步');
+                        }
                         if (result.status === 'ok') {
                             this.showMsg('已触发后台同步，请留意日志窗口。', 'success');
                         } else {
-                            this.showMsg(result.message, 'error');
+                            this.showMsg(result.message || '同步失败', 'error');
                         }
                     } catch (e) {
-                        this.showMsg('同步请求失败', 'error');
+                        this.showMsg(e?.message || '同步请求失败', 'error');
                     } finally {
                         // 仅做一次状态刷新，后续依赖 WS 事件更新
                         this.checkLHBStatus(true);
@@ -3526,14 +3556,21 @@
                     if (this.marketFallbackFastTimer || this.marketFallbackSlowTimer) return;
                     this.marketFallbackFastTimer = setInterval(() => {
                         if (!this.hasDataAccess || this.marketWsConnected) return;
-                        this.fetchData();
-                        this.fetchIndices();
+                        if (['pre', 'intra'].includes(this.activeTab)) {
+                            this.fetchData();
+                        } else if (this.activeTab === 'manual') {
+                            this.fetchLocalFavoriteQuotes();
+                        }
                     }, 15000);
 
                     this.marketFallbackSlowTimer = setInterval(() => {
                         if (!this.hasDataAccess || this.marketWsConnected) return;
-                        this.fetchLimitUpPool();
-                        this.fetchMarketSentiment();
+                        if (this.activeTab === 'pool') {
+                            this.fetchLimitUpPool();
+                        }
+                        if (this.activeTab !== 'manual') {
+                            this.fetchMarketSentiment();
+                        }
                     }, 45000);
                 },
                 stopMarketFallbackPolling() {
@@ -3547,11 +3584,17 @@
                     }
                 },
                 async fetchConfig() {
-                    if (!this.hasDataAccess) return;
+                    if (!this.deviceId) return;
                     try {
-                        const response = await fetch(API_BASE_URL + '/api/config');
+                        const response = await fetch(API_BASE_URL + '/api/auth/bootstrap');
                         const data = await response.json();
-                        this.systemConfig = data;
+                        if (!response.ok) {
+                            throw new Error(data.detail || data.message || '基础信息加载失败');
+                        }
+                        const sysCfg = (data && typeof data === 'object' && data.system_config && typeof data.system_config === 'object')
+                            ? data.system_config
+                            : {};
+                        this.systemConfig = { ...(this.systemConfig || {}), ...sysCfg };
                         const community = (data && typeof data === 'object' && data.community_config && typeof data.community_config === 'object')
                             ? data.community_config
                             : {};
@@ -3560,6 +3603,9 @@
                             qq_group_link: String(community.qq_group_link || this.qqInviteInfo.qq_group_link || '').trim(),
                             qq_group_welcome_text: String(community.welcome_text || this.qqInviteInfo.qq_group_welcome_text || '').trim()
                         };
+                        if (data && typeof data.user === 'object') {
+                            this.userInfo = { ...(this.userInfo || {}), ...data.user };
+                        }
                     } catch (e) {
                         console.error('Failed to fetch config:', e);
                     }
@@ -3579,13 +3625,17 @@
                                 news_auto_clean_days: this.systemConfig.news_auto_clean_days
                             })
                         });
-                        const data = await response.json();
+                        let data = {};
+                        try { data = await response.json(); } catch (_) {}
+                        if (!response.ok) {
+                            throw new Error(data.detail || data.message || '保存设置失败');
+                        }
                         this.systemConfig = data.config;
                         this.showSettingsModal = false;
                         this.showMsg('配置已保存', 'success');
                     } catch (e) {
                         console.error('Failed to save config:', e);
-                        this.showMsg('保存设置失败', 'error');
+                        this.showMsg(e?.message || '保存设置失败', 'error');
                     }
                 },
                 formatTime(timestamp) {
@@ -3895,14 +3945,29 @@
                     const list = Array.isArray(targets) ? targets : [];
                     if (!list.length) return;
                     if (list.includes('stocks') && !this._shouldThrottleWsRefresh('stocks', 3000)) {
-                        this.fetchData();
-                        this.fetchIndices();
+                        if (['pre', 'intra'].includes(this.activeTab)) {
+                            this.fetchData();
+                        } else if (this.activeTab === 'manual') {
+                            this.fetchLocalFavoriteQuotes();
+                        } else {
+                            this.tabDataLoaded.pre = false;
+                            this.tabDataLoaded.intra = false;
+                        }
+                    }
+                    if (list.includes('client_config') && !this._shouldThrottleWsRefresh('client_config', 5000)) {
+                        this.fetchConfig();
                     }
                     if (list.includes('limit_up_pool') && !this._shouldThrottleWsRefresh('limit_up_pool', 5000)) {
-                        this.fetchLimitUpPool();
+                        if (this.activeTab === 'pool') {
+                            this.fetchLimitUpPool();
+                        } else {
+                            this.tabDataLoaded.pool = false;
+                        }
                     }
                     if (list.includes('market_sentiment') && !this._shouldThrottleWsRefresh('market_sentiment', 8000)) {
-                        this.fetchMarketSentiment();
+                        if (this.activeTab !== 'manual') {
+                            this.fetchMarketSentiment();
+                        }
                     }
                 },
                 applyQuoteTick(quotes) {
@@ -3981,7 +4046,7 @@
                             added_time: Date.now()
                         };
                         this.saveLocalFavorites();
-                        await this.fetchLocalFavoriteQuotes();
+                        await this.fetchLocalFavoriteQuotes(true);
                         await this.reportFavoriteStat('add', normalizedCode);
                         this.showMsg('已加入本地自选', 'success');
                     } catch (error) {
@@ -4122,15 +4187,28 @@
                         this.sentimentLoading = false;
                     }
                 },
+                ensureTabData(tab, force = false) {
+                    if (!this.hasDataAccess) return;
+                    const key = ['pre', 'intra', 'manual', 'pool'].includes(tab) ? tab : 'pre';
+                    if (!force && this.tabDataLoaded[key]) return;
+
+                    if (key === 'pool') {
+                        this.fetchLimitUpPool();
+                        this.fetchMarketSentiment();
+                    } else if (key === 'manual') {
+                        this.fetchLocalFavoriteQuotes(true);
+                    } else {
+                        this.fetchData();
+                        this.fetchMarketSentiment();
+                    }
+                    this.tabDataLoaded[key] = true;
+                },
                 refreshMarketSnapshots(setLoading = true) {
                     if (!this.hasDataAccess) return;
                     if (setLoading) {
                         this.initialDataLoading = true;
                     }
-                    this.fetchData();
-                    this.fetchLimitUpPool();
-                    this.fetchMarketSentiment();
-                    this.fetchIndices();
+                    this.ensureTabData(this.activeTab, true);
                     if (!this.wsConnected) this.connectWebSocket();
                     if (!this.marketWsConnected) this.connectMarketWebSocket();
                 },
@@ -4193,7 +4271,7 @@
                             if (this.localFavorites[normalizedCode]) {
                                 delete this.localFavorites[normalizedCode];
                                 this.saveLocalFavorites();
-                                await this.fetchLocalFavoriteQuotes();
+                                await this.fetchLocalFavoriteQuotes(true);
                                 await this.reportFavoriteStat('remove', normalizedCode);
                             }
                             this.showMsg('已从本地自选删除', 'success');
@@ -4211,7 +4289,7 @@
                             await this.fetchData();
                             this.showMsg('删除成功', 'success');
                         } else {
-                            this.showMsg('删除失败: ' + result.message, 'error');
+                            this.showMsg('删除失败: ' + (result.message || result.detail || `HTTP ${response.status}`), 'error');
                         }
                     } catch (error) {
                         console.error('Remove error:', error);
@@ -5118,11 +5196,6 @@
                 this.globalAuthErrorHandler = (event) => this.handleGlobalAuthError(event);
                 window.addEventListener('auth-error', this.globalAuthErrorHandler);
 
-                // --- Existing Logic ---
-                this.fetchConfig();
-                this.fetchLHBConfig();
-                this.configPollTimer = setInterval(this.fetchConfig, 60000); // Poll config every 60s
-                
                 // Initialize Theme
                 const savedTheme = localStorage.getItem('theme');
                 if (savedTheme) {

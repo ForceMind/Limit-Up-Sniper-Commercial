@@ -395,6 +395,40 @@ PY
 
     log_info "管理员API探测通过: ${admin_api_prefix}/panel_path (HTTP $admin_probe_status)"
 
+    local probe_device
+    probe_device="healthcheck_$(date +%s)"
+    local stocks_url="http://127.0.0.1:${internal_port}/api/stocks"
+    local stocks_tmp
+    stocks_tmp="$(mktemp)"
+    local stocks_status
+    stocks_status=$(curl -sS -H "X-Device-ID: ${probe_device}" --max-time 8 -o "$stocks_tmp" -w "%{http_code}" "$stocks_url" || echo "000")
+    if [ "$stocks_status" != "200" ]; then
+        log_error "[错误] 行情接口健康检查失败: $stocks_url (HTTP $stocks_status)"
+        log_error "请执行: sudo journalctl -u ${SERVICE_NAME} -n 120 --no-pager"
+        rm -f "$stocks_tmp"
+        exit 1
+    fi
+
+    if ! "$APP_DIR/venv/bin/python" - "$stocks_tmp" <<'PY'
+import json
+import sys
+
+path = sys.argv[1]
+with open(path, "r", encoding="utf-8") as f:
+    payload = json.load(f)
+if not isinstance(payload, list):
+    raise SystemExit(1)
+PY
+    then
+        log_error "[错误] 行情接口返回格式异常（应为数组）: $stocks_url"
+        log_error "请执行: sudo journalctl -u ${SERVICE_NAME} -n 120 --no-pager"
+        rm -f "$stocks_tmp"
+        exit 1
+    fi
+    rm -f "$stocks_tmp"
+
+    log_info "行情接口探测通过: /api/stocks (HTTP $stocks_status)"
+
     log_info "更新后健康检查通过"
 }
 
