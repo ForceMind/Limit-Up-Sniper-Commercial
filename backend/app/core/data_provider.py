@@ -836,13 +836,24 @@ class DataProvider:
             timeout=6,
         )
         rows = self._parse_biying_kline_rows(payload)
-        if not rows:
-            payload = self._biying_request_json(
-                f"/hsstock/latest/{symbol}/5/n/{cfg['license_key']}",
-                params={"lt": 5},
-                timeout=6,
-            )
-            rows = self._parse_biying_kline_rows(payload)
+        latest_payload = self._biying_request_json(
+            f"/hsstock/latest/{symbol}/5/n/{cfg['license_key']}",
+            params={"lt": 5},
+            timeout=6,
+        )
+        latest_rows = self._parse_biying_kline_rows(latest_payload) or []
+
+        # latest 是增量，history 是主体；按 time 去重合并，latest 覆盖同时间点。
+        merged_by_time = {}
+        for row in (rows or []):
+            key = str(row.get("time", "") or "").strip()
+            if key:
+                merged_by_time[key] = row
+        for row in latest_rows:
+            key = str(row.get("time", "") or "").strip()
+            if key:
+                merged_by_time[key] = row
+        rows = [merged_by_time[k] for k in sorted(merged_by_time.keys())]
         if not rows:
             return None
 

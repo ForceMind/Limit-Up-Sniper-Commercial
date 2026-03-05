@@ -636,14 +636,6 @@ class LHBManager:
             )
             rows = data_provider._parse_biying_kline_rows(payload) or []
 
-            if (not rows) and is_today:
-                payload = data_provider._biying_request_json(
-                    f"/hsstock/latest/{symbol}/5/n/{cfg['license_key']}",
-                    params={"lt": 120},
-                    timeout=8,
-                )
-                rows = data_provider._parse_biying_kline_rows(payload) or []
-
             if not rows:
                 return None
 

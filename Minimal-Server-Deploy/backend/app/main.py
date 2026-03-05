@@ -3133,7 +3133,33 @@ async def get_stock_kline(code: str, type: str = "1min", user: models.User = Dep
     try:
         clean_code = "".join(filter(str.isdigit, code))
         if type == "1min":
-            for offset in range(0, 5):
+            today_str = datetime.now().strftime('%Y-%m-%d')
+            today_df = lhb_manager.get_kline_1min(
+                clean_code,
+                today_str,
+                KLINE_MIN_REFRESH_SEC,
+                False,
+            )
+            if today_df is not None and not today_df.empty:
+                return {"status": "success", "data": today_df.to_dict('records')}
+
+            # 个股分时图兜底：history 主体 + latest(lt<=5) 增量，再回退新浪。
+            try:
+                fallback_df = await asyncio.to_thread(data_provider.fetch_intraday_data, clean_code)
+                if fallback_df is not None and not fallback_df.empty:
+                    if "day" in fallback_df.columns and "time" not in fallback_df.columns:
+                        fallback_df = fallback_df.rename(columns={"day": "time"})
+                    if "time" in fallback_df.columns:
+                        time_col = fallback_df["time"].astype(str)
+                        today_only = fallback_df[time_col.str.startswith(today_str)]
+                        if not today_only.empty:
+                            fallback_df = today_only
+                    return {"status": "success", "data": fallback_df.to_dict('records')}
+            except Exception:
+                pass
+
+            # 最后兜底：返回近几日已有缓存，避免完全空白。
+            for offset in range(1, 5):
                 date_str = (datetime.now() - timedelta(days=offset)).strftime('%Y-%m-%d')
                 df = lhb_manager.get_kline_1min(
                     clean_code,
