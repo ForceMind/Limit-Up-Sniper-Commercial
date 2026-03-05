@@ -27,7 +27,7 @@ GUEST_PREFIXES = ("guestv2_", "guest_", "visitor_")
 GUEST_TRIAL_MINUTES = 10
 REGISTER_PER_IP_LIMIT = 3
 GUEST_PER_IP_LIMIT = 3
-SERVER_VERSION = os.getenv("APP_VERSION", "v3.0.1")
+SERVER_VERSION = os.getenv("APP_VERSION", "v3.0.2")
 
 
 def _ensure_data_dir():

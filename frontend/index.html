@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>涨停狙击手 (Limit-Up Sniper) v3.0.0</title>
+    <title>涨停狙击手 (Limit-Up Sniper) v3.0.2</title>
     <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -1863,7 +1863,7 @@
                             broken_count: 0,
                             total_volume: 0,
                             sentiment: 'Neutral',
-                            suggestion: '等待数据'
+                            suggestion: '观察'
                         }
                     },
                     sentimentLoading: false,
@@ -1935,7 +1935,7 @@
                     isRegisteredAccount: hasPersistedLogin,
                     accountCanApplyTrial: false,
                     fingerprintId: '',
-                    frontendVersion: 'v3.0.0',
+                    frontendVersion: 'v3.0.2',
                     serverVersion: '获取中...',
                     loginLoading: false,
                     loadingChart: false,
@@ -2181,8 +2181,13 @@
                 isDataIncomplete() {
                     if (!this.marketSentiment || !this.marketSentiment.stats) return true;
                     const s = this.marketSentiment.stats;
-                    // If total volume is 0 or undefined, or if up+down counts are 0
-                    return (s.total_volume === 0 || (s.up_count === 0 && s.down_count === 0));
+                    const totalVolume = Number(s.total_volume || 0);
+                    const upCount = Number(s.up_count || 0);
+                    const downCount = Number(s.down_count || 0);
+                    const flatCount = Number(s.flat_count || 0);
+                    const breadthCount = upCount + downCount + flatCount;
+                    // Only treat as incomplete when both成交额和涨跌分布都缺失.
+                    return totalVolume <= 0 && breadthCount <= 0;
                 }
             },
                 watch: {

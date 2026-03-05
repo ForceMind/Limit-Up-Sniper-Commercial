@@ -334,7 +334,7 @@ def scan_broken_limit_pool_fallback(logger=None):
 def scan_limit_up_pool_fallback(logger=None):
     return scan_limit_up_pool(logger)
 
-def get_market_overview(logger=None):
+def get_market_overview(logger=None, allow_non_trading_probe: bool = False):
     """
     获取大盘情绪数据: 指数、成交量、涨跌家数、涨停炸板数
     """
@@ -372,7 +372,7 @@ def get_market_overview(logger=None):
 
     # 2. 获取涨跌分布 & 情绪数据 (使用全市场数据计算，更稳定)
     try:
-        df = data_provider.fetch_all_market_data()
+        df = data_provider.fetch_all_market_data(allow_non_trading_probe=allow_non_trading_probe)
         
         if df is not None and not df.empty:
             df['change_percent'] = pd.to_numeric(df['change_percent'], errors='coerce').fillna(0)

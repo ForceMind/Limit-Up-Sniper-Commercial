@@ -66,7 +66,7 @@ KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
-SERVER_VERSION = "v3.0.1"
+SERVER_VERSION = "v3.0.2"
 
 # 重要：CORS 中间件必须在任何路由 (app.include_router) 和中间件注册之前被加载
 # 否则会导致 OPTIONS preflight 请求被后续路由拦截（比如被报 "Missing Device ID"）

@@ -61,12 +61,13 @@ KLINE_ERROR_LOG_WINDOW_SEC = 60
 KLINE_ERROR_LOG_MAX_PER_WINDOW = 8
 KLINE_MIN_CACHE_EXPIRE_DAYS = 7
 KLINE_DAY_CACHE_EXPIRE_DAYS = 30
+MARKET_SENTIMENT_PROBE_COOLDOWN_SEC = 900
 
 # Initialize DB Tables
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
-SERVER_VERSION = "v3.0.1"
+SERVER_VERSION = "v3.0.2"
 
 # 重要：CORS 中间件必须在任何路由 (app.include_router) 和中间件注册之前被加载
 # 否则会导致 OPTIONS preflight 请求被后续路由拦截（比如被报 "Missing Device ID"）
@@ -977,6 +978,7 @@ market_circ_map_refresh_guard = threading.Lock()
 market_ws_last_stock_hash = ""
 market_ws_last_pool_hash = ""
 market_ws_last_sentiment_hash = ""
+market_sentiment_probe_last_ts = 0.0
 market_ws_last_lhb_syncing = None
 market_ws_last_quote_state = {}
 admin_ws_last_overview_hint_hash = ""
@@ -988,6 +990,7 @@ kline_error_window_start_ts = 0.0
 kline_error_window_count = 0
 kline_error_suppressed = 0
 analysis_key_locks = {}
+market_sentiment_cache_last_persist_hash = ""
 
 DEFAULT_MARKET_STATS = {
     "limit_up_count": 0,
@@ -1005,6 +1008,7 @@ DEFAULT_INDICES_ROWS = [
     {"name": "深证成指", "current": 0, "change": 0, "amount": 0},
     {"name": "创业板指", "current": 0, "change": 0, "amount": 0},
 ]
+MARKET_SENTIMENT_CACHE_FILE = DATA_DIR / "market_sentiment_cache.json"
 
 def load_analysis_cache():
     """Load AI analysis cache from disk"""
@@ -1025,6 +1029,104 @@ def save_analysis_cache():
             json.dump(ANALYSIS_CACHE, f, ensure_ascii=False)
     except:
         pass
+
+
+def _market_sentiment_payload_hash(payload: Any) -> str:
+    try:
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        encoded = str(payload)
+    return hashlib.md5(encoded.encode("utf-8")).hexdigest()
+
+
+def _market_sentiment_stats_has_breadth(stats: Any) -> bool:
+    if not isinstance(stats, dict):
+        return False
+    try:
+        up_count = int(stats.get("up_count") or 0)
+        down_count = int(stats.get("down_count") or 0)
+        flat_count = int(stats.get("flat_count") or 0)
+    except Exception:
+        return False
+    return (up_count + down_count + flat_count) > 0
+
+
+def _market_sentiment_has_meaningful_indices(rows: Any) -> bool:
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            current = float(row.get("current") or 0)
+            amount = float(row.get("amount") or 0)
+        except Exception:
+            continue
+        if current > 0 or amount > 0:
+            return True
+    return False
+
+
+def load_market_sentiment_cache():
+    global market_sentiment_cache
+    global market_sentiment_cache_ts
+    global indices_cache
+    global indices_cache_ts
+    global market_sentiment_cache_last_persist_hash
+
+    if not MARKET_SENTIMENT_CACHE_FILE.exists():
+        return
+    try:
+        with open(MARKET_SENTIMENT_CACHE_FILE, "r", encoding="utf-8") as f:
+            snapshot = json.load(f)
+        raw_payload = snapshot.get("payload") if isinstance(snapshot, dict) else {}
+        payload = _build_market_sentiment_payload(raw_payload, fallback_indices=(raw_payload or {}).get("indices", []))
+        saved_ts = 0.0
+        if isinstance(snapshot, dict):
+            saved_ts = float(snapshot.get("updated_at_ts", 0) or 0)
+        if saved_ts <= 0:
+            try:
+                saved_ts = float(MARKET_SENTIMENT_CACHE_FILE.stat().st_mtime)
+            except Exception:
+                saved_ts = time.time()
+
+        with cache_lock:
+            market_sentiment_cache = payload
+            market_sentiment_cache_ts = saved_ts
+            if payload.get("indices"):
+                indices_cache = copy.deepcopy(payload.get("indices"))
+                indices_cache_ts = max(indices_cache_ts, saved_ts)
+            market_sentiment_cache_last_persist_hash = _market_sentiment_payload_hash(payload)
+    except Exception as e:
+        print(f"加载市场情绪缓存失败: {e}")
+
+
+def save_market_sentiment_cache(payload: Any = None, updated_ts: Optional[float] = None):
+    try:
+        if payload is None:
+            with cache_lock:
+                payload = copy.deepcopy(market_sentiment_cache)
+                updated_ts = float(market_sentiment_cache_ts or time.time())
+
+        normalized = _build_market_sentiment_payload(
+            payload,
+            fallback_indices=(payload or {}).get("indices", []) if isinstance(payload, dict) else [],
+        )
+        has_breadth = _market_sentiment_stats_has_breadth((normalized or {}).get("stats"))
+        has_indices = _market_sentiment_has_meaningful_indices((normalized or {}).get("indices"))
+        if not has_breadth and not has_indices:
+            return
+
+        snapshot = {
+            "updated_at_ts": float(updated_ts or time.time()),
+            "payload": normalized,
+        }
+        tmp_path = MARKET_SENTIMENT_CACHE_FILE.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, ensure_ascii=False)
+        os.replace(tmp_path, MARKET_SENTIMENT_CACHE_FILE)
+    except Exception as e:
+        print(f"保存市场情绪缓存失败: {e}")
 
 def cleanup_analysis_cache(max_age_days=7):
     """清理超过指定天数的分析缓存"""
@@ -1258,20 +1360,44 @@ def ensure_indices_cache(max_age_sec: int = max(60, REALTIME_CACHE_INTERVAL_SEC 
         refresh_indices_cache()
 
 
-def refresh_market_sentiment_cache():
+def refresh_market_sentiment_cache(allow_non_trading_probe: bool = False):
     global market_sentiment_cache, market_sentiment_cache_ts, indices_cache, indices_cache_ts
+    global market_sentiment_cache_last_persist_hash
     try:
-        data = get_market_overview() or {}
+        data = get_market_overview(allow_non_trading_probe=allow_non_trading_probe) or {}
         with cache_lock:
+            previous_payload = copy.deepcopy(market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {})
             fallback_indices = copy.deepcopy(indices_cache) or copy.deepcopy((market_sentiment_cache or {}).get("indices", []))
         payload = _build_market_sentiment_payload(data, fallback_indices=fallback_indices)
+
+        previous_stats = (previous_payload or {}).get("stats", {}) if isinstance(previous_payload, dict) else {}
+        current_stats = (payload or {}).get("stats", {}) if isinstance(payload, dict) else {}
+        if _market_sentiment_stats_has_breadth(previous_stats) and not _market_sentiment_stats_has_breadth(current_stats):
+            merged_stats = dict(DEFAULT_MARKET_STATS)
+            for key in DEFAULT_MARKET_STATS.keys():
+                if key in previous_stats and previous_stats.get(key) is not None:
+                    merged_stats[key] = previous_stats.get(key)
+            payload["stats"] = merged_stats
+
         now_ts = time.time()
+        persist_payload = None
+        persist_ts = now_ts
         with cache_lock:
             market_sentiment_cache = payload
             market_sentiment_cache_ts = now_ts
             if payload.get("indices"):
                 indices_cache = copy.deepcopy(payload.get("indices"))
                 indices_cache_ts = now_ts
+            payload_hash = _market_sentiment_payload_hash(payload)
+            if payload_hash != market_sentiment_cache_last_persist_hash:
+                market_sentiment_cache_last_persist_hash = payload_hash
+                has_breadth = _market_sentiment_stats_has_breadth((payload or {}).get("stats"))
+                has_indices = _market_sentiment_has_meaningful_indices((payload or {}).get("indices"))
+                if has_breadth or has_indices:
+                    persist_payload = copy.deepcopy(payload)
+                    persist_ts = now_ts
+        if persist_payload is not None:
+            save_market_sentiment_cache(payload=persist_payload, updated_ts=persist_ts)
     except Exception as e:
         print(f"刷新市场情绪缓存失败: {e}")
 
@@ -1284,10 +1410,13 @@ def get_market_sentiment_cache():
 
 
 def ensure_market_sentiment_cache(max_age_sec: int = max(60, REALTIME_CACHE_INTERVAL_SEC * 3)):
+    global market_sentiment_probe_last_ts
     now_ts = time.time()
     with cache_lock:
         payload = market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {}
-        has_payload = bool(payload.get("indices")) or bool(payload.get("stats"))
+        has_breadth = _market_sentiment_stats_has_breadth(payload.get("stats"))
+        has_indices = _market_sentiment_has_meaningful_indices(payload.get("indices"))
+        has_payload = has_breadth or has_indices
         cache_age = (now_ts - market_sentiment_cache_ts) if market_sentiment_cache_ts > 0 else float("inf")
     if has_payload and cache_age <= max_age_sec:
         return
@@ -1296,11 +1425,25 @@ def ensure_market_sentiment_cache(max_age_sec: int = max(60, REALTIME_CACHE_INTE
         now_ts = time.time()
         with cache_lock:
             payload = market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {}
-            has_payload = bool(payload.get("indices")) or bool(payload.get("stats"))
+            has_breadth = _market_sentiment_stats_has_breadth(payload.get("stats"))
+            has_indices = _market_sentiment_has_meaningful_indices(payload.get("indices"))
+            has_payload = has_breadth or has_indices
             cache_age = (now_ts - market_sentiment_cache_ts) if market_sentiment_cache_ts > 0 else float("inf")
         if has_payload and cache_age <= max_age_sec:
             return
         refresh_market_sentiment_cache()
+        now_ts = time.time()
+        with cache_lock:
+            payload = market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {}
+            has_breadth = _market_sentiment_stats_has_breadth(payload.get("stats"))
+            has_indices = _market_sentiment_has_meaningful_indices(payload.get("indices"))
+            need_probe = (not has_breadth) and (not has_indices) and (
+                now_ts - float(market_sentiment_probe_last_ts or 0) >= MARKET_SENTIMENT_PROBE_COOLDOWN_SEC
+            )
+            if need_probe:
+                market_sentiment_probe_last_ts = now_ts
+        if need_probe:
+            refresh_market_sentiment_cache(allow_non_trading_probe=True)
 
 
 def _day_kline_cache_path(clean_code: str) -> Path:
@@ -1622,6 +1765,7 @@ def save_market_pools():
 # Load caches on startup
 load_market_pools()
 load_analysis_cache()
+load_market_sentiment_cache()
 
 from app.core.stock_utils import calculate_metrics, is_trading_time, is_market_open_day
 
@@ -2353,6 +2497,7 @@ def update_limit_up_pool_task():
 async def startup_event():
     # Load caches
     load_analysis_cache()
+    load_market_sentiment_cache()
     ensure_runtime_indexes()
 
     # Always start lightweight websocket log broadcaster.
@@ -2388,6 +2533,14 @@ async def startup_event():
     await asyncio.to_thread(refresh_stock_quotes_cache)
     await asyncio.to_thread(refresh_indices_cache)
     await asyncio.to_thread(refresh_market_sentiment_cache)
+    with cache_lock:
+        sentiment_snapshot = copy.deepcopy(market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {})
+    has_sentiment_breadth = _market_sentiment_stats_has_breadth((sentiment_snapshot or {}).get("stats"))
+    if not has_sentiment_breadth:
+        msg = "启动：市场情绪广度缓存缺失，尝试一次非交易时段快照抓取..."
+        print(msg)
+        add_runtime_log(msg)
+        await asyncio.to_thread(refresh_market_sentiment_cache, True)
 
     # Start background scheduler
     asyncio.create_task(scheduler_loop())

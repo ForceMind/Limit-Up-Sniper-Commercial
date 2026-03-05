@@ -1344,7 +1344,7 @@ class DataProvider:
                 
         return stocks
 
-    def fetch_all_market_data(self):
+    def fetch_all_market_data(self, allow_non_trading_probe: bool = False):
         """
         Fetch ALL stocks for market overview and scanning.
         Returns DataFrame.
@@ -1355,8 +1355,9 @@ class DataProvider:
         if self._last_market_df is not None and now_ts - self._last_market_ts < self._market_cache_ttl_sec:
             return self._last_market_df.copy()
 
-        # Non-trading session: never request full-market network data.
-        if not self._is_market_trading_session():
+        # Non-trading session: by default never request full-market network data.
+        # allow_non_trading_probe=True is only for one-shot snapshot warmup.
+        if (not allow_non_trading_probe) and (not self._is_market_trading_session()):
             if now_ts - self._non_trading_skip_log_ts >= 60:
                 self.log("[*] 当前非交易时段，跳过全市场抓取并复用旧缓存")
                 self._non_trading_skip_log_ts = now_ts
@@ -1377,7 +1378,7 @@ class DataProvider:
                 return self._last_market_df.copy()
 
             # Re-check non-trading and cooldown inside lock for queued callers
-            if not self._is_market_trading_session():
+            if (not allow_non_trading_probe) and (not self._is_market_trading_session()):
                 if now_ts - self._non_trading_skip_log_ts >= 60:
                     self.log("[*] 当前非交易时段，跳过全市场抓取并复用旧缓存")
                     self._non_trading_skip_log_ts = now_ts
