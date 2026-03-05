@@ -253,7 +253,7 @@ Write-Host "[3/6] 复制前端文件..." -ForegroundColor Cyan
 $frontendDest = Join-Path $dest "frontend"
 New-Item -ItemType Directory -Path $frontendDest | Out-Null
 
-$frontendFiles = @("index.html", "lhb.html", "help.html", "config.js")
+$frontendFiles = @("index.html", "lhb.html", "help.html")
 foreach ($name in $frontendFiles) {
     Copy-IfExists -Source (Join-Path $root ("frontend/" + $name)) -Destination (Join-Path $frontendDest $name)
 }

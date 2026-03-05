@@ -246,19 +246,14 @@ check_source_tree() {
 
 prepare_backup_dirs() {
     RUNTIME_BACKUP_DIR="$(mktemp -d /tmp/${APP_NAME}-install-backup.XXXXXX)"
-    mkdir -p "$RUNTIME_BACKUP_DIR/backend" "$RUNTIME_BACKUP_DIR/frontend"
+    mkdir -p "$RUNTIME_BACKUP_DIR/backend"
     HAD_OLD_DATA="false"
-    HAD_OLD_FRONT_CONFIG="false"
 
     if [ -d "$APP_DIR/backend/data" ]; then
         cp -a "$APP_DIR/backend/data" "$RUNTIME_BACKUP_DIR/backend/data"
         HAD_OLD_DATA="true"
     fi
 
-    if [ -f "$APP_DIR/frontend/config.js" ]; then
-        cp -a "$APP_DIR/frontend/config.js" "$RUNTIME_BACKUP_DIR/frontend/config.js"
-        HAD_OLD_FRONT_CONFIG="true"
-    fi
 }
 
 deploy_code_only() {
@@ -279,11 +274,6 @@ deploy_code_only() {
         log_info "已保留服务器原有 backend/data"
     else
         log_warn "未检测到历史 data，已创建空目录"
-    fi
-
-    if [ "$HAD_OLD_FRONT_CONFIG" = "true" ] && [ -f "$RUNTIME_BACKUP_DIR/frontend/config.js" ]; then
-        cp -a "$RUNTIME_BACKUP_DIR/frontend/config.js" "$APP_DIR/frontend/config.js"
-        log_info "已保留服务器原有 frontend/config.js"
     fi
 
     mkdir -p "$APP_DIR/scripts"

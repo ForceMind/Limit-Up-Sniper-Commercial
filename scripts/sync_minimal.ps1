@@ -14,6 +14,10 @@ $pairs = @(
     @{
         Src = Join-Path $repoRoot "frontend"
         Dst = Join-Path $repoRoot "Minimal-Server-Deploy\frontend"
+    },
+    @{
+        Src = Join-Path $repoRoot "Server-Version"
+        Dst = Join-Path $repoRoot "Minimal-Server-Deploy\Server-Version"
     }
 )
 

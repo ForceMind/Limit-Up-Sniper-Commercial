@@ -38,7 +38,7 @@ def run_frontend(host, port, directory):
         print(f"前端服务启动失败: {e}")
 
 def main():
-    backend_port = 8000 # Fixed port for config.js
+    backend_port = 8000 # Frontend default API target for local desktop mode
     frontend_port = find_free_port()
     host = "127.0.0.1"
     

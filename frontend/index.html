@@ -15,8 +15,28 @@
     <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/echarts@5.4.3/dist/echarts.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
-    <!-- FingerprintJS Removed: causing 404 and blocking render -->
-    <script src="config.js"></script>
+    <script>
+        const getApiBaseUrl = () => {
+            const injected = String(window.__API_PREFIX__ || '').trim();
+            if (injected) return injected.replace(/\/+$/, '');
+
+            try {
+                const fromStorage = String(localStorage.getItem('sniper_api_base') || '').trim();
+                if (/^https?:\/\//i.test(fromStorage)) return fromStorage.replace(/\/+$/, '');
+            } catch (_) {}
+
+            const protocol = location.protocol;
+            const hostname = location.hostname;
+            const port = location.port;
+
+            if (protocol === 'file:') return 'http://localhost:8000';
+            if (hostname === 'localhost' || hostname === '127.0.0.1') {
+                if (port !== '8000') return 'http://localhost:8000';
+            }
+            return '';
+        };
+        const API_BASE_URL = getApiBaseUrl();
+    </script>
     <style>
         [v-cloak] { display: none !important; }
         /* Prevent font scaling on mobile */

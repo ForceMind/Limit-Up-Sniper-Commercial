@@ -158,12 +158,6 @@ backup_runtime_files() {
         echo "跳过: 未找到 backend/.env"
     fi
 
-    if [ -f "$APP_DIR/frontend/config.js" ]; then
-        cp -a "$APP_DIR/frontend/config.js" "$BACKUP_DIR/frontend/config.js"
-        echo "已备份 frontend/config.js"
-    else
-        echo "跳过: 未找到 frontend/config.js"
-    fi
 }
 
 pull_latest_if_needed() {
@@ -225,10 +219,6 @@ restore_runtime_files() {
         echo "已恢复 backend/.env"
     fi
 
-    if [ -f "$BACKUP_DIR/frontend/config.js" ]; then
-        cp -a "$BACKUP_DIR/frontend/config.js" "$APP_DIR/frontend/config.js"
-        echo "已恢复 frontend/config.js"
-    fi
 }
 
 ensure_lhb_data_files() {

@@ -7,7 +7,28 @@
     <link rel="icon" href="../static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
-    <script src="../config.js"></script>
+    <script>
+        const getApiBaseUrl = () => {
+            const injected = String(window.__API_PREFIX__ || '').trim();
+            if (injected) return injected.replace(/\/+$/, '');
+
+            try {
+                const fromStorage = String(localStorage.getItem('sniper_api_base') || '').trim();
+                if (/^https?:\/\//i.test(fromStorage)) return fromStorage.replace(/\/+$/, '');
+            } catch (_) {}
+
+            const protocol = location.protocol;
+            const hostname = location.hostname;
+            const port = location.port;
+
+            if (protocol === 'file:') return 'http://localhost:8000';
+            if (hostname === 'localhost' || hostname === '127.0.0.1') {
+                if (port !== '8000') return 'http://localhost:8000';
+            }
+            return '';
+        };
+        const API_BASE_URL = getApiBaseUrl();
+    </script>
     <script>
         tailwind.config = {
             darkMode: 'class',
@@ -1940,7 +1961,8 @@
 
         const __rawFetch = window.fetch.bind(window);
         const __savedAdminPrefixHint = localStorage.getItem('admin_api_prefix_hint') || '';
-        window.__ADMIN_API_PREFIX__ = normalizeAdminApiPrefix(__savedAdminPrefixHint || '/api/admin');
+        const __injectedAdminPrefixHint = String(window.__ADMIN_API_PREFIX_HINT__ || '').trim();
+        window.__ADMIN_API_PREFIX__ = normalizeAdminApiPrefix(__savedAdminPrefixHint || __injectedAdminPrefixHint || '/api/admin');
         window.fetch = (input, init) => {
             const currentPrefix = normalizeAdminApiPrefix(window.__ADMIN_API_PREFIX__ || '/api/admin');
             const rewriteAdminPath = (url) => String(url || '').replace(/\/api\/admin(?=\/|$)/g, currentPrefix);
@@ -2313,6 +2335,7 @@
 
                     pushCandidate(this.adminApiPrefix);
                     pushCandidate(localStorage.getItem('admin_api_prefix_hint') || '');
+                    pushCandidate(window.__ADMIN_API_PREFIX_HINT__ || '');
                     pushCandidate(this.deriveAdminApiPrefixFromPanelPath());
                     if (Array.isArray(extra)) {
                         for (const item of extra) pushCandidate(item);
@@ -2331,8 +2354,9 @@
                 },
                 initAdminApiPrefixFromHint() {
                     const hint = localStorage.getItem('admin_api_prefix_hint') || '';
+                    const injectedHint = String(window.__ADMIN_API_PREFIX_HINT__ || '').trim();
                     const fromPanelPath = this.deriveAdminApiPrefixFromPanelPath();
-                    this.setAdminApiPrefixRuntime(hint || fromPanelPath || '/api/admin', !!hint);
+                    this.setAdminApiPrefixRuntime(hint || injectedHint || fromPanelPath || '/api/admin', !!hint);
                 },
                 async resolveAdminApiPrefixForSession() {
                     if (!this.token) {

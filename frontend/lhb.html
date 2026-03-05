@@ -13,6 +13,28 @@
     </script>
     <script src="https://unpkg.com/vue@3/dist/vue.global.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <script>
+        const getApiBaseUrl = () => {
+            const injected = String(window.__API_PREFIX__ || '').trim();
+            if (injected) return injected.replace(/\/+$/, '');
+
+            try {
+                const fromStorage = String(localStorage.getItem('sniper_api_base') || '').trim();
+                if (/^https?:\/\//i.test(fromStorage)) return fromStorage.replace(/\/+$/, '');
+            } catch (_) {}
+
+            const protocol = location.protocol;
+            const hostname = location.hostname;
+            const port = location.port;
+
+            if (protocol === 'file:') return 'http://localhost:8000';
+            if (hostname === 'localhost' || hostname === '127.0.0.1') {
+                if (port !== '8000') return 'http://localhost:8000';
+            }
+            return '';
+        };
+        const API_BASE_URL = getApiBaseUrl();
+    </script>
     <style>
         .markdown-content h1, .markdown-content h2, .markdown-content h3 {
             font-weight: bold; margin-top: 1em; margin-bottom: 0.5em;
@@ -21,7 +43,6 @@
         .markdown-content strong { color: #dc2626; }
         html.dark .markdown-content strong { color: #f87171; }
     </style>
-    <script src="config.js"></script>
 </head>
 <body class="bg-gray-100 dark:bg-gray-900 text-gray-900 dark:text-gray-100 font-mono h-screen flex flex-col overflow-hidden transition-colors duration-300">
     
