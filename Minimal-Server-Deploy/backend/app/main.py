@@ -148,6 +148,9 @@ WS_TOKEN_TTL_SECONDS = min(3600, max(120, WS_TOKEN_TTL_SECONDS))
 WS_TOKEN_CLOCK_SKEW_SECONDS = int(os.getenv("WS_TOKEN_CLOCK_SKEW_SECONDS", "30") or 30)
 WS_TOKEN_RENEW_AHEAD_SECONDS = int(os.getenv("WS_TOKEN_RENEW_AHEAD_SECONDS", "90") or 90)
 WS_TOKEN_RENEW_AHEAD_SECONDS = min(300, max(30, WS_TOKEN_RENEW_AHEAD_SECONDS))
+WS_TOKEN_BIND_MODE = str(os.getenv("WS_TOKEN_BIND_MODE", "ua") or "ua").strip().lower()
+if WS_TOKEN_BIND_MODE not in {"ua", "ip_ua"}:
+    WS_TOKEN_BIND_MODE = "ua"
 _ws_token_secret_cache = None
 
 
@@ -194,6 +197,9 @@ def _client_ip_from_websocket(websocket: WebSocket) -> str:
     forwarded = str(websocket.headers.get("x-forwarded-for") or "").strip()
     if forwarded:
         return forwarded.split(",")[0].strip()
+    real_ip = str(websocket.headers.get("x-real-ip") or "").strip()
+    if real_ip:
+        return real_ip
     if websocket.client and websocket.client.host:
         return str(websocket.client.host).strip()
     return ""
@@ -248,9 +254,13 @@ def _ws_token_sign(text: str) -> str:
 
 def _build_ws_bind(device_id: str, client_ip: str, user_agent: str) -> str:
     did = str(device_id or "").strip()
-    ip = str(client_ip or "").strip()
     ua = _normalize_ws_ua(user_agent)
-    base = f"{did}|{ip}|{ua}"
+    if WS_TOKEN_BIND_MODE == "ip_ua":
+        ip = str(client_ip or "").strip()
+        base = f"{did}|{ip}|{ua}"
+    else:
+        # Default mode avoids proxy IP mismatch while still binding token to device+UA.
+        base = f"{did}|{ua}"
     return hashlib.sha256(base.encode("utf-8")).hexdigest()
 
 
@@ -337,9 +347,20 @@ def _verify_ws_token(
 
     expected_bind = _build_ws_bind(device_id, client_ip, user_agent)
     token_bind = str(payload.get("bind") or "").strip()
-    if not token_bind or not hmac.compare_digest(token_bind, expected_bind):
+    if not token_bind:
         return False
-    return True
+    if hmac.compare_digest(token_bind, expected_bind):
+        return True
+
+    # Compatibility: allow either strict(ip+ua) or relaxed(ua) bind to tolerate proxy topology.
+    did = str(device_id or "").strip()
+    ip = str(client_ip or "").strip()
+    ua = _normalize_ws_ua(user_agent)
+    strict_bind = hashlib.sha256(f"{did}|{ip}|{ua}".encode("utf-8")).hexdigest()
+    relaxed_bind = hashlib.sha256(f"{did}|{ua}".encode("utf-8")).hexdigest()
+    if hmac.compare_digest(token_bind, strict_bind) or hmac.compare_digest(token_bind, relaxed_bind):
+        return True
+    return False
 
 
 def _is_status_rate_limited(request: Request) -> bool:

@@ -4040,9 +4040,11 @@
                     const encodedDeviceId = encodeURIComponent(currentDeviceId);
                     const wsUrl = `${wsBase}/ws/logs?channel=client&device_id=${encodedDeviceId}&ws_token=${encodeURIComponent(wsTicket)}`;
                     const ws = new WebSocket(wsUrl);
+                    let wsOpened = false;
                     this.logSocket = ws;
                     
                     ws.onopen = () => {
+                        wsOpened = true;
                         this.wsConnecting = false;
                         if (this.wsReconnectTimer) {
                             clearTimeout(this.wsReconnectTimer);
@@ -4086,7 +4088,7 @@
                         this.marketWsConnected = false;
                         this.marketWsConnecting = false;
                         this.logSocket = null;
-                        if (event && Number(event.code || 0) === 1008) {
+                        if (!wsOpened || (event && Number(event.code || 0) === 1008)) {
                             this.clearWsAuthTokenState();
                         }
                         if (this.hasDataAccess) {
