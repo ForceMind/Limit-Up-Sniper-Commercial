@@ -22,6 +22,14 @@ KLINE_DIR.mkdir(exist_ok=True)
 from app.core.profile_builder import build_profiles
 from app.core.data_provider import data_provider
 
+
+def _normalize_stock_code_6(value) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if not digits:
+        return ""
+    return digits[-6:].zfill(6)
+
+
 class LHBManager:
     def __init__(self):
         self.config = {
@@ -912,13 +920,17 @@ class LHBManager:
         """
         if not LHB_FILE.exists():
             return None
+
+        target_code = _normalize_stock_code_6(code)
+        if not target_code:
+            return None
             
         try:
             df = pd.read_csv(LHB_FILE, dtype={'stock_code': str, 'trade_date': str})
-            df['stock_code'] = df['stock_code'].astype(str)
+            df['stock_code'] = df['stock_code'].astype(str).map(_normalize_stock_code_6)
             
             # Filter by code
-            stock_lhb = df[df['stock_code'] == str(code)]
+            stock_lhb = df[df['stock_code'] == target_code]
             if stock_lhb.empty:
                 return None
                 

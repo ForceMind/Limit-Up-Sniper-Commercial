@@ -2212,7 +2212,8 @@ async def create_data_export_url(request: Request, authorized: bool = Depends(ve
             "ip": client_ip,
             "created_at": datetime.utcnow().replace(microsecond=0).isoformat(),
         }
-    rel = f"/api/admin/data/export/download?ticket={ticket}"
+    admin_api_prefix = get_admin_api_prefix()
+    rel = f"{admin_api_prefix}/data/export/download?ticket={ticket}"
     full_url = f"{str(request.base_url).rstrip('/')}{rel}"
     add_runtime_log(
         f"[后台] 已生成一次性数据导出链接: file={temp_zip.name}, expires_in={EXPORT_TICKET_TTL_SECONDS}s, ip={client_ip or '-'}"

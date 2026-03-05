@@ -3462,6 +3462,103 @@ class StockAnalysisRequest(BaseModel):
     force: bool = False # Force re-analysis
     apiKey: Optional[str] = None # Optional API Key for standalone mode
 
+
+def _needs_analysis_market_backfill(stock_data: dict) -> bool:
+    return (
+        _safe_float_number(stock_data.get("current")) <= 0
+        or _safe_float_number(stock_data.get("turnover")) <= 0
+        or _safe_float_number(stock_data.get("circulation_value")) <= 0
+    )
+
+
+def _apply_quote_row_to_analysis_stock(stock_data: dict, row: dict) -> None:
+    if not isinstance(row, dict):
+        return
+    row_current = _safe_float_number(row.get("current"))
+    row_change = _safe_float_number(row.get("change_percent"))
+    row_turnover = _safe_float_number(row.get("turnover"))
+    row_circ = _safe_float_number(row.get("circulation_value"))
+
+    if _safe_float_number(stock_data.get("current")) <= 0 and row_current > 0:
+        stock_data["current"] = row_current
+    if _safe_float_number(stock_data.get("change_percent")) == 0 and row_change != 0:
+        stock_data["change_percent"] = row_change
+    if _safe_float_number(stock_data.get("turnover")) <= 0 and row_turnover > 0:
+        stock_data["turnover"] = row_turnover
+    if _safe_float_number(stock_data.get("circulation_value")) <= 0 and row_circ > 0:
+        stock_data["circulation_value"] = row_circ
+
+    if not str(stock_data.get("name", "")).strip():
+        stock_data["name"] = str(row.get("name", "")).strip()
+    if not str(stock_data.get("concept", "")).strip() and str(row.get("concept", "")).strip():
+        stock_data["concept"] = str(row.get("concept", "")).strip()
+
+
+def _find_quote_row_by_code(raw_code: str) -> Optional[dict]:
+    req_text = str(raw_code or "").strip().lower()
+    req_norm = normalize_stock_code(req_text)
+    req_digits = "".join(filter(str.isdigit, req_text))
+    req_norm_digits = "".join(filter(str.isdigit, req_norm))
+
+    for row in _get_stock_quotes_cache():
+        row_code = normalize_stock_code(str(row.get("code", "")))
+        row_digits = "".join(filter(str.isdigit, row_code))
+        if req_norm and row_code == req_norm:
+            return row
+        if req_text and row_code == req_text:
+            return row
+        if req_norm_digits and row_digits == req_norm_digits:
+            return row
+        if req_digits and row_digits == req_digits:
+            return row
+    return None
+
+
+def _hydrate_analysis_stock_data(stock_data: dict, raw_code: str) -> None:
+    req_text = str(raw_code or stock_data.get("code") or "").strip()
+    req_norm = normalize_stock_code(req_text)
+    req_digits = "".join(filter(str.isdigit, req_text))
+    req_norm_digits = "".join(filter(str.isdigit, req_norm))
+    stock_data["code"] = req_norm or req_text
+
+    row = _find_quote_row_by_code(req_text)
+    if row:
+        _apply_quote_row_to_analysis_stock(stock_data, row)
+
+    if _needs_analysis_market_backfill(stock_data):
+        try:
+            ensure_stock_quotes_cache()
+        except Exception:
+            pass
+        row = _find_quote_row_by_code(req_text)
+        if row:
+            _apply_quote_row_to_analysis_stock(stock_data, row)
+
+    if _needs_analysis_market_backfill(stock_data):
+        query_code = req_norm or req_text
+        if query_code:
+            try:
+                fetched = data_provider.fetch_quotes([query_code]) or []
+                if fetched:
+                    _apply_quote_row_to_analysis_stock(stock_data, fetched[0])
+            except Exception:
+                pass
+
+    if _safe_float_number(stock_data.get("circulation_value")) <= 0:
+        try:
+            ensure_market_circ_map_cache()
+            market_map = _get_market_circ_map_cache() or {}
+            circ_mv = _safe_float_number(
+                market_map.get(req_norm, 0)
+                or market_map.get(req_text, 0)
+                or market_map.get(req_norm_digits, 0)
+                or market_map.get(req_digits, 0)
+            )
+            if circ_mv > 0:
+                stock_data["circulation_value"] = circ_mv
+        except Exception:
+            pass
+
 @app.post("/api/analyze_stock")
 async def api_analyze_stock(
     request: StockAnalysisRequest,
@@ -3476,6 +3573,8 @@ async def api_analyze_stock(
     stock_data = request.dict()
     api_key = stock_data.get('apiKey')
     code = stock_data.get('code')
+    await asyncio.to_thread(_hydrate_analysis_stock_data, stock_data, code)
+    code = stock_data.get("code")
     force = stock_data.get('force', False)
     prompt_type = request.promptType
 
@@ -3795,7 +3894,8 @@ async def analyze_stock_manual(
     db: Session = Depends(get_db),
 ):
     """手动触发个股 AI 分析"""
-    cache_key = f"stock_analysis_{req.code}_{req.promptType}"
+    normalized_code = normalize_stock_code(req.code) or str(req.code or "").strip()
+    cache_key = f"stock_analysis_{normalized_code}_{req.promptType}"
     cached_hit = False
     if not req.force:
         try:
@@ -3825,7 +3925,7 @@ async def analyze_stock_manual(
     )
     
     stock_data = {
-        "code": req.code,
+        "code": normalized_code,
         "name": req.name,
         "promptType": req.promptType,
         "current": 0,
@@ -3835,23 +3935,7 @@ async def analyze_stock_manual(
         "kline_data": req.kline_data
     }
     
-    try:
-        # If turnover/circ_mv missing, fill from in-memory quote cache only.
-        if stock_data['turnover'] is None or stock_data['circulation_value'] is None:
-            clean_req_code = "".join(filter(str.isdigit, req.code))
-            for row in _get_stock_quotes_cache():
-                row_code = str(row.get("code", ""))
-                clean_row_code = "".join(filter(str.isdigit, row_code))
-                if clean_req_code == clean_row_code:
-                    stock_data['current'] = float(row.get('current', 0) or 0)
-                    stock_data['change_percent'] = float(row.get('change_percent', 0) or 0)
-                    if stock_data['turnover'] is None:
-                        stock_data['turnover'] = float(row.get('turnover', 0) or 0)
-                    if stock_data['circulation_value'] is None:
-                        stock_data['circulation_value'] = float(row.get('circulation_value', 0) or 0)
-                    break
-    except:
-        pass
+    await asyncio.to_thread(_hydrate_analysis_stock_data, stock_data, normalized_code)
 
     result = analyze_single_stock(stock_data, force_update=req.force)
     return {"status": "success", "result": result}
