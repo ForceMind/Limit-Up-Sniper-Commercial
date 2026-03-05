@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env bash
+#!/usr/bin/env bash
 
 # 涨停狙击手商业版通用更新脚本
 # 用法: sudo ./update.sh [源码目录]
@@ -114,15 +114,83 @@ SOURCE_ROOT=""
 GIT_PULL_DIR=""
 HAD_RUNTIME_DATA=false
 
-resolve_source() {
-    if [[ "$SCRIPT_DIR/.." -ef "$APP_DIR" ]]; then
-        SOURCE_ROOT="$APP_DIR"
-        SKIP_COPY=true
-    else
-        SOURCE_ROOT="${SOURCE_ROOT_INPUT:-$DEFAULT_SOURCE_ROOT}"
+is_valid_source_root() {
+    local root="$1"
+    [ -n "${root:-}" ] || return 1
+    [ -d "$root/backend" ] || return 1
+    [ -d "$root/frontend" ] || return 1
+    return 0
+}
+
+is_git_source_root() {
+    local root="$1"
+    is_valid_source_root "$root" || return 1
+    [ -d "$root/.git" ] || return 1
+    return 0
+}
+
+discover_external_source_root() {
+    local item=""
+    local source_file="$APP_DIR/.source_root"
+
+    if [ -n "${ZT_SOURCE_ROOT:-}" ] && is_git_source_root "$ZT_SOURCE_ROOT"; then
+        echo "$ZT_SOURCE_ROOT"
+        return
     fi
 
-    if [ ! -d "$SOURCE_ROOT/backend" ] || [ ! -d "$SOURCE_ROOT/frontend" ]; then
+    if [ -f "$source_file" ]; then
+        item="$(head -n 1 "$source_file" 2>/dev/null | tr -d '\r')"
+        if is_git_source_root "$item"; then
+            echo "$item"
+            return
+        fi
+    fi
+
+    for item in \
+        "/root/Limit-Up-Sniper-Commercial" \
+        "/root/limit-up-sniper-commercial" \
+        "/root/Privy/Limit-Up-Sniper-Commercial" \
+        "/root/Privy/limit-up-sniper-commercial"
+    do
+        if is_git_source_root "$item"; then
+            echo "$item"
+            return
+        fi
+    done
+
+    for item in /root/* /root/*/* /home/*/*; do
+        [ -d "$item" ] || continue
+        if is_git_source_root "$item"; then
+            echo "$item"
+            return
+        fi
+    done
+
+    echo ""
+}
+
+resolve_source() {
+    local auto_root=""
+    if [ -n "$SOURCE_ROOT_INPUT" ]; then
+        SOURCE_ROOT="$SOURCE_ROOT_INPUT"
+        SKIP_COPY=false
+    elif [[ "$SCRIPT_DIR/.." -ef "$APP_DIR" ]]; then
+        auto_root="$(discover_external_source_root)"
+        if [ -n "$auto_root" ]; then
+            SOURCE_ROOT="$auto_root"
+            SKIP_COPY=false
+            log_info "检测到外部源码仓库: $SOURCE_ROOT"
+        else
+            SOURCE_ROOT="$APP_DIR"
+            SKIP_COPY=true
+            log_warn "未检测到外部源码仓库，使用安装目录自更新（跳过 git pull/文件复制）"
+        fi
+    else
+        SOURCE_ROOT="$DEFAULT_SOURCE_ROOT"
+        SKIP_COPY=false
+    fi
+
+    if ! is_valid_source_root "$SOURCE_ROOT"; then
         log_error "[错误] 源码目录无效: $SOURCE_ROOT"
         log_error "必须包含 backend/ 与 frontend/"
         exit 1

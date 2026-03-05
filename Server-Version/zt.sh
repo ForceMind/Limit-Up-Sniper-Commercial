@@ -403,13 +403,83 @@ detect_update_script() {
     echo ""
 }
 
+is_valid_source_root() {
+    local root="$1"
+    [ -n "${root:-}" ] || return 1
+    [ -d "$root/backend" ] || return 1
+    [ -d "$root/frontend" ] || return 1
+    return 0
+}
+
+is_git_source_root() {
+    local root="$1"
+    is_valid_source_root "$root" || return 1
+    [ -d "$root/.git" ] || return 1
+    return 0
+}
+
+detect_default_source_root() {
+    local item=""
+    local source_file="$APP_DIR/.source_root"
+
+    if [ -n "${ZT_SOURCE_ROOT:-}" ] && is_git_source_root "$ZT_SOURCE_ROOT"; then
+        echo "$ZT_SOURCE_ROOT"
+        return
+    fi
+
+    if [ -f "$source_file" ]; then
+        item="$(head -n 1 "$source_file" 2>/dev/null | tr -d '\r')"
+        if is_git_source_root "$item"; then
+            echo "$item"
+            return
+        fi
+    fi
+
+    for item in \
+        "/root/Limit-Up-Sniper-Commercial" \
+        "/root/limit-up-sniper-commercial" \
+        "/root/Privy/Limit-Up-Sniper-Commercial" \
+        "/root/Privy/limit-up-sniper-commercial"
+    do
+        if is_git_source_root "$item"; then
+            echo "$item"
+            return
+        fi
+    done
+
+    for item in /root/* /root/*/* /home/*/*; do
+        [ -d "$item" ] || continue
+        if is_git_source_root "$item"; then
+            echo "$item"
+            return
+        fi
+    done
+
+    echo ""
+}
+
 run_update_script() {
     local source_root="${1:-}"
     local update_script
+    local auto_source_root
     update_script="$(detect_update_script)"
 
     if [ -z "$update_script" ]; then
         log_error "未找到 update.sh，请先部署完整安装包"
+        pause_enter
+        return
+    fi
+
+    if [ -z "$source_root" ]; then
+        auto_source_root="$(detect_default_source_root)"
+        if [ -n "$auto_source_root" ]; then
+            source_root="$auto_source_root"
+        fi
+    fi
+
+    if [ -n "$source_root" ] && ! is_valid_source_root "$source_root"; then
+        log_error "源码目录无效: $source_root"
+        log_error "必须包含 backend/ 与 frontend/"
         pause_enter
         return
     fi
@@ -451,7 +521,7 @@ update_program_menu() {
     while true; do
         clear
         echo "程序更新"
-        echo "1) 一键更新(默认源码)"
+        echo "1) 一键更新(自动检测Git源码)"
         echo "2) 指定源码目录更新"
         echo "3) 返回"
         read -r -p "请选择: " c
