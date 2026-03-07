@@ -53,7 +53,7 @@ if errorlevel 1 (
 echo.
 echo [完成] 打包成功。
 echo - 目录：dist\frontend_split
-echo - 压缩包：dist\frontend_split_package.zip
+echo - 压缩包：dist\frontend_split_package-版本号.zip（具体以脚本输出为准）
 echo - 后台入口：/%ADMIN_PATH%/index.html
 echo.
 pause
