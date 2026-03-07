@@ -148,11 +148,9 @@
                         AI:{{userInfo.remaining_ai}} | 突:{{userInfo.remaining_raid}} | 复:{{userInfo.remaining_review}}
                     </div>
 
-                <!-- Settings Button (Merged Filter & Config) -->
+                <!-- Settings Button -->
                 <button v-if="!isSearchFocused || !isMobile" @click.stop="showSettingsModal = true" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors z-10 relative" title="打开设置">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
-                    </svg>
+                    <span class="text-base leading-none">⚙️</span>
                 </button>
 
                 <!-- Theme Toggle -->
@@ -934,7 +932,7 @@
             </div>
         </div>
 
-        <!-- Settings Modal (Merged Filter & Config) -->
+        <!-- Settings Modal -->
         <div v-if="showSettingsModal" class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" @click.self="showSettingsModal = false">
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-md flex flex-col max-h-[90vh]">
                 <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
@@ -949,9 +947,48 @@
                 </div>
                 
                 <div class="p-6 overflow-y-auto space-y-4">
+                    <div class="rounded border border-gray-200 dark:border-gray-700 p-4">
+                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-1 flex items-center gap-2">
+                            <span>📊</span> 市场过滤
+                        </h4>
+                        <div class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                            以下开关会实时影响列表显示结果。
+                        </div>
+                        <div class="space-y-3 pl-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">主板 (60/00)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showMainBoard" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">创业板 (30)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showChiNext" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">科创板 (68)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showStar" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">北交所 (8/4/92)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showBSE" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="rounded border border-gray-200 dark:border-gray-700">
                         <button @click="settingsSectionCommonOpen = !settingsSectionCommonOpen" class="w-full px-3 py-2 flex items-center justify-between text-sm font-bold text-gray-800 dark:text-gray-100">
-                            <span>⚙️ 常用设置</span>
+                            <span>👤 账号管理</span>
                             <span>{{ settingsSectionCommonOpen ? '收起' : '展开' }}</span>
                         </button>
                     </div>
@@ -985,10 +1022,10 @@
                         </div>
                     </div>
 
-                    <!-- 1. 账号入口 -->
-                    <div class="pt-4 border-t border-gray-100 dark:border-gray-700">
+                    <!-- 1. Account Actions -->
+                    <div class="rounded border border-gray-200 dark:border-gray-700 p-4">
                         <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
-                            <span>👤</span> 账号入口
+                            <span>👤</span> 账号操作
                         </h4>
                         <div class="space-y-2">
                             <div class="text-sm text-gray-700 dark:text-gray-300">
@@ -1003,43 +1040,6 @@
                                 <button @click="openSubscription()" class="py-2 rounded bg-red-600 text-white text-sm font-bold">
                                     {{ isRegisteredAccount ? '会员中心' : '查看会员方案' }}
                                 </button>
-                            </div>
-                        </div>
-                    </div>
-                
-                    <!-- 2. Filter Settings -->
-                    <div>
-                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
-                            <span>🔍</span> 市场过滤
-                        </h4>
-                        <div class="space-y-3 pl-2">
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">主板 (60/00)</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="filterSettings.showMainBoard" class="sr-only peer" @change="saveFilterSettings">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                                </label>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">创业板 (30)</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="filterSettings.showChiNext" class="sr-only peer" @change="saveFilterSettings">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                                </label>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">科创板 (68)</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="filterSettings.showStar" class="sr-only peer" @change="saveFilterSettings">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                                </label>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">北交所 (8/4/92)</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="filterSettings.showBSE" class="sr-only peer" @change="saveFilterSettings">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                                </label>
                             </div>
                         </div>
                     </div>
