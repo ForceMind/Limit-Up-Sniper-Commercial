@@ -2,6 +2,7 @@ import argparse
 import sys
 import re
 import shutil
+from datetime import datetime
 from pathlib import Path
 
 DEFAULT_OUTPUT_NAME = "frontend_split_package"
@@ -92,12 +93,14 @@ def _normalize_version_tag(version: str) -> str:
     return value or DEFAULT_FRONTEND_VERSION
 
 
-def _build_archive_name(output_name: str, version: str) -> str:
+def _build_archive_name(output_name: str, version: str, build_stamp: str) -> str:
     base = str(output_name or "").strip() or DEFAULT_OUTPUT_NAME
     normalized_version = _normalize_version_tag(version)
+    if not re.match(r"^[A-Za-z0-9._-]+$", build_stamp):
+        raise ValueError("invalid build stamp")
     if re.search(rf"[-_]{re.escape(normalized_version)}$", base):
-        return base
-    return f"{base}-{normalized_version}"
+        return f"{base}-{build_stamp}"
+    return f"{base}-{normalized_version}-{build_stamp}"
 
 
 def _normalize_admin_path(admin_path: str) -> str:
@@ -168,7 +171,8 @@ def package_frontend(api_base: str = "", output_name: str = DEFAULT_OUTPUT_NAME,
     _write_deploy_readme(output_dir, api_base, admin_path, admin_api_prefix)
 
     frontend_version = _extract_frontend_version(frontend_dir)
-    archive_name = _build_archive_name(output_name, frontend_version)
+    build_stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    archive_name = _build_archive_name(output_name, frontend_version, build_stamp)
     archive_base = dist_dir / archive_name
     archive_path = shutil.make_archive(str(archive_base), "zip", root_dir=str(output_dir))
 
