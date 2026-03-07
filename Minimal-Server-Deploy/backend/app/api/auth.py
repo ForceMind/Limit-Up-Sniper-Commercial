@@ -299,7 +299,7 @@ def _build_invite_info_payload(
 ) -> dict:
     if not username or not isinstance(account, dict):
         if strict:
-            raise HTTPException(status_code=403, detail="鐠囧嘲鍘涘▔銊ュ斀鐠愶箑褰块崥搴″晙娴ｈ法鏁ら柇鈧拠宄板閼?")
+            raise HTTPException(status_code=403, detail="请先注册并登录后再使用邀请功能")
         return {
             "enabled": False,
             "invite_code": "",
@@ -366,7 +366,7 @@ def get_db():
 async def login(data: schemas.UserCreate, request: Request, db: Session = Depends(get_db)):
     device_id = (data.device_id or "").strip()
     if not device_id:
-        raise HTTPException(status_code=400, detail="缂哄皯璁惧鏍囪瘑")
+        raise HTTPException(status_code=400, detail="缺少设备标识")
 
     account_store.ensure_device_not_banned(device_id)
     client_ip = _client_ip_from_request(request)
@@ -392,7 +392,7 @@ async def login(data: schemas.UserCreate, request: Request, db: Session = Depend
 
     user = user_service.get_or_create_user(db, device_id)
 
-    # 鏂版父瀹㈤娆¤繘鍏ワ細鑷姩寮€閫?0鍒嗛挓娴忚鏉冮檺
+    # 新游客首次进入：自动开通10分钟浏览权限
     if created and _is_guest_device(device_id):
         user.version = "trial"
         user.expires_at = datetime.utcnow() + timedelta(minutes=GUEST_TRIAL_MINUTES)
@@ -429,11 +429,11 @@ async def register(request: Request, data: dict = Body(...), db: Session = Depen
     if client_ip:
         current_users = _dedupe_str_list((limits.get("ip_registered_users") or {}).get(client_ip, []))
         if username not in current_users and len(current_users) >= REGISTER_PER_IP_LIMIT:
-            raise HTTPException(status_code=403, detail="褰撳墠IP娉ㄥ唽璐﹀彿鏁伴噺宸茶揪涓婇檺锛岃浣跨敤宸叉湁璐﹀彿鐧诲綍")
+            raise HTTPException(status_code=403, detail="当前IP注册账号数量已达上限，请使用已有账号登录")
 
     existing_account = account_store.get_account_by_username(username)
     if existing_account:
-        raise HTTPException(status_code=400, detail="鐢ㄦ埛鍚嶅凡瀛樺湪")
+        raise HTTPException(status_code=400, detail="用户名已存在")
 
     accounts = _load_accounts()
 
@@ -467,7 +467,7 @@ async def register(request: Request, data: dict = Body(...), db: Session = Depen
             )
         _save_auth_access_limits(limits)
 
-    # 娉ㄥ唽鍚庨粯璁ゆ湭寮€閫氶珮绾ф潈闄愶紙闇€鐢宠浣撻獙鎴栬喘涔帮級
+    # 注册后默认未开通高级权限（需申请体验或购买）
     user = user_service.get_or_create_user(db, device_id)
     user.version = "trial"
     user.expires_at = datetime.utcnow()
@@ -476,7 +476,7 @@ async def register(request: Request, data: dict = Body(...), db: Session = Depen
     user.daily_review_count = 0
     db.commit()
     db.refresh(user)
-    add_runtime_log(f"[璁よ瘉] 娉ㄥ唽鎴愬姛: username={username}, device={device_id}")
+    add_runtime_log(f"[认证] 注册成功: username={username}, device={device_id}")
     log_user_operation(
         "user_register",
         status="success",
@@ -518,7 +518,7 @@ async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
             username=username,
             detail="account_not_found",
         )
-        raise HTTPException(status_code=404, detail="鐢ㄦ埛涓嶅瓨鍦紝璇峰厛娉ㄥ唽")
+        raise HTTPException(status_code=404, detail="用户不存在，请先注册")
 
     account_store.ensure_device_not_banned(str(account.get("device_id", "")).strip())
 
@@ -533,11 +533,11 @@ async def login_user(data: dict = Body(...), db: Session = Depends(get_db)):
             device_id=account.get("device_id", ""),
             detail="password_incorrect",
         )
-        raise HTTPException(status_code=401, detail="瀵嗙爜閿欒")
+        raise HTTPException(status_code=401, detail="密码错误")
 
     device_id = account["device_id"]
     user = user_service.get_or_create_user(db, device_id)
-    add_runtime_log(f"[璁よ瘉] 鐧诲綍鎴愬姛: username={username}, device={device_id}")
+    add_runtime_log(f"[认证] 登录成功: username={username}, device={device_id}")
     log_user_operation(
         "user_login",
         status="success",
@@ -605,13 +605,13 @@ async def apply_trial(
     db: Session = Depends(get_db),
 ):
     if not x_device_id:
-        raise HTTPException(status_code=400, detail="璇峰厛鐧诲綍鍚庡啀鐢宠浣撻獙")
+        raise HTTPException(status_code=400, detail="请先登录后再申请体验")
 
     account_store.ensure_device_not_banned(x_device_id)
 
     fingerprint_id = (data.get("fingerprint_id") or "").strip()
     if not fingerprint_id:
-        raise HTTPException(status_code=400, detail="缂哄皯璁惧鏍囪瘑")
+        raise HTTPException(status_code=400, detail="缺少设备标识")
 
     account_key, matched_account = account_store.get_account_by_device_id(x_device_id)
 
@@ -624,15 +624,15 @@ async def apply_trial(
 
     user = user_service.get_or_create_user(db, x_device_id)
     if user.version in PAID_VERSIONS:
-        raise HTTPException(status_code=400, detail="浼氬憳璐﹀彿涓嶆敮鎸佺敵璇?0鍒嗛挓浣撻獙")
+        raise HTTPException(status_code=400, detail="会员账号不支持申请10分钟体验")
 
     account = account_store.get_account_by_username(account_key) or accounts[account_key]
     if bool(account.get("trial_applied")):
-        raise HTTPException(status_code=400, detail="褰撳墠璐﹀彿宸茬敵璇疯繃10鍒嗛挓浣撻獙")
+        raise HTTPException(status_code=400, detail="当前账号已申请过10分钟体验")
 
     fp_used = _load_trial_fingerprints()
     if fp_used.get(fingerprint_id):
-        raise HTTPException(status_code=400, detail="褰撳墠璁惧宸蹭娇鐢ㄨ繃浣撻獙璧勬牸")
+        raise HTTPException(status_code=400, detail="当前设备已使用过体验资格")
 
     fp_used[fingerprint_id] = {
         "username": account_key,
@@ -655,7 +655,7 @@ async def apply_trial(
     user.daily_review_count = 0
     db.commit()
     db.refresh(user)
-    add_runtime_log(f"[璁よ瘉] 璇曠敤宸插紑閫? username={account_key}, device={x_device_id}")
+    add_runtime_log(f"[认证] 试用已开通: username={account_key}, device={x_device_id}")
     log_user_operation(
         "apply_trial",
         status="success",
@@ -669,7 +669,7 @@ async def apply_trial(
 
     return {
         "status": "success",
-        "message": "浣撻獙鐢宠宸茶嚜鍔ㄩ€氳繃",
+        "message": "体验申请已自动通过",
         "can_apply_trial": False,
         "user": _build_user_payload(user),
     }
@@ -690,6 +690,6 @@ async def check_status(x_device_id: str = Header(None), db: Session = Depends(ge
     return {
         "status": status,
         "type": user.version,
-        "expiry": user.expires_at.strftime("%Y-%m-%d %H:%M") if user.expires_at else "姘镐箙",
+        "expiry": user.expires_at.strftime("%Y-%m-%d %H:%M") if user.expires_at else "永久",
     }
 
