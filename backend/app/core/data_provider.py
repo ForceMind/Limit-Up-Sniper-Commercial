@@ -509,8 +509,11 @@ class DataProvider:
             except Exception:
                 minute_limit = 3000
             key = self._sanitize_biying_license_key(cfg.get("biying_license_key", ""))
+            # Treat presence of license key as an implicit enable signal to reduce
+            # misconfiguration caused by forgotten toggle switches.
+            enabled = bool(cfg.get("biying_enabled")) or bool(key)
             return {
-                "enabled": bool(cfg.get("biying_enabled")),
+                "enabled": enabled,
                 "license_key": key,
                 "endpoint": str(cfg.get("biying_endpoint", "")).strip(),
                 "cert_path": str(cfg.get("biying_cert_path", "")).strip(),
@@ -527,7 +530,8 @@ class DataProvider:
 
     def _biying_enabled(self, cfg=None):
         cfg = cfg or self._get_biying_config()
-        return bool(cfg.get("enabled")) and bool(cfg.get("license_key"))
+        has_key = bool(cfg.get("license_key"))
+        return has_key and (bool(cfg.get("enabled")) or has_key)
 
     def _biying_base_url(self, cfg):
         endpoint = str((cfg or {}).get("endpoint", "")).strip()
@@ -1439,57 +1443,52 @@ class DataProvider:
         return results
 
     def _fetch_intraday_data_biying(self, code):
-        cfg = self._get_biying_config()
-        if not self._biying_enabled(cfg):
-            return None
-
-        clean_code = "".join(filter(str.isdigit, self._strip_code(code)))
-        symbol = self._normalize_biying_symbol(clean_code)
-        if len(clean_code) != 6 or not symbol:
-            return None
-
-        cache_key = f"intraday:{clean_code}"
-        now_ts = time.time()
-        cached = self._biying_intraday_cache.get(cache_key)
-        if cached and now_ts - cached.get("ts", 0) < self._biying_intraday_cache_ttl:
-            df = cached.get("data")
-            if isinstance(df, pd.DataFrame):
-                return df.copy()
-
         now_dt = datetime.now(ZoneInfo("Asia/Shanghai"))
-        end_date = now_dt.strftime("%Y%m%d")
-        start_date = (now_dt - pd.Timedelta(days=14)).strftime("%Y%m%d")
-        payload = self._biying_request_json(
-            f"/hsstock/history/{symbol}/5/n/{cfg['license_key']}",
-            params={"st": start_date, "et": end_date, "lt": 240},
-            timeout=6,
+        today_ymd = now_dt.strftime("%Y%m%d")
+        today_df = self._fetch_intraday_data_biying_for_trade_date(
+            code,
+            today_ymd,
+            include_latest=True,
+            force_refresh=False,
         )
-        rows = self._parse_biying_kline_rows(payload)
-        latest_payload = self._biying_request_json(
-            f"/hsstock/latest/{symbol}/5/n/{cfg['license_key']}",
-            params={"lt": 5},
-            timeout=6,
-        )
-        latest_rows = self._parse_biying_kline_rows(latest_payload) or []
+        if today_df is not None and not today_df.empty:
+            return today_df
 
-        # latest 是增量，history 是主体；按 time 去重合并，latest 覆盖同时间点。
-        merged_by_time = {}
-        for row in (rows or []):
-            key = str(row.get("time", "") or "").strip()
-            if key:
-                merged_by_time[key] = row
-        for row in latest_rows:
-            key = str(row.get("time", "") or "").strip()
-            if key:
-                merged_by_time[key] = row
-        rows = [merged_by_time[k] for k in sorted(merged_by_time.keys())]
+        # Off-session fallback: pull the most recent previous weekday snapshot.
+        # This keeps minute chart available before open / after close.
+        for offset in range(1, 8):
+            probe_dt = now_dt - pd.Timedelta(days=offset)
+            if probe_dt.weekday() >= 5:
+                continue
+            probe_ymd = probe_dt.strftime("%Y%m%d")
+            probe_df = self._fetch_intraday_data_biying_for_trade_date(
+                code,
+                probe_ymd,
+                include_latest=False,
+                force_refresh=False,
+            )
+            if probe_df is not None and not probe_df.empty:
+                return probe_df
+        return None
+
+    def _normalize_trade_date_pair(self, trade_date):
+        digits = "".join(ch for ch in str(trade_date or "") if ch.isdigit())
+        if len(digits) < 8:
+            return "", ""
+        ymd8 = digits[:8]
+        ymd10 = f"{ymd8[:4]}-{ymd8[4:6]}-{ymd8[6:8]}"
+        return ymd8, ymd10
+
+    def _build_intraday_df_from_biying_rows(self, rows, target_date: str = ""):
         if not rows:
             return None
-
-        df = pd.DataFrame(rows)
-        if "time" not in df.columns:
+        if target_date:
+            filtered = [r for r in rows if str(r.get("date", "")).startswith(target_date)]
+            rows = filtered or rows
+        if not rows:
             return None
-        if "close" not in df.columns:
+        df = pd.DataFrame(rows)
+        if "time" not in df.columns or "close" not in df.columns:
             return None
         if "open" not in df.columns:
             df["open"] = df["close"]
@@ -1501,8 +1500,84 @@ class DataProvider:
             df["volume"] = 0.0
         if "amount" not in df.columns:
             df["amount"] = 0.0
+        for col in ["open", "close", "high", "low", "volume", "amount"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
         out_df = df[["time", "open", "close", "high", "low", "volume", "amount"]].copy()
+        out_df["time"] = out_df["time"].astype(str).str.strip()
+        out_df = out_df.dropna(subset=["time", "close"])
+        out_df = out_df.sort_values("time").drop_duplicates(subset=["time"], keep="last").reset_index(drop=True)
+        if out_df.empty:
+            return None
+        return out_df
+
+    def _fetch_intraday_data_biying_for_trade_date(
+        self,
+        code,
+        trade_date,
+        include_latest: bool = False,
+        force_refresh: bool = False,
+    ):
+        cfg = self._get_biying_config()
+        if not self._biying_enabled(cfg):
+            return None
+
+        clean_code = "".join(filter(str.isdigit, self._strip_code(code)))
+        symbol = self._normalize_biying_symbol(clean_code)
+        ymd8, ymd10 = self._normalize_trade_date_pair(trade_date)
+        if len(clean_code) != 6 or not symbol or not ymd8:
+            return None
+
+        cache_key = f"intraday:{clean_code}:{ymd8}"
+        now_ts = time.time()
+        if not force_refresh:
+            cached = self._biying_intraday_cache.get(cache_key)
+            if cached and now_ts - cached.get("ts", 0) < self._biying_intraday_cache_ttl:
+                df = cached.get("data")
+                if isinstance(df, pd.DataFrame):
+                    return df.copy()
+
+        # Required API: /hsstock/history/{code.market}/5/n/{license}?st=YYYYMMDD&et=YYYYMMDD&lt=...
+        history_path = f"/hsstock/history/{symbol}/5/n/{cfg['license_key']}"
+        payload = self._biying_request_json(
+            history_path,
+            params={"st": ymd8, "et": ymd8, "lt": 360},
+            timeout=6,
+        )
+        rows = self._parse_biying_kline_rows(payload) or []
+        if not rows:
+            # Some nodes are stricter on timestamp form; retry once with full-day range.
+            payload = self._biying_request_json(
+                history_path,
+                params={"st": f"{ymd8}000000", "et": f"{ymd8}235959", "lt": 360},
+                timeout=6,
+            )
+            rows = self._parse_biying_kline_rows(payload) or []
+
+        if include_latest and ymd8 == self._today_cn_ymd():
+            latest_payload = self._biying_request_json(
+                f"/hsstock/latest/{symbol}/5/n/{cfg['license_key']}",
+                params={"lt": 5},
+                timeout=6,
+            )
+            latest_rows = self._parse_biying_kline_rows(latest_payload) or []
+            merged_by_time = {}
+            for row in rows:
+                key = str(row.get("time", "") or "").strip()
+                if key:
+                    merged_by_time[key] = row
+            for row in latest_rows:
+                key = str(row.get("time", "") or "").strip()
+                if key:
+                    merged_by_time[key] = row
+            rows = [merged_by_time[k] for k in sorted(merged_by_time.keys())]
+
+        out_df = self._build_intraday_df_from_biying_rows(rows, target_date=ymd10)
+        if out_df is None or out_df.empty:
+            return None
+
         self._biying_intraday_cache[cache_key] = {"ts": now_ts, "data": out_df.copy()}
+        # Keep legacy key hot so old callers can reuse the same newest slice.
+        self._biying_intraday_cache[f"intraday:{clean_code}"] = {"ts": now_ts, "data": out_df.copy()}
         return out_df
 
     def _fetch_all_market_data_biying_all(self, force_refresh: bool = False):

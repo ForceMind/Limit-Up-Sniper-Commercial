@@ -741,8 +741,17 @@ class LHBManager:
             if not data_provider._biying_enabled(cfg):
                 return None
 
-            # Reuse DataProvider intraday cache to avoid duplicate outbound fetches.
-            base_df = data_provider._fetch_intraday_data_biying(clean_code)
+            # Exact-date pull via Biying history minute endpoint to guarantee
+            # previous-trade-day fallback in off-session.
+            base_df = data_provider._fetch_intraday_data_biying_for_trade_date(
+                clean_code,
+                date_str,
+                include_latest=bool(is_today),
+                force_refresh=False,
+            )
+            if base_df is None or base_df.empty:
+                # Legacy fallback: broad intraday snapshot.
+                base_df = data_provider._fetch_intraday_data_biying(clean_code)
             if base_df is None or base_df.empty:
                 return None
 
