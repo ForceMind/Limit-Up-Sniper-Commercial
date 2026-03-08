@@ -1483,10 +1483,17 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
         if now_dt.hour < 15 or (now_dt.hour == 15 and now_dt.minute < 30):
             return
 
-    if lhb_manager.is_kline_network_paused():
-        return
     now_ts = time.time()
     cache_path = _day_kline_cache_path(clean_code)
+    if lhb_manager.is_kline_network_paused():
+        # Minute-kline pause should not permanently block day-kline warmup.
+        # Reuse existing cache if present; otherwise allow a throttled one-shot refresh.
+        if cache_path.exists():
+            return
+    last_attempt_ts = day_kline_attempt_ts.get(clean_code, 0)
+    if now_ts - last_attempt_ts < DAY_KLINE_RETRY_SEC:
+        return
+    day_kline_attempt_ts[clean_code] = now_ts
     if (not force) and cache_path.exists():
         try:
             mtime = cache_path.stat().st_mtime
@@ -1498,10 +1505,6 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
     last_ts = day_kline_refresh_ts.get(clean_code, 0)
     if (not force) and now_ts - last_ts < DAY_KLINE_REFRESH_SEC:
         return
-    last_attempt_ts = day_kline_attempt_ts.get(clean_code, 0)
-    if (not force) and now_ts - last_attempt_ts < DAY_KLINE_RETRY_SEC:
-        return
-    day_kline_attempt_ts[clean_code] = now_ts
 
     try:
         biying_cfg = data_provider._get_biying_config()
@@ -1591,11 +1594,21 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
 def _pick_row_value(row: dict, candidate_keys: List[str], fallback_index: Optional[int] = None):
     if not isinstance(row, dict):
         return None
+    lower_key_map = {}
+    for raw_key in row.keys():
+        if isinstance(raw_key, str):
+            lower_key_map[raw_key.lower()] = raw_key
     for key in candidate_keys:
         if key in row:
             value = row.get(key)
             if value is not None and value != "":
                 return value
+        if isinstance(key, str):
+            mapped_key = lower_key_map.get(key.lower())
+            if mapped_key is not None and mapped_key in row:
+                value = row.get(mapped_key)
+                if value is not None and value != "":
+                    return value
     if fallback_index is not None:
         values = list(row.values())
         if 0 <= fallback_index < len(values):
@@ -1645,18 +1658,26 @@ def _normalize_intraday_kline_rows(raw_rows) -> List[Dict[str, Any]]:
         if not isinstance(row, dict):
             continue
 
-        date_raw = _pick_row_value(row, ["date", "time", "day", "datetime", "时间"], 0)
+        date_raw = _pick_row_value(
+            row,
+            ["date", "time", "day", "datetime", "trade_time", "t", "d", "时间"],
+            0,
+        )
         date_text = _normalize_kline_time_text(date_raw)
         if not date_text:
             continue
 
-        close_value = _safe_float_or_none(_pick_row_value(row, ["close", "收盘"], 2))
+        close_value = _safe_float_or_none(
+            _pick_row_value(row, ["close", "c", "latest", "price", "p", "收盘"], 2)
+        )
         if close_value is None:
             continue
-        open_value = _safe_float_or_none(_pick_row_value(row, ["open", "开盘"], 1))
-        high_value = _safe_float_or_none(_pick_row_value(row, ["high", "最高"], 3))
-        low_value = _safe_float_or_none(_pick_row_value(row, ["low", "最低"], 4))
-        volume_value = _safe_float_or_none(_pick_row_value(row, ["volume", "成交量"], 5))
+        open_value = _safe_float_or_none(_pick_row_value(row, ["open", "o", "开盘"], 1))
+        high_value = _safe_float_or_none(_pick_row_value(row, ["high", "h", "最高"], 3))
+        low_value = _safe_float_or_none(_pick_row_value(row, ["low", "l", "最低"], 4))
+        volume_value = _safe_float_or_none(
+            _pick_row_value(row, ["volume", "vol", "v", "tv", "pv", "成交量"], 5)
+        )
 
         if open_value is None:
             open_value = close_value
@@ -3182,7 +3203,7 @@ def _recent_analysis_log_lines(limit: int = 120) -> list[str]:
     selected = [line for line in logs if _is_user_visible_analysis_log(line)]
     if not selected:
         return []
-    return [_normalize_runtime_log_for_replay(line) for line in selected[-100:]]
+    return [str(line) for line in selected[-100:]]
 
 # Global Cache Timer
 ANALYSIS_REUSE_SECONDS_INTRADAY = 15 * 60

@@ -136,11 +136,21 @@ class DataProvider:
     def _first_value(self, row, keys, default=None):
         if not isinstance(row, dict):
             return default
+        lower_key_map = {}
+        for raw_key in row.keys():
+            if isinstance(raw_key, str):
+                lower_key_map[raw_key.lower()] = raw_key
         for key in keys:
             if key in row:
                 value = row.get(key)
                 if value is not None and str(value).strip() not in {"", "--", "null", "None"}:
                     return value
+            if isinstance(key, str):
+                mapped = lower_key_map.get(key.lower())
+                if mapped is not None and mapped in row:
+                    value = row.get(mapped)
+                    if value is not None and str(value).strip() not in {"", "--", "null", "None"}:
+                        return value
         return default
 
     def _normalize_search_token(self, value):
@@ -1005,16 +1015,18 @@ class DataProvider:
                 continue
             raw_time = self._first_value(
                 row,
-                ["time", "datetime", "date", "trade_time", "t", "交易时间", "时间", "日期", "day"],
+                ["time", "datetime", "date", "trade_time", "t", "d", "dt", "交易时间", "时间", "日期", "day"],
                 ""
             )
             ts = self._normalize_biying_time(raw_time)
-            open_price = self._safe_float(self._first_value(row, ["open", "open_price", "o", "开盘", "开盘价"], 0))
-            close_price = self._safe_float(self._first_value(row, ["close", "latest", "price", "c", "收盘", "收盘价"], 0))
-            high_price = self._safe_float(self._first_value(row, ["high", "h", "最高", "最高价"], close_price))
-            low_price = self._safe_float(self._first_value(row, ["low", "l", "最低", "最低价"], close_price))
-            volume = self._safe_float(self._first_value(row, ["volume", "vol", "v", "成交量"], 0))
-            amount = self._safe_float(self._first_value(row, ["amount", "turnover_amount", "a", "成交额", "成交金额"], 0))
+            if not ts:
+                continue
+            open_price = self._safe_float(self._first_value(row, ["open", "open_price", "o", "op", "开盘", "开盘价"], 0))
+            close_price = self._safe_float(self._first_value(row, ["close", "latest", "price", "c", "p", "收盘", "收盘价"], 0))
+            high_price = self._safe_float(self._first_value(row, ["high", "h", "hp", "最高", "最高价"], close_price))
+            low_price = self._safe_float(self._first_value(row, ["low", "l", "lp", "最低", "最低价"], close_price))
+            volume = self._safe_float(self._first_value(row, ["volume", "vol", "v", "tv", "pv", "成交量", "成交总量"], 0))
+            amount = self._safe_float(self._first_value(row, ["amount", "turnover_amount", "a", "cje", "成交额", "成交金额"], 0))
 
             if close_price <= 0:
                 continue
@@ -1477,11 +1489,19 @@ class DataProvider:
         df = pd.DataFrame(rows)
         if "time" not in df.columns:
             return None
-        if "volume" not in df.columns:
-            df["volume"] = 0.0
         if "close" not in df.columns:
             return None
-        out_df = df[["time", "close", "volume"]].copy()
+        if "open" not in df.columns:
+            df["open"] = df["close"]
+        if "high" not in df.columns:
+            df["high"] = df["close"]
+        if "low" not in df.columns:
+            df["low"] = df["close"]
+        if "volume" not in df.columns:
+            df["volume"] = 0.0
+        if "amount" not in df.columns:
+            df["amount"] = 0.0
+        out_df = df[["time", "open", "close", "high", "low", "volume", "amount"]].copy()
         self._biying_intraday_cache[cache_key] = {"ts": now_ts, "data": out_df.copy()}
         return out_df
 
