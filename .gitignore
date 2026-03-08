@@ -170,3 +170,4 @@ Desktop-Version/._data_backup/
 *.log
 config.bat
 Desktop-Version/config.bat
+package_frontend.local.conf

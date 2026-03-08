@@ -2,11 +2,27 @@ import argparse
 import sys
 import re
 import shutil
+import json
 from datetime import datetime
 from pathlib import Path
 
 DEFAULT_OUTPUT_NAME = "frontend_split_package"
 DEFAULT_FRONTEND_VERSION = "v0.0.0"
+LOCAL_PROFILE_CONFIG_NAME = "package_frontend.local.conf"
+
+DEFAULT_PROFILE_CONFIG = {
+    "last_env": "test",
+    "test": {
+        "api_base": "https://api.zhangting.ai/",
+        "admin_path": "admin_qw128hddn21ohi",
+        "admin_api_prefix": "/api/limit_admin_z68dqwu7wz9",
+    },
+    "prod": {
+        "api_base": "https://ztapi.zhangting.ai/",
+        "admin_path": "admin_zyio32qwe19h",
+        "admin_api_prefix": "/api/limit_ad21dq12_z68dqwu7wz9",
+    },
+}
 
 
 def _normalize_api_base(api_base: str) -> str:
@@ -149,12 +165,15 @@ def package_frontend(api_base: str = "", output_name: str = DEFAULT_OUTPUT_NAME,
     if not frontend_dir.exists():
         raise FileNotFoundError(f"frontend 目录不存在: {frontend_dir}")
 
+    print("[进度 1/4] 准备打包目录...")
     if output_dir.exists():
         shutil.rmtree(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    print("[进度 2/4] 复制前端文件...")
     shutil.copytree(frontend_dir, output_dir, dirs_exist_ok=True)
 
+    print("[进度 3/4] 注入环境配置...")
     _apply_admin_path(output_dir, admin_path)
 
     public_html_targets = [
@@ -170,6 +189,7 @@ def package_frontend(api_base: str = "", output_name: str = DEFAULT_OUTPUT_NAME,
 
     _write_deploy_readme(output_dir, api_base, admin_path, admin_api_prefix)
 
+    print("[进度 4/4] 生成压缩包...")
     frontend_version = _extract_frontend_version(frontend_dir)
     build_stamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     archive_name = _build_archive_name(output_name, frontend_version, build_stamp)
@@ -184,6 +204,38 @@ def package_frontend(api_base: str = "", output_name: str = DEFAULT_OUTPUT_NAME,
     print(f"后台目录：{admin_path}")
     print(f"管理员API前缀：{admin_api_prefix or '（自动推断默认逻辑）'}")
     print("=" * 60)
+
+
+def _run_profile_mode_loop() -> int:
+    print("----")
+    print("前端分离打包工具(windows一键)")
+    print("说明:")
+    print("1. 先选择测试/正式环境（回车默认上次选择）")
+    print("2. 可选择是否修改当前环境配置（回车不修改）")
+    print("3. 打包完成后可继续打包另一个环境")
+    print("----")
+
+    while True:
+        try:
+            raw_api_base, raw_admin_path, raw_admin_api_prefix, raw_output_name = _collect_profile_mode_inputs()
+
+            normalized = _normalize_api_base(raw_api_base)
+            normalized_admin_path = _normalize_admin_path(raw_admin_path)
+            normalized_admin_api_prefix = _normalize_admin_api_prefix(raw_admin_api_prefix)
+
+            package_frontend(
+                api_base=normalized,
+                output_name=str(raw_output_name or DEFAULT_OUTPUT_NAME),
+                admin_path=normalized_admin_path,
+                admin_api_prefix=normalized_admin_api_prefix,
+            )
+        except Exception as e:
+            print(f"[失败] 打包失败：{e}")
+
+        again = _prompt_line("是否继续打包另一个环境？[Y/n]：").strip().lower()
+        if again == "n":
+            print("已退出打包工具。")
+            return 0
 
 
 def parse_args() -> argparse.Namespace:
@@ -220,6 +272,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="交互模式：逐项输入后端地址、后台目录与管理员API前缀",
     )
+    parser.add_argument(
+        "--profile-mode",
+        dest="profile_mode",
+        action="store_true",
+        help="环境模式：选择测试/正式，记住本地配置，可回车沿用",
+    )
     return parser.parse_args()
 
 
@@ -246,11 +304,170 @@ def _collect_interactive_inputs() -> tuple[str, str, str, str]:
     return api_base, admin_path, admin_api_prefix, output_name
 
 
+def _profile_config_path() -> Path:
+    return Path(__file__).resolve().parent.parent / LOCAL_PROFILE_CONFIG_NAME
+
+
+def _load_profile_config() -> dict:
+    cfg = json.loads(json.dumps(DEFAULT_PROFILE_CONFIG))
+    path = _profile_config_path()
+    if not path.exists():
+        return cfg
+
+    text = path.read_text(encoding="utf-8", errors="ignore").strip()
+    if not text:
+        return cfg
+
+    try:
+        loaded = json.loads(text)
+        if isinstance(loaded, dict):
+            last_env = str(loaded.get("last_env", cfg["last_env"]) or cfg["last_env"]).strip().lower()
+            if last_env in {"test", "prod"}:
+                cfg["last_env"] = last_env
+            for env_key in ("test", "prod"):
+                env_loaded = loaded.get(env_key, {})
+                if isinstance(env_loaded, dict):
+                    for k in ("api_base", "admin_path", "admin_api_prefix"):
+                        v = str(env_loaded.get(k, cfg[env_key][k]) or cfg[env_key][k]).strip()
+                        if v:
+                            cfg[env_key][k] = v
+            return cfg
+    except Exception:
+        pass
+
+    # Backward compatibility: old batch "set KEY=VALUE" format
+    flat = {}
+    for raw in text.splitlines():
+        line = str(raw or "").strip()
+        if not line or line.startswith("#"):
+            continue
+        low = line.lower()
+        if low.startswith("@echo"):
+            continue
+        if low.startswith("set "):
+            line = line[4:].strip()
+        if "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip().strip('"').strip("'")
+        value = value.strip().strip('"').strip("'")
+        if key:
+            flat[key.upper()] = value
+
+    last_env = str(flat.get("LAST_ENV", cfg["last_env"]) or cfg["last_env"]).strip().lower()
+    if last_env in {"test", "prod"}:
+        cfg["last_env"] = last_env
+
+    mapping = {
+        "test": {
+            "api_base": "TEST_API_BASE",
+            "admin_path": "TEST_ADMIN_PATH",
+            "admin_api_prefix": "TEST_ADMIN_API_PREFIX",
+        },
+        "prod": {
+            "api_base": "PROD_API_BASE",
+            "admin_path": "PROD_ADMIN_PATH",
+            "admin_api_prefix": "PROD_ADMIN_API_PREFIX",
+        },
+    }
+    for env_key, m in mapping.items():
+        for field, flat_key in m.items():
+            value = str(flat.get(flat_key, cfg[env_key][field]) or cfg[env_key][field]).strip()
+            if value:
+                cfg[env_key][field] = value
+    return cfg
+
+
+def _save_profile_config(cfg: dict) -> None:
+    path = _profile_config_path()
+    payload = {
+        "last_env": str(cfg.get("last_env", "test") or "test").strip().lower(),
+        "test": {
+            "api_base": str((cfg.get("test", {}) or {}).get("api_base", DEFAULT_PROFILE_CONFIG["test"]["api_base"]) or DEFAULT_PROFILE_CONFIG["test"]["api_base"]).strip(),
+            "admin_path": str((cfg.get("test", {}) or {}).get("admin_path", DEFAULT_PROFILE_CONFIG["test"]["admin_path"]) or DEFAULT_PROFILE_CONFIG["test"]["admin_path"]).strip(),
+            "admin_api_prefix": str((cfg.get("test", {}) or {}).get("admin_api_prefix", DEFAULT_PROFILE_CONFIG["test"]["admin_api_prefix"]) or DEFAULT_PROFILE_CONFIG["test"]["admin_api_prefix"]).strip(),
+        },
+        "prod": {
+            "api_base": str((cfg.get("prod", {}) or {}).get("api_base", DEFAULT_PROFILE_CONFIG["prod"]["api_base"]) or DEFAULT_PROFILE_CONFIG["prod"]["api_base"]).strip(),
+            "admin_path": str((cfg.get("prod", {}) or {}).get("admin_path", DEFAULT_PROFILE_CONFIG["prod"]["admin_path"]) or DEFAULT_PROFILE_CONFIG["prod"]["admin_path"]).strip(),
+            "admin_api_prefix": str((cfg.get("prod", {}) or {}).get("admin_api_prefix", DEFAULT_PROFILE_CONFIG["prod"]["admin_api_prefix"]) or DEFAULT_PROFILE_CONFIG["prod"]["admin_api_prefix"]).strip(),
+        },
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def _normalize_env_choice(raw: str, default_env: str) -> str:
+    value = str(raw or "").strip().lower()
+    if not value:
+        return default_env
+    if value in {"1", "t", "test", "测试"}:
+        return "test"
+    if value in {"2", "p", "prod", "production", "正式"}:
+        return "prod"
+    return ""
+
+
+def _prompt_keep_value(prompt: str, current: str) -> str:
+    entered = _prompt_line(f"{prompt}（当前: {current}，回车不改）：").strip()
+    return entered if entered else current
+
+
+def _collect_profile_mode_inputs() -> tuple[str, str, str, str]:
+    cfg = _load_profile_config()
+    last_env = str(cfg.get("last_env", "test") or "test").strip().lower()
+    if last_env not in {"test", "prod"}:
+        last_env = "test"
+
+    print("=" * 60)
+    print("前端分离打包（环境模式）")
+    print("1. 测试环境")
+    print("2. 正式环境")
+    print(f"直接回车默认使用上次环境：{'测试' if last_env == 'test' else '正式'}")
+    print("=" * 60)
+
+    while True:
+        env_raw = _prompt_line("请选择环境 [1测试/2正式]：")
+        env_key = _normalize_env_choice(env_raw, last_env)
+        if env_key:
+            break
+        print("[错误] 输入无效，请输入 1/2（或 test/prod）。")
+
+    env_cfg = dict((cfg.get(env_key, {}) or {}))
+    api_base = str(env_cfg.get("api_base", DEFAULT_PROFILE_CONFIG[env_key]["api_base"]) or DEFAULT_PROFILE_CONFIG[env_key]["api_base"]).strip()
+    admin_path = str(env_cfg.get("admin_path", DEFAULT_PROFILE_CONFIG[env_key]["admin_path"]) or DEFAULT_PROFILE_CONFIG[env_key]["admin_path"]).strip()
+    admin_api_prefix = str(env_cfg.get("admin_api_prefix", DEFAULT_PROFILE_CONFIG[env_key]["admin_api_prefix"]) or DEFAULT_PROFILE_CONFIG[env_key]["admin_api_prefix"]).strip()
+
+    print("-" * 60)
+    print(f"当前环境：{'测试' if env_key == 'test' else '正式'}")
+    print(f"API_BASE          = {api_base}")
+    print(f"ADMIN_PATH        = {admin_path}")
+    print(f"ADMIN_API_PREFIX  = {admin_api_prefix}")
+    print("-" * 60)
+
+    modify = _prompt_line("是否修改当前环境配置？[y/N]：").strip().lower()
+    if modify == "y":
+        api_base = _prompt_keep_value("后端 API 地址", api_base)
+        admin_path = _prompt_keep_value("后台目录名", admin_path)
+        admin_api_prefix = _prompt_keep_value("管理员 API 前缀", admin_api_prefix)
+
+    cfg.setdefault(env_key, {})
+    cfg[env_key]["api_base"] = api_base
+    cfg[env_key]["admin_path"] = admin_path
+    cfg[env_key]["admin_api_prefix"] = admin_api_prefix
+    cfg["last_env"] = env_key
+    _save_profile_config(cfg)
+    print(f"配置已保存到：{_profile_config_path()}")
+    return api_base, admin_path, admin_api_prefix, DEFAULT_OUTPUT_NAME
+
+
 if __name__ == "__main__":
     args = parse_args()
-    interactive_mode = bool(args.interactive or len(sys.argv) == 1)
+    profile_mode = bool(args.profile_mode or len(sys.argv) == 1)
+    interactive_mode = bool(args.interactive)
 
-    if interactive_mode:
+    if profile_mode:
+        sys.exit(_run_profile_mode_loop())
+    elif interactive_mode:
         raw_api_base, raw_admin_path, raw_admin_api_prefix, raw_output_name = _collect_interactive_inputs()
     else:
         raw_api_base = args.api_base
