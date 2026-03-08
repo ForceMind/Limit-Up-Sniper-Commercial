@@ -1021,7 +1021,7 @@
                         </div>
                         <div class="mt-3 text-xs text-blue-600 dark:text-blue-400 font-bold flex items-center justify-center gap-1">
                             <span>💳</span>
-                            <span>{{ (isRegisteredAccount && isPaidMember && !userInfo.is_expired) ? '查看会员详情' : (canShowTenMinuteTrialOption ? '申请10分钟体验' : '立即购买会员') }}</span>
+                            <span>{{ (isRegisteredAccount && isPaidMember && !userInfo.is_expired) ? '查看会员详情' : (canShowTenMinuteTrialOption ? '申请3天体验' : '立即购买会员') }}</span>
                         </div>
                     </div>
 
@@ -1124,7 +1124,7 @@
         <div v-if="showGuestReminderModal" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-sm p-6">
                 <h3 class="text-lg font-bold mb-2 text-gray-900 dark:text-gray-100">首次使用提醒</h3>
-                <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">当前为游客账号，可浏览10分钟。使用权限功能请先注册账号并购买会员。</p>
+                <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">当前为游客账号，可浏览10分钟。注册后可点击申请3天体验，权限功能需开通会员。</p>
                 <div class="flex gap-2">
                     <button @click="showGuestReminderModal = false" class="flex-1 py-2 border rounded text-sm">我知道了</button>
                     <button @click="showGuestReminderModal = false; showLoginModal = true" class="flex-1 py-2 bg-blue-600 text-white rounded text-sm">去注册</button>
@@ -1250,10 +1250,10 @@
 
                 <div v-if="canShowTenMinuteTrialOption || showTenMinuteTrialUsedHint" class="rounded border border-orange-200 bg-orange-50 dark:bg-orange-900/20 dark:border-orange-800 p-3">
                     <button v-if="canShowTenMinuteTrialOption" @click="applyTrialExperience" :disabled="loginLoading" class="w-full py-2 rounded bg-orange-500 text-white text-sm font-bold disabled:opacity-50">
-                        {{ loginLoading ? '处理中...' : '申请10分钟体验' }}
+                        {{ loginLoading ? '处理中...' : '申请3天体验' }}
                     </button>
                     <div v-else class="text-[11px] text-orange-700 dark:text-orange-300 text-center">
-                        10分钟体验资格已使用，可直接购买3天体验或正式会员。
+                        3天体验资格已使用，可直接购买正式会员。
                     </div>
                 </div>
                 <div class='text-xs text-center text-gray-400 mt-2 font-mono'>{{ serverVersion }}</div>
@@ -1453,12 +1453,12 @@
                     <div v-else>
                         <div v-if="canShowTenMinuteTrialOption || showTenMinuteTrialUsedHint" class="mb-4 rounded border border-orange-200 bg-orange-50 dark:bg-orange-900/20 dark:border-orange-800 p-3">
                             <div class="text-xs text-orange-700 dark:text-orange-300 mb-2">
-                                注册账号专属10分钟体验，仅可申请一次。
+                            注册账号专属3天体验，仅可申请一次。
                             </div>
                             <button v-if="canShowTenMinuteTrialOption" @click="applyTrialExperience" :disabled="loginLoading" class="w-full py-2 rounded bg-orange-500 text-white text-sm font-bold disabled:opacity-50">
-                                {{ loginLoading ? '处理中...' : '立即申请10分钟体验' }}
+                                {{ loginLoading ? '处理中...' : '立即申请3天体验' }}
                             </button>
-                            <div v-else class="text-[11px] text-orange-700 dark:text-orange-300">10分钟体验资格已使用，可直接购买3天体验或正式会员。</div>
+                            <div v-else class="text-[11px] text-orange-700 dark:text-orange-300">3天体验资格已使用，可直接购买正式会员。</div>
                         </div>
 
                         <div v-if="inviteInfo.enabled !== false" class="mb-4 rounded border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 p-3 text-xs">
@@ -2007,7 +2007,7 @@
                         { title: '会员与充值', desc: '在会员中心可续费、升级，并可使用邀请码获得赠送权益。', tab: 'manual', openSubscription: true }
                     ],
                     features: {
-                        'trial': { ai: '每日1次', raid: '暂不支持', review: '暂不支持', desc: '体验10分钟' },
+                        'trial': { ai: '每日1次', raid: '暂不支持', review: '暂不支持', desc: '游客10分钟，注册可申请3天体验' },
                         'basic': { ai: '每日5次', raid: '暂不支持', review: '暂不支持', desc: '入门首选' },
                         'advanced': { ai: '每日10次', raid: '每日3次', review: '每日1次', desc: '进阶利器' },
                         'flagship': { ai: '每日1000次', raid: '每日50次', review: '每日5次', desc: '专业游资' }
@@ -2353,7 +2353,7 @@
                             ? '请先升级会员后使用'
                             : ((this.isPaidMember && this.userInfo?.is_expired)
                                 ? '请先续费会员后使用'
-                                : (this.canShowTenMinuteTrialOption ? '请先申请10分钟体验后使用' : '请先购买会员后使用'));
+                                : (this.canShowTenMinuteTrialOption ? '请先申请3天体验后使用' : '请先购买会员后使用'));
                         this.showMsg(`当前功能需要会员权限，${actionHint}`, 'info');
                         this.openSubscription();
                         return;
@@ -2971,7 +2971,7 @@
                         return;
                     }
                     if (this.isPaidMember) {
-                        this.showMsg('会员账号无需申请10分钟体验', 'info');
+                        this.showMsg('会员账号无需申请3天体验', 'info');
                         return;
                     }
                     if (!this.accountCanApplyTrial) {
@@ -3061,7 +3061,7 @@
                     // Global Block for expired users on advanced actions
                     if (expired) {
                         if (version === 'trial') {
-                            this.showMsg(this.canShowTenMinuteTrialOption ? '请先申请10分钟体验后使用该功能' : '请先购买会员后使用该功能', 'info');
+                            this.showMsg(this.canShowTenMinuteTrialOption ? '请先申请3天体验后使用该功能' : '请先购买会员后使用该功能', 'info');
                         } else {
                             this.showMsg('会员已过期，请续费解锁完整功能', 'error');
                         }

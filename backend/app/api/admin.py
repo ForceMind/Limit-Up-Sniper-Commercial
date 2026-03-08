@@ -806,13 +806,31 @@ async def update_admin_api_prefix_api(
 async def list_users(
     skip: int = 0,
     limit: int = 100,
-    account_type: str = "all",
+    account_type: str = "registered",
     db: Session = Depends(get_db),
     authorized: bool = Depends(verify_admin),
 ):
     users = db.query(models.User).order_by(models.User.created_at.desc()).all()
     accounts = _load_user_accounts()
     device_to_username = _device_username_map(accounts)
+    now_sh = datetime.now(SHANGHAI_TZ)
+
+    recent_ops = _iter_user_operation_logs()
+    last_online_by_device: Dict[str, str] = {}
+    for row in recent_ops:
+        action = str((row or {}).get("action", "")).strip().lower()
+        status = str((row or {}).get("status", "")).strip().lower()
+        path = str((row or {}).get("path", "")).strip()
+        did = str((row or {}).get("device_id", "")).strip()
+        if not did or did in last_online_by_device:
+            continue
+        if status != "success":
+            continue
+        if action not in {"online_presence", "api_call"}:
+            continue
+        if not path.startswith("/api/"):
+            continue
+        last_online_by_device[did] = str((row or {}).get("time", "") or "").strip()
 
     filter_mode = (account_type or "all").strip().lower()
     if filter_mode not in {"all", "guest", "registered"}:
@@ -835,6 +853,9 @@ async def list_users(
         quota_raid = max(0, int(quotas.get("raid", 0)))
         quota_review = max(0, int(quotas.get("review", 0))
         )
+        last_online_at = str(last_online_by_device.get(u.device_id, "") or "").strip()
+        last_online_dt = _as_shanghai_datetime(last_online_at, assume_utc_when_naive=False)
+        is_online_recent = bool(last_online_dt and (now_sh - last_online_dt).total_seconds() <= 300)
         res.append({
             "id": u.id,
             "device_id": u.device_id,
@@ -843,6 +864,8 @@ async def list_users(
             "account_type": "registered" if is_registered else "guest",
             "is_banned": bool(account.get("is_banned", False)) if isinstance(account, dict) else False,
             "banned_reason": str(account.get("banned_reason", "")).strip() if isinstance(account, dict) else "",
+            "trial_applied": bool(account.get("trial_applied", False)) if isinstance(account, dict) else False,
+            "trial_applied_at": str(account.get("trial_applied_at", "")).strip() if isinstance(account, dict) else "",
             "version": u.version,
             "expires_at": u.expires_at,
             "created_at": u.created_at,
@@ -855,7 +878,9 @@ async def list_users(
             "remaining_ai": max(0, quota_ai - used_ai),
             "remaining_raid": max(0, quota_raid - used_raid),
             "remaining_review": max(0, quota_review - used_review),
-            "is_expired": (u.expires_at and u.expires_at < datetime.utcnow())
+            "is_expired": (u.expires_at and u.expires_at < datetime.utcnow()),
+            "last_online_at": last_online_at,
+            "is_online_recent": is_online_recent,
         })
     safe_skip = max(0, int(skip or 0))
     safe_limit = max(1, min(int(limit or 100), 1000))
@@ -880,6 +905,10 @@ class SetUserMembershipSchema(BaseModel):
     user_id: int
     version: str
     days: int = 30
+
+
+class DeleteUserSchema(BaseModel):
+    user_id: int
 
 
 def _resolve_target_username(
@@ -1117,6 +1146,46 @@ async def set_user_membership(
         "user_id": user.id,
         "version": user.version,
         "expires_at": user.expires_at,
+    }
+
+
+@router.post("/users/delete")
+async def delete_user(
+    payload: DeleteUserSchema,
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_admin),
+):
+    user = db.query(models.User).filter(models.User.id == payload.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    accounts = _load_user_accounts()
+    username = account_store.get_username_by_device_id(user.device_id, accounts=accounts)
+    if username:
+        raise HTTPException(status_code=400, detail="当前仅支持删除游客账户，注册账号请使用封禁/重置等管理操作")
+
+    deleted_device_id = str(user.device_id or "").strip()
+    try:
+        db.delete(user)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="删除用户失败")
+
+    add_runtime_log(f"[后台] 删除游客账号: user_id={payload.user_id}, device={deleted_device_id}")
+    log_user_operation(
+        "delete_guest_user",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/users/delete",
+        device_id=deleted_device_id,
+        detail=f"user_id={payload.user_id}",
+    )
+    return {
+        "status": "success",
+        "user_id": payload.user_id,
+        "device_id": deleted_device_id,
     }
 
 

@@ -4,6 +4,7 @@ import pandas as pd
 import time
 import json
 import threading
+import sqlite3
 from datetime import datetime, time as dt_time
 from zoneinfo import ZoneInfo
 from pathlib import Path
@@ -53,6 +54,9 @@ class DataProvider:
         self._biying_usage_lock = threading.Lock()
         self._biying_minute_state = {"minute": "", "count": 0}
         self._biying_quota_log_ts = 0.0
+        self._biying_quota_db_fail_log_ts = 0.0
+        self._biying_quota_db_file = DATA_DIR / "biying_quota.sqlite3"
+        self._biying_quota_db_init = False
         self._biying_http_err_log_ts = 0.0
         self._biying_next_retry_ts = 0.0
         self._biying_fail_cooldown_base_sec = 1800
@@ -70,9 +74,25 @@ class DataProvider:
         self._biying_stock_info_cache_ttl = 86400 * 7
         self._biying_stock_info_cache_file = DATA_DIR / "biying_stock_info_cache.json"
         self._biying_stock_list_file = DATA_DIR / "biying_stock_list.json"
+        self._biying_all_market_cache_file = DATA_DIR / "biying_all_market_cache.json"
+        self._biying_pool_cache_file = DATA_DIR / "biying_pool_cache.json"
+        self._biying_base_refresh_state_file = DATA_DIR / "biying_base_refresh_state.json"
         self._biying_stock_list_map = {}
         self._biying_stock_alias_map = {}
         self._biying_stock_list_last_refresh = ""
+        self._biying_pool_cache = {
+            "limit_up": {"date": "", "ts": 0.0, "rows": []},
+            "limit_down": {"date": "", "ts": 0.0, "rows": []},
+            "broken": {"date": "", "ts": 0.0, "rows": []},
+        }
+        # 涨跌停/炸板池官方交易时段约每10分钟更新，交易时段缓存提升到600秒：
+        # 1) 降低重复外网请求；2) 稳定控制必盈每分钟总调用上限。
+        self._biying_pool_cache_trading_ttl_sec = 600
+        self._biying_pool_cache_non_trading_ttl_sec = 21600
+        self._biying_base_refresh_marks = {"preopen": "", "postclose": ""}
+        self._biying_base_snapshot_lock = threading.Lock()
+        self._biying_base_snapshot_last_check_ts = 0.0
+        self._biying_base_snapshot_min_check_sec = 60
         self._name_pinyin_cache = {}
         self._biying_all_market_cache_df = None
         self._biying_all_market_cache_ts = 0.0
@@ -287,6 +307,67 @@ class DataProvider:
         except Exception:
             pass
 
+        try:
+            if self._biying_all_market_cache_file.exists():
+                with open(self._biying_all_market_cache_file, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                rows = []
+                ts = 0.0
+                if isinstance(loaded, dict):
+                    rows = loaded.get("rows", [])
+                    ts = self._safe_float(loaded.get("ts"), 0.0)
+                elif isinstance(loaded, list):
+                    rows = loaded
+                if isinstance(rows, list) and rows:
+                    df = pd.DataFrame(rows)
+                    if not df.empty:
+                        self._biying_all_market_cache_df = df
+                        self._last_market_df = df.copy()
+                        file_ts = self._safe_float(self._biying_all_market_cache_file.stat().st_mtime, 0.0)
+                        final_ts = ts if ts > 0 else file_ts
+                        if final_ts <= 0:
+                            final_ts = time.time()
+                        self._biying_all_market_cache_ts = final_ts
+                        self._last_market_ts = final_ts
+        except Exception:
+            pass
+
+        try:
+            if self._biying_pool_cache_file.exists():
+                with open(self._biying_pool_cache_file, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    for key in ("limit_up", "limit_down", "broken"):
+                        item = loaded.get(key, {})
+                        if not isinstance(item, dict):
+                            continue
+                        rows = item.get("rows", [])
+                        date_text = str(item.get("date", "") or "").strip()
+                        ts = self._safe_float(item.get("ts"), 0.0)
+                        if not isinstance(rows, list):
+                            rows = []
+                        self._biying_pool_cache[key] = {
+                            "date": date_text,
+                            "ts": ts if ts > 0 else 0.0,
+                            "rows": rows,
+                        }
+        except Exception:
+            pass
+
+        try:
+            if self._biying_base_refresh_state_file.exists():
+                with open(self._biying_base_refresh_state_file, "r", encoding="utf-8") as f:
+                    loaded = json.load(f)
+                if isinstance(loaded, dict):
+                    preopen = str(loaded.get("preopen", "") or "").strip()
+                    postclose = str(loaded.get("postclose", "") or "").strip()
+                    self._biying_base_refresh_marks = {
+                        "preopen": preopen,
+                        "postclose": postclose,
+                    }
+        except Exception:
+            pass
+
     def _save_biying_stock_info_cache(self):
         try:
             now_ts = time.time()
@@ -309,6 +390,50 @@ class DataProvider:
                 "aliases": self._biying_stock_alias_map,
             }
             with open(self._biying_stock_list_file, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _save_biying_all_market_cache(self):
+        try:
+            df = self._biying_all_market_cache_df
+            if df is None or df.empty:
+                return
+            payload = {
+                "ts": float(self._biying_all_market_cache_ts or time.time()),
+                "rows": df.to_dict("records"),
+            }
+            tmp_path = self._biying_all_market_cache_file.with_suffix(".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            tmp_path.replace(self._biying_all_market_cache_file)
+        except Exception:
+            pass
+
+    def _save_biying_pool_cache(self):
+        try:
+            payload = {}
+            for key in ("limit_up", "limit_down", "broken"):
+                item = self._biying_pool_cache.get(key, {}) if isinstance(self._biying_pool_cache, dict) else {}
+                payload[key] = {
+                    "date": str((item or {}).get("date", "") or ""),
+                    "ts": float(self._safe_float((item or {}).get("ts"), 0.0)),
+                    "rows": (item or {}).get("rows", []) if isinstance((item or {}).get("rows", []), list) else [],
+                }
+            tmp_path = self._biying_pool_cache_file.with_suffix(".tmp")
+            with open(tmp_path, "w", encoding="utf-8") as f:
+                json.dump(payload, f, ensure_ascii=False)
+            tmp_path.replace(self._biying_pool_cache_file)
+        except Exception:
+            pass
+
+    def _save_biying_base_refresh_state(self):
+        try:
+            payload = {
+                "preopen": str((self._biying_base_refresh_marks or {}).get("preopen", "") or ""),
+                "postclose": str((self._biying_base_refresh_marks or {}).get("postclose", "") or ""),
+            }
+            with open(self._biying_base_refresh_state_file, "w", encoding="utf-8") as f:
                 json.dump(payload, f, ensure_ascii=False, indent=2)
         except Exception:
             pass
@@ -405,21 +530,111 @@ class DataProvider:
 
     def _reserve_biying_quota(self, cfg, calls=1):
         calls = max(1, int(calls or 1))
+        minute_key = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d%H%M")
+        minute_limit = max(1, int((cfg or {}).get("minute_limit", 3000) or 3000))
+
+        allowed, minute_count = self._reserve_biying_quota_global(minute_key, minute_limit, calls)
+        if allowed is None:
+            allowed, minute_count = self._reserve_biying_quota_local(minute_key, minute_limit, calls)
+
+        if not allowed:
+            now_ts = time.time()
+            if now_ts - self._biying_quota_log_ts >= 60:
+                remain = max(0, minute_limit - max(0, int(minute_count or 0)))
+                self.log(f"[*] 必盈分钟频率保护触发（剩余 {remain}/{minute_limit} 次/分钟），回退到默认数据源")
+                self._biying_quota_log_ts = now_ts
+            return False
+        return True
+
+    def _ensure_biying_quota_db(self):
+        if self._biying_quota_db_init:
+            return True
         with self._biying_usage_lock:
-            minute_key = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d%H%M")
+            if self._biying_quota_db_init:
+                return True
+            try:
+                with sqlite3.connect(str(self._biying_quota_db_file), timeout=2.0) as conn:
+                    conn.execute("PRAGMA journal_mode=WAL")
+                    conn.execute("PRAGMA synchronous=NORMAL")
+                    conn.execute(
+                        """
+                        CREATE TABLE IF NOT EXISTS biying_minute_quota (
+                            minute_key TEXT PRIMARY KEY,
+                            count INTEGER NOT NULL,
+                            updated_ts REAL NOT NULL
+                        )
+                        """
+                    )
+                    conn.commit()
+                self._biying_quota_db_init = True
+                return True
+            except Exception as e:
+                now_ts = time.time()
+                if now_ts - self._biying_quota_db_fail_log_ts >= 60:
+                    self.log(f"[!] 必盈全局限流存储初始化失败，降级为进程内限流: {e}")
+                    self._biying_quota_db_fail_log_ts = now_ts
+                return False
+
+    def _reserve_biying_quota_global(self, minute_key, minute_limit, calls):
+        if not self._ensure_biying_quota_db():
+            return None, 0
+
+        now_ts = time.time()
+        conn = None
+        with self._biying_usage_lock:
+            try:
+                conn = sqlite3.connect(str(self._biying_quota_db_file), timeout=2.0, isolation_level=None)
+                conn.execute("PRAGMA busy_timeout=2000")
+                conn.execute("BEGIN IMMEDIATE")
+                conn.execute("DELETE FROM biying_minute_quota WHERE minute_key < ?", (minute_key,))
+                row = conn.execute(
+                    "SELECT count FROM biying_minute_quota WHERE minute_key = ?",
+                    (minute_key,),
+                ).fetchone()
+                minute_count = int(row[0]) if row else 0
+                if minute_count + calls > minute_limit:
+                    conn.execute("COMMIT")
+                    return False, minute_count
+                new_count = minute_count + calls
+                if row:
+                    conn.execute(
+                        "UPDATE biying_minute_quota SET count = ?, updated_ts = ? WHERE minute_key = ?",
+                        (new_count, now_ts, minute_key),
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO biying_minute_quota (minute_key, count, updated_ts) VALUES (?, ?, ?)",
+                        (minute_key, new_count, now_ts),
+                    )
+                conn.execute("COMMIT")
+                return True, new_count
+            except Exception as e:
+                try:
+                    if conn is not None:
+                        conn.execute("ROLLBACK")
+                except Exception:
+                    pass
+                if now_ts - self._biying_quota_db_fail_log_ts >= 60:
+                    self.log(f"[!] 必盈全局限流计数失败，降级为进程内限流: {e}")
+                    self._biying_quota_db_fail_log_ts = now_ts
+                return None, 0
+            finally:
+                try:
+                    if conn is not None:
+                        conn.close()
+                except Exception:
+                    pass
+
+    def _reserve_biying_quota_local(self, minute_key, minute_limit, calls):
+        with self._biying_usage_lock:
             if self._biying_minute_state.get("minute") != minute_key:
                 self._biying_minute_state = {"minute": minute_key, "count": 0}
             minute_count = int(self._biying_minute_state.get("count", 0) or 0)
-            minute_limit = max(1, int((cfg or {}).get("minute_limit", 3000) or 3000))
             if minute_count + calls > minute_limit:
-                now_ts = time.time()
-                if now_ts - self._biying_quota_log_ts >= 60:
-                    remain = max(0, minute_limit - minute_count)
-                    self.log(f"[*] 必盈分钟频率保护触发（剩余 {remain}/{minute_limit} 次/分钟），回退到默认数据源")
-                    self._biying_quota_log_ts = now_ts
-                return False
-            self._biying_minute_state["count"] = minute_count + calls
-            return True
+                return False, minute_count
+            new_count = minute_count + calls
+            self._biying_minute_state["count"] = new_count
+            return True, new_count
 
     def _biying_request_json(self, path, params=None, timeout=6):
         cfg = self._get_biying_config()
@@ -513,7 +728,7 @@ class DataProvider:
             dict_values = [v for v in payload.values() if isinstance(v, dict)]
             if dict_values:
                 return dict_values
-            if any(k in payload for k in ("code", "symbol", "stock_code", "close", "latest", "price")):
+            if any(k in payload for k in ("code", "symbol", "stock_code", "close", "latest", "price", "dm", "p")):
                 return [payload]
         return []
 
@@ -737,15 +952,21 @@ class DataProvider:
             current = prev_close
         open_price = self._safe_float(self._first_value(row, ["open", "open_price", "o", "今开"], current))
         high_price = self._safe_float(self._first_value(row, ["high", "h", "最高"], current))
+        low_price = self._safe_float(self._first_value(row, ["low", "l", "最低"], current))
         raw_change_percent = self._first_value(row, ["change_percent", "pct_chg", "change_rate", "pc", "涨跌幅"], None)
         if raw_change_percent is None:
             change_percent = ((current - prev_close) / prev_close) * 100 if prev_close > 0 else 0.0
         else:
             change_percent = self._safe_float(raw_change_percent, 0.0)
-        turnover = self._safe_float(self._first_value(row, ["turnover", "turnover_rate", "tr", "换手", "换手率"], 0))
-        circ_mv = self._safe_float(self._first_value(row, ["circulation_value", "circ_mv", "float_mv", "流通市值"], 0))
+        turnover = self._safe_float(self._first_value(row, ["turnover", "turnover_rate", "tr", "hs", "换手", "换手率"], 0))
+        circ_mv = self._safe_float(self._first_value(row, ["circulation_value", "circ_mv", "float_mv", "lt", "流通市值"], 0))
+        speed = self._safe_float(self._first_value(row, ["speed", "zs", "涨速"], 0))
+        amount = self._safe_float(self._first_value(row, ["amount", "turnover_amount", "a", "cje", "成交额", "成交金额"], 0))
         ask1_vol = self._safe_float(self._first_value(row, ["ask1_vol", "sell1_vol", "卖一量"], 0))
         bid1_price = self._safe_float(self._first_value(row, ["bid1_price", "buy1_price", "买一价"], current))
+        update_time = self._normalize_biying_time(
+            self._first_value(row, ["time", "trade_time", "update_time", "t", "更新时间", "时间"], "")
+        )
 
         is_20cm = clean_code.startswith("30") or clean_code.startswith("68")
         limit_ratio = 1.2 if is_20cm else 1.1
@@ -762,14 +983,18 @@ class DataProvider:
             "current": round(current, 3),
             "change_percent": round(change_percent, 2),
             "high": round(high_price if high_price > 0 else current, 3),
+            "low": round(low_price if low_price > 0 else current, 3),
             "open": round(open_price if open_price > 0 else current, 3),
             "prev_close": round(prev_close, 3),
             "turnover": round(turnover, 2),
+            "speed": round(speed, 2),
+            "amount": amount,
             "limit_up_price": limit_up_price,
             "is_limit_up": is_limit_up,
             "ask1_vol": ask1_vol,
             "bid1_price": bid1_price,
             "circulation_value": circ_mv,
+            "time": update_time,
         }
 
     def _parse_biying_kline_rows(self, payload):
@@ -807,6 +1032,185 @@ class DataProvider:
             return out
         out.sort(key=lambda x: x.get("time", ""))
         return out
+
+    def _normalize_biying_pool_code(self, raw_code):
+        clean_code = "".join(filter(str.isdigit, str(raw_code or "")))
+        if len(clean_code) > 6:
+            clean_code = clean_code[-6:]
+        if len(clean_code) != 6:
+            return ""
+        return clean_code
+
+    def _is_main_or_gem_code(self, raw_code):
+        clean_code = self._normalize_biying_pool_code(raw_code)
+        if not clean_code:
+            return False
+        if clean_code.startswith(("8", "4", "92", "68")):
+            return False
+        return clean_code.startswith(("0", "3", "6"))
+
+    def _format_pool_market_code(self, raw_code):
+        clean_code = self._normalize_biying_pool_code(raw_code)
+        if not clean_code:
+            return ""
+        if clean_code.startswith("6"):
+            return f"sh{clean_code}"
+        if clean_code.startswith(("0", "3")):
+            return f"sz{clean_code}"
+        if clean_code.startswith(("8", "4", "9")):
+            return f"bj{clean_code}"
+        return f"sz{clean_code}"
+
+    def _fetch_biying_pool_rows(self, pool_name, date_str):
+        cfg = self._get_biying_config()
+        if not self._biying_enabled(cfg):
+            return []
+
+        pool_key = str(pool_name or "").strip().lower()
+        path_map = {
+            "limit_up": f"/hslt/ztgc/{date_str}/{cfg['license_key']}",
+            "limit_down": f"/hslt/dtgc/{date_str}/{cfg['license_key']}",
+            "broken": f"/hslt/zbgc/{date_str}/{cfg['license_key']}",
+        }
+        path = path_map.get(pool_key, "")
+        if not path:
+            return []
+
+        payload = self._biying_request_json(path, timeout=8)
+        rows = self._extract_biying_rows(payload)
+        if not rows and isinstance(payload, dict):
+            rows = [payload]
+        return rows if isinstance(rows, list) else []
+
+    def _pool_cache_ttl_sec(self):
+        if self._is_market_trading_session():
+            return max(60, int(self._biying_pool_cache_trading_ttl_sec or 600))
+        return max(300, int(self._biying_pool_cache_non_trading_ttl_sec or 21600))
+
+    def _get_cached_pool_rows(self, pool_key: str, target_date: str, allow_stale: bool = False):
+        if not isinstance(self._biying_pool_cache, dict):
+            return [], 0.0, ""
+        item = self._biying_pool_cache.get(str(pool_key or "").strip().lower(), {})
+        if not isinstance(item, dict):
+            return [], 0.0, ""
+        rows = item.get("rows", [])
+        if not isinstance(rows, list) or (not rows):
+            return [], 0.0, ""
+        cached_date = str(item.get("date", "") or "").strip()
+        cached_ts = self._safe_float(item.get("ts"), 0.0)
+        if cached_date == target_date:
+            return rows, cached_ts, cached_date
+        if allow_stale:
+            return rows, cached_ts, cached_date
+        return [], 0.0, ""
+
+    def _update_pool_cache_rows(self, pool_key: str, date_str: str, rows):
+        key = str(pool_key or "").strip().lower()
+        if not isinstance(rows, list):
+            return
+        if not rows:
+            return
+        if not isinstance(self._biying_pool_cache, dict):
+            self._biying_pool_cache = {}
+        self._biying_pool_cache[key] = {
+            "date": str(date_str or "").strip(),
+            "ts": float(time.time()),
+            "rows": rows,
+        }
+        self._save_biying_pool_cache()
+
+    def _parse_biying_limit_up_pool_df(self, rows):
+        records = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            clean_code = self._normalize_biying_pool_code(self._first_value(row, ["dm", "code", "stock_code"], ""))
+            if not clean_code or (not self._is_main_or_gem_code(clean_code)):
+                continue
+            full_code = self._format_pool_market_code(clean_code)
+            name = str(self._first_value(row, ["mc", "name", "stock_name"], clean_code) or clean_code).strip()
+            first_board_time = str(self._first_value(row, ["fbt", "first_board_time", "time"], "") or "").strip()
+            reason_text = str(self._first_value(row, ["tj", "reason"], "") or "").strip()
+            try:
+                limit_days = int(self._safe_float(self._first_value(row, ["lbc", "limit_up_days"], 1), 1))
+            except Exception:
+                limit_days = 1
+            records.append({
+                "code": full_code,
+                "name": name,
+                "current": round(self._safe_float(self._first_value(row, ["p", "price"], 0), 2), 2),
+                "change_percent": round(self._safe_float(self._first_value(row, ["zf", "change_percent"], 0), 2), 2),
+                "turnover": round(self._safe_float(self._first_value(row, ["hs", "turnover"], 0), 2), 2),
+                "circulation_value": self._safe_float(self._first_value(row, ["lt", "circulation_value"], 0), 0),
+                "amount": self._safe_float(self._first_value(row, ["cje", "amount"], 0), 0),
+                "volume": self._safe_float(self._first_value(row, ["v", "volume"], 0), 0),
+                "time": first_board_time,
+                "concept": reason_text,
+                "associated": reason_text,
+                "reason": f"{limit_days}连板" if limit_days > 1 else "首板",
+                "limit_up_days": max(1, limit_days),
+                "seal_amount": self._safe_float(self._first_value(row, ["zj", "seal_amount"], 0), 0),
+                "broken_count": int(self._safe_float(self._first_value(row, ["zbc", "broken_count"], 0), 0)),
+            })
+        if not records:
+            return pd.DataFrame()
+        return pd.DataFrame(records)
+
+    def _parse_biying_limit_down_pool_df(self, rows):
+        records = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            clean_code = self._normalize_biying_pool_code(self._first_value(row, ["dm", "code", "stock_code"], ""))
+            if not clean_code or (not self._is_main_or_gem_code(clean_code)):
+                continue
+            full_code = self._format_pool_market_code(clean_code)
+            records.append({
+                "code": full_code,
+                "name": str(self._first_value(row, ["mc", "name", "stock_name"], clean_code) or clean_code).strip(),
+                "current": round(self._safe_float(self._first_value(row, ["p", "price"], 0), 2), 2),
+                "change_percent": round(self._safe_float(self._first_value(row, ["zf", "change_percent"], 0), 2), 2),
+                "turnover": round(self._safe_float(self._first_value(row, ["hs", "turnover"], 0), 2), 2),
+                "circulation_value": self._safe_float(self._first_value(row, ["lt", "circulation_value"], 0), 0),
+                "amount": self._safe_float(self._first_value(row, ["cje", "amount"], 0), 0),
+                "time": str(self._first_value(row, ["lbt", "time"], "") or "").strip(),
+                "limit_down_days": int(self._safe_float(self._first_value(row, ["lbc", "limit_down_days"], 1), 1)),
+                "open_board_count": int(self._safe_float(self._first_value(row, ["zbc", "open_board_count"], 0), 0)),
+            })
+        if not records:
+            return pd.DataFrame()
+        return pd.DataFrame(records)
+
+    def _parse_biying_broken_pool_df(self, rows):
+        records = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            clean_code = self._normalize_biying_pool_code(self._first_value(row, ["dm", "code", "stock_code"], ""))
+            if not clean_code or (not self._is_main_or_gem_code(clean_code)):
+                continue
+            full_code = self._format_pool_market_code(clean_code)
+            first_board_time = str(self._first_value(row, ["fbt", "first_board_time", "time"], "") or "").strip()
+            reason_text = str(self._first_value(row, ["tj", "reason"], "") or "").strip()
+            records.append({
+                "code": full_code,
+                "name": str(self._first_value(row, ["mc", "name", "stock_name"], clean_code) or clean_code).strip(),
+                "current": round(self._safe_float(self._first_value(row, ["p", "price"], 0), 2), 2),
+                "change_percent": round(self._safe_float(self._first_value(row, ["zf", "change_percent"], 0), 2), 2),
+                "high": round(self._safe_float(self._first_value(row, ["ztp", "high"], 0), 2), 2),
+                "turnover": round(self._safe_float(self._first_value(row, ["hs", "turnover"], 0), 2), 2),
+                "circulation_value": self._safe_float(self._first_value(row, ["lt", "circulation_value"], 0), 0),
+                "amount": self._safe_float(self._first_value(row, ["cje", "amount"], 0), 0),
+                "time": first_board_time,
+                "concept": reason_text,
+                "associated": reason_text,
+                "amplitude": round(self._safe_float(self._first_value(row, ["zs", "speed"], 0), 2), 2),
+                "limit_up_days": int(self._safe_float(self._first_value(row, ["lbc", "limit_up_days"], 1), 1)),
+                "broken_count": int(self._safe_float(self._first_value(row, ["zbc", "broken_count"], 0), 0)),
+            })
+        if not records:
+            return pd.DataFrame()
+        return pd.DataFrame(records)
 
     def _fetch_stock_info_biying(self, code):
         cfg = self._get_biying_config()
@@ -912,8 +1316,11 @@ class DataProvider:
             if not cached or now_ts - cached.get("ts", 0) >= self._biying_quote_cache_ttl:
                 missing.append(clean_code)
 
+        # Priority: 多股实时接口（单次最多20只），优先批量以减少外网调用次数。
         for i in range(0, len(missing), 20):
             batch = missing[i:i + 20]
+            if not batch:
+                continue
             payload = self._biying_request_json(
                 f"/hsrl/ssjy_more/{cfg['license_key']}",
                 params={"stock_codes": ",".join(batch)},
@@ -929,6 +1336,88 @@ class DataProvider:
                 clean_key = "".join(filter(str.isdigit, self._strip_code(parsed.get("code", ""))))
                 if len(clean_key) >= 6:
                     self._biying_quote_cache[clean_key[-6:]] = {"ts": time.time(), "data": parsed}
+
+        # Secondary: 单股实时接口补齐仍缺失的数据。
+        single_missing = []
+        now_ts = time.time()
+        for clean_code in requested_clean_codes:
+            cached = self._biying_quote_cache.get(clean_code)
+            if not cached or now_ts - cached.get("ts", 0) >= self._biying_quote_cache_ttl:
+                single_missing.append(clean_code)
+
+        for clean_code in single_missing:
+            payload = self._biying_request_json(
+                f"/hsrl/ssjy/{clean_code}/{cfg['license_key']}",
+                timeout=6,
+            )
+            rows = self._extract_biying_rows(payload)
+            if not rows and isinstance(payload, dict):
+                rows = [payload]
+            parsed = None
+            for row in rows:
+                parsed = self._parse_biying_quote_row(row, default_clean_code=clean_code)
+                if parsed:
+                    break
+            if parsed:
+                self._biying_quote_cache[clean_code] = {"ts": time.time(), "data": parsed}
+
+        # Supplement: 全市场快照兜底（进一步减少空白行情）
+        fallback_missing = []
+        now_ts = time.time()
+        for clean_code in requested_clean_codes:
+            cached = self._biying_quote_cache.get(clean_code)
+            if not cached or now_ts - cached.get("ts", 0) >= self._biying_quote_cache_ttl:
+                fallback_missing.append(clean_code)
+
+        if fallback_missing:
+            try:
+                market_df = self.get_cached_all_market_data()
+                if market_df is None or market_df.empty:
+                    market_df = self._fetch_all_market_data_biying_all(force_refresh=False)
+                if market_df is not None and not market_df.empty:
+                    market_map = {}
+                    for _, row in market_df.iterrows():
+                        raw_code = str(row.get("code", "")).strip()
+                        clean_key = "".join(filter(str.isdigit, self._strip_code(raw_code)))
+                        if len(clean_key) >= 6:
+                            market_map[clean_key[-6:]] = row
+
+                    for clean_code in fallback_missing:
+                        row = market_map.get(clean_code)
+                        if row is None:
+                            continue
+
+                        current = self._safe_float(row.get("current"), 0)
+                        prev_close = self._safe_float(row.get("prev_close"), 0)
+                        change_percent = self._safe_float(row.get("change_percent"), 0)
+                        if prev_close <= 0 and current > 0:
+                            prev_close = current / (1 + (change_percent / 100.0)) if abs(change_percent) < 99 else current
+
+                        is_20cm = clean_code.startswith("30") or clean_code.startswith("68")
+                        limit_ratio = 1.2 if is_20cm else 1.1
+                        limit_up_price = round(prev_close * limit_ratio, 2) if prev_close > 0 else 0.0
+                        quote = {
+                            "code": self._format_code(clean_code),
+                            "name": str(row.get("name") or self._biying_stock_list_map.get(clean_code, clean_code)),
+                            "current": round(current, 3),
+                            "change_percent": round(change_percent, 2),
+                            "high": self._safe_float(row.get("high"), current),
+                            "low": self._safe_float(row.get("low"), current),
+                            "open": self._safe_float(row.get("open"), current),
+                            "prev_close": round(prev_close, 3),
+                            "turnover": round(self._safe_float(row.get("turnover"), 0), 2),
+                            "speed": round(self._safe_float(row.get("speed"), 0), 2),
+                            "amount": self._safe_float(row.get("amount"), 0),
+                            "limit_up_price": limit_up_price,
+                            "is_limit_up": bool(limit_up_price > 0 and current >= limit_up_price - 0.01),
+                            "ask1_vol": 0.0,
+                            "bid1_price": current,
+                            "circulation_value": self._safe_float(row.get("circ_mv"), 0),
+                            "time": str(row.get("time", "") or ""),
+                        }
+                        self._biying_quote_cache[clean_code] = {"ts": time.time(), "data": quote}
+            except Exception:
+                pass
 
         results = []
         for clean_code in requested_clean_codes:
@@ -996,7 +1485,7 @@ class DataProvider:
         self._biying_intraday_cache[cache_key] = {"ts": now_ts, "data": out_df.copy()}
         return out_df
 
-    def _fetch_all_market_data_biying_all(self):
+    def _fetch_all_market_data_biying_all(self, force_refresh: bool = False):
         cfg = self._get_biying_config()
         if not self._biying_enabled(cfg):
             return None
@@ -1008,6 +1497,8 @@ class DataProvider:
             return None
 
         if (
+            (not force_refresh)
+            and
             self._biying_all_market_cache_df is not None
             and now_ts - self._biying_all_market_cache_ts < self._biying_all_market_min_interval_sec
         ):
@@ -1018,18 +1509,35 @@ class DataProvider:
                 return self._biying_all_market_cache_df.copy()
             return None
 
-        url = f"https://all.biyingapi.com/hsrl/ssjy/all/{cfg['license_key']}"
-        try:
-            with requests.Session() as session:
-                session.trust_env = False
-                resp = self._call_provider("biying", lambda: session.get(url, timeout=8))
-            if resp.status_code != 200:
-                raise RuntimeError(f"status={resp.status_code}")
-            payload = resp.json()
-        except Exception as e:
+        payload = None
+        fetch_error = None
+        api_paths = (
+            f"/hsrl/real/all/{cfg['license_key']}",
+            f"/hsrl/ssjy/all/{cfg['license_key']}",
+        )
+        for api_path in api_paths:
+            url = f"https://all.biyingapi.com{api_path}"
+            try:
+                with requests.Session() as session:
+                    session.trust_env = False
+                    resp = self._call_provider("biying", lambda: session.get(url, timeout=8))
+                if resp.status_code != 200:
+                    raise RuntimeError(f"status={resp.status_code}")
+                payload = resp.json()
+                rows = self._extract_biying_rows(payload)
+                if not rows and isinstance(payload, dict):
+                    rows = [payload]
+                if rows:
+                    break
+            except Exception as e:
+                fetch_error = e
+                payload = None
+                continue
+
+        if payload is None:
             self._biying_all_market_next_retry_ts = now_ts + self._biying_all_market_fail_cooldown_sec
             if now_ts - self._biying_all_market_last_error_log_ts >= 60:
-                self.log(f"[!] 必盈全市场接口抓取失败: {e}")
+                self.log(f"[!] 必盈全市场接口抓取失败: {fetch_error}")
                 self._biying_all_market_last_error_log_ts = now_ts
             if self._biying_all_market_cache_df is not None:
                 return self._biying_all_market_cache_df.copy()
@@ -1066,14 +1574,15 @@ class DataProvider:
                 "name": str(parsed.get("name") or clean_code),
                 "current": current,
                 "change_percent": change_percent,
-                "speed": 0.0,
+                "speed": self._safe_float(parsed.get("speed"), 0),
                 "turnover": self._safe_float(parsed.get("turnover"), 0),
                 "circ_mv": self._safe_float(parsed.get("circulation_value"), 0),
                 "prev_close": prev_close,
                 "high": self._safe_float(parsed.get("high"), current),
                 "low": self._safe_float(parsed.get("low"), current),
                 "open": self._safe_float(parsed.get("open"), current),
-                "amount": self._safe_float(self._first_value(row, ["amount", "turnover_amount", "a", "成交额"], 0), 0),
+                "amount": self._safe_float(parsed.get("amount"), 0),
+                "time": str(parsed.get("time", "") or ""),
             })
 
         if not records:
@@ -1086,7 +1595,71 @@ class DataProvider:
         self._biying_all_market_cache_df = out_df.copy()
         self._biying_all_market_cache_ts = now_ts
         self._biying_all_market_next_retry_ts = 0.0
+        self._last_market_df = out_df.copy()
+        self._last_market_ts = now_ts
+        self._save_biying_all_market_cache()
         return out_df
+
+    def get_cached_all_market_data(self):
+        if self._last_market_df is not None and not self._last_market_df.empty:
+            return self._last_market_df.copy()
+        if self._biying_all_market_cache_df is not None and not self._biying_all_market_cache_df.empty:
+            return self._biying_all_market_cache_df.copy()
+        return None
+
+    def maybe_refresh_biying_base_snapshot(self, force: bool = False):
+        cfg = self._get_biying_config()
+        if not self._biying_enabled(cfg):
+            return False
+
+        now_ts = time.time()
+        if (not force) and (now_ts - self._biying_base_snapshot_last_check_ts < self._biying_base_snapshot_min_check_sec):
+            return False
+
+        with self._biying_base_snapshot_lock:
+            now_ts = time.time()
+            if (not force) and (now_ts - self._biying_base_snapshot_last_check_ts < self._biying_base_snapshot_min_check_sec):
+                return False
+            self._biying_base_snapshot_last_check_ts = now_ts
+
+            now = datetime.now(ZoneInfo("Asia/Shanghai"))
+            today = now.strftime("%Y-%m-%d")
+            has_cache = self.get_cached_all_market_data() is not None
+            slot = ""
+
+            if force:
+                slot = "force"
+            elif not has_cache:
+                slot = "startup"
+            elif now.weekday() < 5:
+                now_t = now.time()
+                if dt_time(9, 0) <= now_t < dt_time(9, 30):
+                    slot = "preopen"
+                elif now_t >= dt_time(15, 5):
+                    slot = "postclose"
+                else:
+                    return False
+            else:
+                return False
+
+            if slot in {"preopen", "postclose"}:
+                done_day = str((self._biying_base_refresh_marks or {}).get(slot, "") or "").strip()
+                if done_day == today:
+                    return False
+
+            df = self._fetch_all_market_data_biying_all(force_refresh=True)
+            if df is None or df.empty:
+                return False
+
+            self._last_market_df = df.copy()
+            self._last_market_ts = time.time()
+            self._mark_market_success()
+
+            if slot in {"preopen", "postclose"}:
+                self._biying_base_refresh_marks[slot] = today
+                self._save_biying_base_refresh_state()
+
+            return True
 
     def fetch_day_kline_history(self, code, days=365):
         cfg = self._get_biying_config()
@@ -1508,21 +2081,115 @@ class DataProvider:
                     os.environ["HTTPS_PROXY"] = old_https
 
     def fetch_limit_up_pool(self):
-        """Fetch Limit Up Pool"""
+        """Fetch limit-up pool (Biying preferred, AKShare fallback)."""
+        date_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+        now_ts = time.time()
+        trading = self._is_market_trading_session()
+        ttl = self._pool_cache_ttl_sec()
+
+        cached_rows, cached_ts, _ = self._get_cached_pool_rows("limit_up", date_str, allow_stale=not trading)
+        if cached_rows and (now_ts - cached_ts < ttl):
+            cached_df = self._parse_biying_limit_up_pool_df(cached_rows)
+            if cached_df is not None and not cached_df.empty:
+                return cached_df
+        if (not trading) and cached_rows:
+            cached_df = self._parse_biying_limit_up_pool_df(cached_rows)
+            if cached_df is not None and not cached_df.empty:
+                return cached_df
+
         try:
-            date_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
-            df = self._call_provider("akshare", lambda: ak.stock_zt_pool_em(date=date_str))
-            return df
+            rows = self._fetch_biying_pool_rows("limit_up", date_str)
+            df = self._parse_biying_limit_up_pool_df(rows)
+            if df is not None and not df.empty:
+                self._update_pool_cache_rows("limit_up", date_str, rows)
+                return df
+        except Exception as e:
+            self.log(f"[!] 必盈涨停池抓取失败: {e}")
+
+        if cached_rows:
+            cached_df = self._parse_biying_limit_up_pool_df(cached_rows)
+            if cached_df is not None and not cached_df.empty:
+                return cached_df
+
+        if not trading:
+            return pd.DataFrame()
+
+        try:
+            date_compact = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+            return self._call_provider("akshare", lambda: ak.stock_zt_pool_em(date=date_compact))
         except Exception as e:
             self.log(f"[!] 涨停池抓取失败: {e}")
             return None
 
-    def fetch_broken_limit_pool(self):
-        """Fetch Broken Limit Pool"""
+    def fetch_limit_down_pool(self):
+        """Fetch limit-down pool (Biying only, fallback empty)."""
+        date_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+        now_ts = time.time()
+        trading = self._is_market_trading_session()
+        ttl = self._pool_cache_ttl_sec()
+
+        cached_rows, cached_ts, _ = self._get_cached_pool_rows("limit_down", date_str, allow_stale=not trading)
+        if cached_rows and (now_ts - cached_ts < ttl):
+            cached_df = self._parse_biying_limit_down_pool_df(cached_rows)
+            if cached_df is not None and not cached_df.empty:
+                return cached_df
+        if (not trading) and cached_rows:
+            cached_df = self._parse_biying_limit_down_pool_df(cached_rows)
+            if cached_df is not None and not cached_df.empty:
+                return cached_df
+
         try:
-            date_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
-            df = self._call_provider("akshare", lambda: ak.stock_zt_pool_zbgc_em(date=date_str))
-            return df
+            rows = self._fetch_biying_pool_rows("limit_down", date_str)
+            df = self._parse_biying_limit_down_pool_df(rows)
+            if df is not None and not df.empty:
+                self._update_pool_cache_rows("limit_down", date_str, rows)
+                return df
+        except Exception as e:
+            self.log(f"[!] 必盈跌停池抓取失败: {e}")
+
+        if cached_rows:
+            cached_df = self._parse_biying_limit_down_pool_df(cached_rows)
+            if cached_df is not None and not cached_df.empty:
+                return cached_df
+        return pd.DataFrame()
+
+    def fetch_broken_limit_pool(self):
+        """Fetch broken-limit pool (Biying preferred, AKShare fallback)."""
+        date_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+        now_ts = time.time()
+        trading = self._is_market_trading_session()
+        ttl = self._pool_cache_ttl_sec()
+
+        cached_rows, cached_ts, _ = self._get_cached_pool_rows("broken", date_str, allow_stale=not trading)
+        if cached_rows and (now_ts - cached_ts < ttl):
+            cached_df = self._parse_biying_broken_pool_df(cached_rows)
+            if cached_df is not None and not cached_df.empty:
+                return cached_df
+        if (not trading) and cached_rows:
+            cached_df = self._parse_biying_broken_pool_df(cached_rows)
+            if cached_df is not None and not cached_df.empty:
+                return cached_df
+
+        try:
+            rows = self._fetch_biying_pool_rows("broken", date_str)
+            df = self._parse_biying_broken_pool_df(rows)
+            if df is not None and not df.empty:
+                self._update_pool_cache_rows("broken", date_str, rows)
+                return df
+        except Exception as e:
+            self.log(f"[!] 必盈炸板池抓取失败: {e}")
+
+        if cached_rows:
+            cached_df = self._parse_biying_broken_pool_df(cached_rows)
+            if cached_df is not None and not cached_df.empty:
+                return cached_df
+
+        if not trading:
+            return pd.DataFrame()
+
+        try:
+            date_compact = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+            return self._call_provider("akshare", lambda: ak.stock_zt_pool_zbgc_em(date=date_compact))
         except Exception as e:
             self.log(f"[!] 炸板池抓取失败: {e}")
             return None
@@ -1882,21 +2549,59 @@ class DataProvider:
                 if self._biying_enabled(biying_cfg):
                     stock_map = self._fetch_stock_list_biying()
                     if stock_map:
+                        market_df = self.get_cached_all_market_data()
+                        if market_df is None or market_df.empty:
+                            market_df = self._fetch_all_market_data_biying_all()
+
+                        market_price_map = {}
+                        market_circ_map = {}
+                        if market_df is not None and not market_df.empty:
+                            for _, mrow in market_df.iterrows():
+                                raw_code = str(mrow.get("code", "")).strip()
+                                clean_market_code = "".join(filter(str.isdigit, self._strip_code(raw_code)))
+                                if len(clean_market_code) >= 6:
+                                    clean_market_code = clean_market_code[-6:]
+                                if len(clean_market_code) != 6:
+                                    continue
+                                price = self._safe_float(mrow.get("current"), 0)
+                                circ_mv = self._safe_float(
+                                    mrow.get(
+                                        "circ_mv",
+                                        mrow.get(
+                                            "circulation_value",
+                                            mrow.get("lt", mrow.get("float_mv", mrow.get("流通市值", 0))),
+                                        ),
+                                    ),
+                                    0,
+                                )
+                                if price > 0:
+                                    market_price_map[clean_market_code] = price
+                                if circ_mv > 0:
+                                    market_circ_map[clean_market_code] = circ_mv
+
                         valid_rows = []
+                        valid_circ_count = 0
                         for clean_code, name in stock_map.items():
                             if not self._is_target_stock(clean_code):
                                 continue
+                            circ_mv = self._safe_float(market_circ_map.get(clean_code, 0), 0)
+                            price = self._safe_float(market_price_map.get(clean_code, 0), 0)
+                            circ_shares = (circ_mv / price) if (circ_mv > 0 and price > 0) else 0.0
+                            if circ_mv > 0:
+                                valid_circ_count += 1
                             valid_rows.append({
                                 "code": self._format_code(clean_code),
                                 "name": str(name or clean_code),
-                                "circ_mv": 0.0,
-                                "circ_shares": 0.0,
+                                "circ_mv": circ_mv,
+                                "circ_shares": circ_shares,
                             })
-                        if valid_rows:
+                        if valid_rows and valid_circ_count >= 200:
                             self._base_info_df = pd.DataFrame(valid_rows)
                             self._base_info_ts = time.time()
                             self._mark_base_info_success()
-                            self.log(f"[*] 已通过必盈股票列表更新基础信息：{len(valid_rows)} 只。")
+                            self.log(
+                                f"[*] 已通过必盈股票列表+全市场快照更新基础信息：{len(valid_rows)} 只（流通值有效 {valid_circ_count} 只）。"
+                            )
                             return
 
                 self.log("[*] 正在从 AKShare 更新股票基础信息（用于流通市值与换手率计算）...")

@@ -52,6 +52,7 @@ DAY_KLINE_CACHE_DIR.mkdir(exist_ok=True)
 # Centralized cache policy:
 # user-facing APIs read from cache only; background tasks refresh network data.
 REALTIME_CACHE_INTERVAL_SEC = 20
+BIYING_BASE_SNAPSHOT_CHECK_INTERVAL_SEC = 300
 KLINE_BG_SCAN_INTERVAL_SEC = 60
 KLINE_MIN_REFRESH_SEC = 600
 DAY_KLINE_REFRESH_SEC = 3600
@@ -1247,31 +1248,37 @@ def _get_market_circ_map_cache() -> dict:
         return copy.deepcopy(market_circ_map_cache)
 
 
-def refresh_market_circ_map_cache():
+def _build_market_circ_map_from_df(market_df) -> dict:
+    market_map = {}
+    if market_df is None or market_df.empty:
+        return market_map
+    for _, row in market_df.iterrows():
+        raw_code = str(row.get("code", "")).strip().lower()
+        if not raw_code:
+            continue
+        circ_mv = _safe_float_number(row.get("circ_mv", row.get("circulation_value", 0)))
+        norm_code = _normalize_market_code(raw_code)
+        digits = "".join(filter(str.isdigit, norm_code or raw_code))
+        market_map[raw_code] = circ_mv
+        if norm_code:
+            market_map[norm_code] = circ_mv
+        if len(digits) == 6:
+            market_map[digits] = circ_mv
+    return market_map
+
+
+def refresh_market_circ_map_cache(allow_network: bool = True):
     market_map = {}
     try:
-        market_df = data_provider.fetch_all_market_data()
-        if market_df is None or market_df.empty:
-            return
-
-        for _, row in market_df.iterrows():
-            raw_code = str(row.get("code", "")).strip().lower()
-            if not raw_code:
-                continue
-            circ_mv = _safe_float_number(row.get("circ_mv", 0))
-            norm_code = _normalize_market_code(raw_code)
-            digits = "".join(filter(str.isdigit, norm_code or raw_code))
-            market_map[raw_code] = circ_mv
-            if norm_code:
-                market_map[norm_code] = circ_mv
-            if len(digits) == 6:
-                market_map[digits] = circ_mv
+        market_df = data_provider.fetch_all_market_data() if allow_network else data_provider.get_cached_all_market_data()
+        market_map = _build_market_circ_map_from_df(market_df)
     except Exception:
         return
-    _set_market_circ_map_cache(market_map)
+    if market_map:
+        _set_market_circ_map_cache(market_map)
 
 
-def ensure_market_circ_map_cache(max_age_sec: int = 600):
+def ensure_market_circ_map_cache(max_age_sec: int = 600, allow_network: bool = True):
     now_ts = time.time()
     with cache_lock:
         has_rows = bool(market_circ_map_cache)
@@ -1286,7 +1293,7 @@ def ensure_market_circ_map_cache(max_age_sec: int = 600):
             cache_age = (now_ts - market_circ_map_cache_ts) if market_circ_map_cache_ts > 0 else float("inf")
         if has_rows and cache_age <= max_age_sec:
             return
-        refresh_market_circ_map_cache()
+        refresh_market_circ_map_cache(allow_network=allow_network)
 
 
 def _normalize_indices_rows(rows):
@@ -1763,6 +1770,17 @@ async def realtime_cache_updater_task():
         except Exception as e:
             print(f"实时缓存更新任务错误: {e}")
         await asyncio.sleep(REALTIME_CACHE_INTERVAL_SEC)
+
+
+async def biying_base_snapshot_task():
+    while True:
+        try:
+            refreshed = await asyncio.to_thread(data_provider.maybe_refresh_biying_base_snapshot, False)
+            if refreshed:
+                await asyncio.to_thread(refresh_market_circ_map_cache, False)
+        except Exception as e:
+            print(f"biying base snapshot task error: {e}")
+        await asyncio.sleep(BIYING_BASE_SNAPSHOT_CHECK_INTERVAL_SEC)
 
 
 async def kline_cache_updater_task():
@@ -2672,6 +2690,14 @@ async def startup_event():
         print("启动：当前非交易时段，跳过基础信息更新。")
         add_runtime_log("启动：当前非交易时段，跳过基础信息更新。")
 
+    # Base snapshot policy:
+    # startup backfill when cache is missing; pre-open/post-close handled by low-frequency task.
+    try:
+        await asyncio.to_thread(data_provider.maybe_refresh_biying_base_snapshot, False)
+        await asyncio.to_thread(refresh_market_circ_map_cache, False)
+    except Exception:
+        pass
+
     # Warm core caches once at startup.
     await asyncio.to_thread(refresh_stock_quotes_cache)
     await asyncio.to_thread(refresh_indices_cache)
@@ -2689,6 +2715,7 @@ async def startup_event():
     asyncio.create_task(scheduler_loop())
     # Start centralized cache updater (all user APIs read these caches only)
     asyncio.create_task(realtime_cache_updater_task())
+    asyncio.create_task(biying_base_snapshot_task())
     asyncio.create_task(kline_cache_updater_task())
     # Start market pool updater
     asyncio.create_task(update_market_pools_task())
@@ -3282,7 +3309,7 @@ def refresh_stock_quotes_cache():
                 intraday_map[norm_code] = s
         market_map = {}
         try:
-            ensure_market_circ_map_cache()
+            ensure_market_circ_map_cache(allow_network=False)
             market_map = _get_market_circ_map_cache()
         except Exception:
             market_map = {}
@@ -3689,7 +3716,7 @@ def _hydrate_analysis_stock_data(stock_data: dict, raw_code: str) -> None:
 
     if _safe_float_number(stock_data.get("circulation_value")) <= 0:
         try:
-            ensure_market_circ_map_cache()
+            ensure_market_circ_map_cache(allow_network=False)
             market_map = _get_market_circ_map_cache() or {}
             circ_mv = _safe_float_number(
                 market_map.get(req_norm, 0)
@@ -4099,8 +4126,25 @@ async def get_stock_kline(code: str, type: str = "1min", user: models.User = Dep
                 False,
             )
             today_rows = _normalize_intraday_kline_rows(today_df)
-            if today_rows:
+            today_complete = False
+            try:
+                today_complete = bool(lhb_manager._is_intraday_cache_complete(today_df, today_str, True))
+            except Exception:
+                today_complete = False
+            if today_rows and today_complete:
                 return {"status": "success", "data": today_rows}
+
+            # Cache exists but incomplete (e.g. half-day): force one network补拉.
+            if today_rows and not today_complete:
+                repaired_df = lhb_manager.get_kline_1min(
+                    clean_code,
+                    today_str,
+                    KLINE_MIN_REFRESH_SEC,
+                    True,
+                )
+                repaired_rows = _normalize_intraday_kline_rows(repaired_df)
+                if repaired_rows:
+                    return {"status": "success", "data": repaired_rows}
 
             # 个股分时图兜底：history 主体 + latest(lt<=5) 增量，再回退新浪。
             if allow_non_trading_probe and probe_dates:

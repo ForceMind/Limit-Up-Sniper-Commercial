@@ -1154,7 +1154,7 @@
                     </div>
 
                     <div class="bg-white rounded shadow overflow-x-auto">
-                        <table class="w-full min-w-[1500px] text-left table-auto">
+                        <table class="w-full min-w-[1680px] text-left table-auto">
                             <thead class="bg-gray-50 border-b">
                                 <tr>
                                     <th class="p-3 font-semibold text-gray-600 w-16">ID</th>
@@ -1163,9 +1163,10 @@
                                     <th class="p-3 font-semibold text-gray-600 w-28">账号类型</th>
                                     <th class="p-3 font-semibold text-gray-600 w-24">会员版本</th>
                                     <th class="p-3 font-semibold text-gray-600 w-36">状态</th>
-                                    <th class="p-3 font-semibold text-gray-600 w-56">过期时间</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-52">过期时间</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-52">最后在线</th>
                                     <th class="p-3 font-semibold text-gray-600 w-64">用量 (已用/剩余/总额)</th>
-                                    <th class="p-3 font-semibold text-gray-600 w-[380px]">操作</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-[440px]">操作</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y text-sm">
@@ -1194,8 +1195,16 @@
                                         <span v-else-if="u.is_expired" class="bg-amber-100 text-amber-700 px-2 py-1 rounded-full text-xs">过期</span>
                                         <span v-else class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs">正常</span>
                                         <div v-if="u.is_banned && u.banned_reason" class="text-[11px] text-red-500 mt-1">{{ u.banned_reason }}</div>
+                                        <div v-if="u.is_registered" class="text-[11px] mt-1" :class="u.trial_applied ? 'text-emerald-600' : 'text-amber-600'">
+                                            {{ u.trial_applied ? '3天体验：已申请' : '3天体验：未申请' }}
+                                        </div>
                                     </td>
                                     <td class="p-3 text-xs whitespace-nowrap">{{ u.expires_at ? formatShanghaiTime(u.expires_at) : '永久' }}</td>
+                                    <td class="p-3 text-xs whitespace-nowrap">
+                                        <span v-if="u.last_online_at">{{ formatShanghaiTime(u.last_online_at) }}</span>
+                                        <span v-else class="text-gray-400">-</span>
+                                        <div v-if="u.is_online_recent" class="text-[11px] text-emerald-600">在线</div>
+                                    </td>
                                     <td class="p-3 text-xs font-mono">
                                         <div>AI: {{ u.daily_ai_count }} / {{ u.remaining_ai }} / {{ u.quota_ai }}</div>
                                         <div>突击: {{ u.daily_raid_count }} / {{ u.remaining_raid }} / {{ u.quota_raid }}</div>
@@ -1209,6 +1218,7 @@
                                             <button @click="toggleUserBan(u)" :disabled="!u.is_registered" class="text-xs border rounded px-2 py-1 disabled:opacity-40" :class="u.is_banned ? 'text-emerald-600 border-emerald-500 hover:text-emerald-700' : 'text-red-600 border-red-500 hover:text-red-700'">
                                                 {{ u.is_banned ? '解封' : '封禁' }}
                                             </button>
+                                            <button v-if="!u.is_registered" @click="deleteGuestUser(u)" class="text-xs border border-rose-500 text-rose-600 rounded px-2 py-1 hover:text-rose-700">删除游客</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -2039,7 +2049,7 @@
                         }
                     },
                     users: [],
-                    userFilter: 'all',
+                    userFilter: 'registered',
                     orders: [],
                     orderStats: {},
                     msgModal: { show: false, msg: '', type: 'info' },
@@ -3403,12 +3413,12 @@
 
                 // Users
                 setUserFilter(mode) {
-                    this.userFilter = mode || 'all';
+                    this.userFilter = mode || 'registered';
                     this.fetchUsers();
                 },
                 async fetchUsers() {
                     try {
-                        const qs = new URLSearchParams({ account_type: this.userFilter || 'all' }).toString();
+                        const qs = new URLSearchParams({ account_type: this.userFilter || 'registered' }).toString();
                         const res = await fetch(API_BASE_URL + `/api/admin/users?${qs}`, { headers: this.getHeaders() });
                         if (res.status === 403) { this.clearAuth(true); return; }
                         if (!res.ok) throw new Error(`Users Load Failed: ${res.status}`);
@@ -3840,6 +3850,28 @@
                         this.showMsg(`已重置 ${data.username} 密码: ${data.new_password}`, 'success');
                     } catch (e) {
                         this.showMsg(e.message || '重置密码失败', 'error');
+                    }
+                },
+                async deleteGuestUser(user) {
+                    if (!user || !user.id || user.is_registered) {
+                        this.showMsg('仅支持删除游客账号', 'info');
+                        return;
+                    }
+                    const confirmed = await this.showConfirm(`确认删除游客账号 ${user.device_id || user.id}？`);
+                    if (!confirmed) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/users/delete', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({ user_id: user.id })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '删除失败');
+                        this.showMsg('游客账号已删除', 'success');
+                        this.fetchUsers();
+                    } catch (e) {
+                        this.showMsg(e.message || '删除游客账号失败', 'error');
                     }
                 },
                 async toggleUserBan(user) {
