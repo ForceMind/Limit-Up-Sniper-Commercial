@@ -1594,7 +1594,7 @@
         </div>
 
         <!-- Custom Message Modal -->
-        <div v-if="msgModal.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 pointer-events-none">
+        <div v-if="msgModal.show" class="fixed inset-0 z-[200] flex items-center justify-center p-4 pointer-events-none">
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl p-4 min-w-[200px] max-w-sm pointer-events-auto border border-gray-100 dark:border-gray-700 transform transition-all animate-[fade_0.2s_ease-out]">
                 <div class="flex items-center gap-3">
                     <div :class="{
@@ -2207,6 +2207,11 @@
                         if (!isOpen || !this.hasDataAccess) return;
                         this.fetchConfig(true);
                         this.fetchLHBConfig();
+                    },
+                    isRegisteredAccount(newVal) {
+                        if (newVal) {
+                            this.showGuestReminderModal = false;
+                        }
                     },
                 },
                 beforeUnmount() {
@@ -2866,7 +2871,7 @@
                         this.localFavoriteQuotes = [];
                     }
 
-                    if (!localStorage.getItem('guest_reminder_shown')) {
+                    if (!this.isRegisteredAccount && !this.showLoginModal && !localStorage.getItem('guest_reminder_shown')) {
                         this.showGuestReminderModal = true;
                         localStorage.setItem('guest_reminder_shown', '1');
                     }
@@ -2908,6 +2913,7 @@
                         localStorage.setItem('sniper_username', data.username || username);
                         this.deviceId = data.token;
                         this.isRegisteredAccount = true;
+                        this.showGuestReminderModal = false;
                         this.connectWebSocket();
                         this.displayUsername = data.username || username;
                         this.accountCanApplyTrial = !!data.can_apply_trial;

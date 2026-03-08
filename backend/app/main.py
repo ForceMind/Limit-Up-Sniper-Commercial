@@ -62,6 +62,8 @@ KLINE_ERROR_LOG_MAX_PER_WINDOW = 8
 KLINE_MIN_CACHE_EXPIRE_DAYS = 7
 KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 MARKET_SENTIMENT_PROBE_COOLDOWN_SEC = 900
+KLINE_NON_TRADING_PROBE_DATES = 8
+KLINE_NON_TRADING_LOOKBACK_DAYS = 90
 
 # Initialize DB Tables
 database.Base.metadata.create_all(bind=database.engine)
@@ -1577,6 +1579,147 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
         else:
             kline_error_suppressed += 1
         lhb_manager.register_external_kline_failure(e)
+
+
+def _pick_row_value(row: dict, candidate_keys: List[str], fallback_index: Optional[int] = None):
+    if not isinstance(row, dict):
+        return None
+    for key in candidate_keys:
+        if key in row:
+            value = row.get(key)
+            if value is not None and value != "":
+                return value
+    if fallback_index is not None:
+        values = list(row.values())
+        if 0 <= fallback_index < len(values):
+            return values[fallback_index]
+    return None
+
+
+def _safe_float_or_none(value):
+    try:
+        num = float(value)
+        if num != num:
+            return None
+        return num
+    except Exception:
+        return None
+
+
+def _normalize_kline_time_text(raw_value) -> str:
+    text = str(raw_value or "").strip()
+    if not text:
+        return ""
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) >= 14:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}:{digits[12:14]}"
+    if len(digits) == 12:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}:00"
+    if len(digits) == 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return text
+
+
+def _normalize_intraday_kline_rows(raw_rows) -> List[Dict[str, Any]]:
+    if raw_rows is None:
+        return []
+
+    rows = raw_rows
+    if hasattr(raw_rows, "to_dict"):
+        try:
+            rows = raw_rows.to_dict("records")
+        except Exception:
+            rows = []
+    if not isinstance(rows, list):
+        return []
+
+    normalized = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        date_raw = _pick_row_value(row, ["date", "time", "day", "datetime", "时间"], 0)
+        date_text = _normalize_kline_time_text(date_raw)
+        if not date_text:
+            continue
+
+        close_value = _safe_float_or_none(_pick_row_value(row, ["close", "收盘"], 2))
+        if close_value is None:
+            continue
+        open_value = _safe_float_or_none(_pick_row_value(row, ["open", "开盘"], 1))
+        high_value = _safe_float_or_none(_pick_row_value(row, ["high", "最高"], 3))
+        low_value = _safe_float_or_none(_pick_row_value(row, ["low", "最低"], 4))
+        volume_value = _safe_float_or_none(_pick_row_value(row, ["volume", "成交量"], 5))
+
+        if open_value is None:
+            open_value = close_value
+        if high_value is None:
+            high_value = max(open_value, close_value)
+        if low_value is None:
+            low_value = min(open_value, close_value)
+        if volume_value is None:
+            volume_value = 0.0
+
+        high_value = max(high_value, open_value, close_value)
+        low_value = min(low_value, open_value, close_value)
+
+        normalized.append({
+            "date": date_text,
+            "open": float(open_value),
+            "close": float(close_value),
+            "high": float(high_value),
+            "low": float(low_value),
+            "volume": float(volume_value),
+        })
+
+    normalized.sort(key=lambda x: str(x.get("date", "")))
+    return normalized
+
+
+def _probe_trade_dates_for_intraday(max_results: int = KLINE_NON_TRADING_PROBE_DATES) -> List[str]:
+    end_date = datetime.now().date()
+    lookback = max(14, int(KLINE_NON_TRADING_LOOKBACK_DAYS))
+    start_date = end_date - timedelta(days=lookback)
+
+    dates = []
+    try:
+        dates = lhb_manager.get_trade_dates_between(
+            start_date.strftime("%Y-%m-%d"),
+            end_date.strftime("%Y-%m-%d"),
+        ) or []
+    except Exception:
+        dates = []
+
+    normalized = []
+    seen = set()
+    for item in dates:
+        text = str(item or "").strip()[:10]
+        if not text:
+            continue
+        try:
+            dt = datetime.strptime(text, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if dt >= end_date:
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+
+    if not normalized:
+        for offset in range(1, lookback + 1):
+            dt = end_date - timedelta(days=offset)
+            if dt.weekday() >= 5:
+                continue
+            normalized.append(dt.strftime("%Y-%m-%d"))
+            if len(normalized) >= max_results:
+                break
+        return normalized
+
+    recent = normalized[-max_results:]
+    recent.reverse()
+    return recent
 
 
 def _collect_kline_target_codes(max_count=180):
@@ -3947,47 +4090,80 @@ async def get_stock_kline(code: str, type: str = "1min", user: models.User = Dep
         clean_code = "".join(filter(str.isdigit, code))
         if type == "1min":
             today_str = datetime.now().strftime('%Y-%m-%d')
+            allow_non_trading_probe = not is_market_open_day()
+            probe_dates = _probe_trade_dates_for_intraday() if allow_non_trading_probe else []
             today_df = lhb_manager.get_kline_1min(
                 clean_code,
                 today_str,
                 KLINE_MIN_REFRESH_SEC,
                 False,
             )
-            if today_df is not None and not today_df.empty:
-                return {"status": "success", "data": today_df.to_dict('records')}
+            today_rows = _normalize_intraday_kline_rows(today_df)
+            if today_rows:
+                return {"status": "success", "data": today_rows}
 
             # 个股分时图兜底：history 主体 + latest(lt<=5) 增量，再回退新浪。
+            if allow_non_trading_probe and probe_dates:
+                network_probe_budget = min(4, len(probe_dates))
+                for probe_date in probe_dates:
+                    allow_network_probe = network_probe_budget > 0
+                    if allow_network_probe:
+                        network_probe_budget -= 1
+                    probe_df = lhb_manager.get_kline_1min(
+                        clean_code,
+                        probe_date,
+                        KLINE_MIN_REFRESH_SEC,
+                        allow_network_probe,
+                    )
+                    probe_rows = _normalize_intraday_kline_rows(probe_df)
+                    if probe_rows:
+                        probe_only = [row for row in probe_rows if str(row.get("date", "")).startswith(probe_date)]
+                        return {"status": "success", "data": (probe_only or probe_rows)}
+
             try:
                 fallback_df = await asyncio.to_thread(data_provider.fetch_intraday_data, clean_code)
-                if fallback_df is not None and not fallback_df.empty:
-                    if "day" in fallback_df.columns and "time" not in fallback_df.columns:
-                        fallback_df = fallback_df.rename(columns={"day": "time"})
-                    if "time" in fallback_df.columns:
-                        time_col = fallback_df["time"].astype(str)
-                        today_only = fallback_df[time_col.str.startswith(today_str)]
-                        if not today_only.empty:
-                            fallback_df = today_only
-                    return {"status": "success", "data": fallback_df.to_dict('records')}
+                fallback_rows = _normalize_intraday_kline_rows(fallback_df)
+                if fallback_rows:
+                    if allow_non_trading_probe and probe_dates:
+                        for probe_date in probe_dates:
+                            probe_only = [row for row in fallback_rows if str(row.get("date", "")).startswith(probe_date)]
+                            if probe_only:
+                                return {"status": "success", "data": probe_only}
+                    today_only = [row for row in fallback_rows if str(row.get("date", "")).startswith(today_str)]
+                    if today_only:
+                        fallback_rows = today_only
+                    return {"status": "success", "data": fallback_rows}
             except Exception:
                 pass
 
             # 最后兜底：返回近几日已有缓存，避免完全空白。
-            for offset in range(1, 5):
-                date_str = (datetime.now() - timedelta(days=offset)).strftime('%Y-%m-%d')
+            fallback_dates = list(probe_dates)
+            if not fallback_dates:
+                for offset in range(1, 8):
+                    target_dt = datetime.now() - timedelta(days=offset)
+                    if target_dt.weekday() >= 5:
+                        continue
+                    fallback_dates.append(target_dt.strftime('%Y-%m-%d'))
+                    if len(fallback_dates) >= 4:
+                        break
+            for date_str in fallback_dates:
                 df = lhb_manager.get_kline_1min(
                     clean_code,
                     date_str,
                     KLINE_MIN_REFRESH_SEC,
                     False,
                 )
-                if df is not None and not df.empty:
-                    return {"status": "success", "data": df.to_dict('records')}
+                rows = _normalize_intraday_kline_rows(df)
+                if rows:
+                    rows_on_date = [row for row in rows if str(row.get("date", "")).startswith(date_str)]
+                    return {"status": "success", "data": (rows_on_date or rows)}
             return {"status": "success", "data": [], "message": "分时缓存暂无数据，请稍后重试"}
         elif type == "day":
             rows = get_day_kline_from_cache(clean_code)
             if not rows:
                 try:
-                    await asyncio.to_thread(refresh_day_kline_cache_for_code, clean_code, False)
+                    allow_non_trading_probe = not is_market_open_day()
+                    await asyncio.to_thread(refresh_day_kline_cache_for_code, clean_code, allow_non_trading_probe)
                     rows = get_day_kline_from_cache(clean_code)
                 except Exception:
                     rows = []
