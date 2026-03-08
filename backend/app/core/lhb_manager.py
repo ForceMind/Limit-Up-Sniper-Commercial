@@ -820,6 +820,58 @@ class LHBManager:
         now_ts = time.time()
         return int(max(0, self._kline_pause_until_ts - now_ts))
 
+    def _extract_intraday_time_series(self, df):
+        if df is None or df.empty:
+            return None
+        candidates = ["time", "day", "date", "datetime", "trade_time", "t"]
+        for col in candidates:
+            if col in df.columns:
+                try:
+                    return df[col].astype(str)
+                except Exception:
+                    return None
+        try:
+            return df.iloc[:, 0].astype(str)
+        except Exception:
+            return None
+
+    def _is_intraday_cache_complete(self, df, date_str: str = "", is_today: bool = False) -> bool:
+        if df is None or df.empty:
+            return False
+        try:
+            row_count = int(len(df))
+        except Exception:
+            return False
+        if row_count < 20:
+            return False
+
+        time_series = self._extract_intraday_time_series(df)
+        if time_series is None or time_series.empty:
+            return row_count >= (120 if is_today else 40)
+
+        text_series = time_series.astype(str).str.strip()
+        if date_str:
+            text_series = text_series[text_series.str.contains(str(date_str), na=False) | text_series.str.contains(r"\d{2}:\d{2}", regex=True, na=False)]
+            if text_series.empty:
+                return row_count >= (120 if is_today else 40)
+
+        hhmm = text_series.str.extract(r"(\d{2}:\d{2})", expand=False).dropna()
+        if hhmm.empty:
+            return row_count >= (120 if is_today else 40)
+
+        first_hhmm = hhmm.min()
+        last_hhmm = hhmm.max()
+        has_open = first_hhmm <= "09:40"
+
+        if is_today:
+            now = datetime.now()
+            if now.hour < 14 or (now.hour == 14 and now.minute < 50):
+                # During current trading day, allow partial session data.
+                return row_count >= 20
+
+        has_close = last_hhmm >= "14:50"
+        return bool(has_open and has_close and row_count >= 40)
+
     def get_kline_1min(self, code, date_str, min_refresh_seconds=600, allow_network=True):
         clean_code = "".join(filter(str.isdigit, str(code or "")))
         if len(clean_code) != 6:
@@ -831,14 +883,16 @@ class LHBManager:
         cache_key = f"{clean_code}_{date_str}"
         now_ts = time.time()
         cached_df = None
-        
-        if file_path.exists() and not is_today:
-            return pd.read_csv(file_path)
-        if file_path.exists() and is_today:
+
+        if file_path.exists():
             try:
                 cached_df = pd.read_csv(file_path)
             except Exception:
                 cached_df = None
+        cache_complete = self._is_intraday_cache_complete(cached_df, date_str, is_today) if cached_df is not None and not cached_df.empty else False
+
+        if not is_today and cached_df is not None and not cached_df.empty and cache_complete:
+            return cached_df
 
         if not allow_network:
             return cached_df
@@ -851,13 +905,17 @@ class LHBManager:
             return cached_df
 
         interval = max(0, int(min_refresh_seconds or 0))
-        if is_today and cached_df is not None and not cached_df.empty:
+        retry_interval = interval
+        if cached_df is not None and not cached_df.empty and not cache_complete:
+            retry_interval = min(interval, 180) if interval > 0 else 60
+
+        if is_today and cached_df is not None and not cached_df.empty and cache_complete:
             last_fetch_ts = self._kline_last_fetch_ts.get(cache_key, 0)
             if now_ts - last_fetch_ts < interval:
                 return cached_df
 
         last_attempt_ts = self._kline_last_attempt_ts.get(cache_key, 0)
-        if now_ts - last_attempt_ts < interval:
+        if now_ts - last_attempt_ts < retry_interval:
             if cached_df is not None and not cached_df.empty:
                 return cached_df
             return None
