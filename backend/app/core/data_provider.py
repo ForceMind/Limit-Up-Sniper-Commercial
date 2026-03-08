@@ -1880,12 +1880,19 @@ class DataProvider:
         Fetch intraday 1-minute data for a single stock (Sina).
         Returns DataFrame with 'time', 'close', 'volume'.
         """
+        biying_cfg = self._get_biying_config()
+        biying_on = self._biying_enabled(biying_cfg)
         try:
             biying_df = self._fetch_intraday_data_biying(code)
             if biying_df is not None and not biying_df.empty:
                 return biying_df
         except Exception as e:
-            self.log(f"[!] 必盈分时获取失败，回退新浪: {e}")
+            self.log(f"[!] 必盈分时获取失败: {e}")
+
+        # When Biying is enabled, keep minute source consistent (5-minute bars)
+        # and avoid mixing Sina 1-minute data into chart caches.
+        if biying_on:
+            return None
 
         full_code = self._format_code(code)
         url = f"http://money.finance.sina.com.cn/quotes_service/api/json_v2.php/CN_MarketData.getKLineData?symbol={full_code}&scale=1&ma=no&datalen=240"
