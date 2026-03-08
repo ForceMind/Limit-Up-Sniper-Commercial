@@ -59,9 +59,10 @@ class DataProvider:
         self._biying_quota_db_init = False
         self._biying_http_err_log_ts = 0.0
         self._biying_next_retry_ts = 0.0
-        self._biying_fail_cooldown_base_sec = 1800
+        self._biying_fail_cooldown_default_sec = 60
+        self._biying_fail_cooldown_base_sec = self._biying_fail_cooldown_default_sec
         self._biying_fail_cooldown_sec = self._biying_fail_cooldown_base_sec
-        self._biying_fail_cooldown_max_sec = 43200
+        self._biying_fail_cooldown_max_sec = 900
         self._biying_fail_streak = 0
         self._biying_cooldown_log_ts = 0.0
         self._biying_quote_cache = {}
@@ -477,22 +478,44 @@ class DataProvider:
         return text.replace(key, masked)
 
     def _mark_biying_success(self):
-        if self._biying_fail_streak > 0:
-            upgraded_base = max(
-                int(self._biying_fail_cooldown_base_sec or 1800),
-                int(self._biying_fail_cooldown_sec or 1800),
-            )
-            self._biying_fail_cooldown_base_sec = min(upgraded_base, self._biying_fail_cooldown_max_sec)
         self._biying_fail_streak = 0
+        self._biying_fail_cooldown_base_sec = int(self._biying_fail_cooldown_default_sec or 60)
         self._biying_fail_cooldown_sec = self._biying_fail_cooldown_base_sec
         self._biying_next_retry_ts = 0.0
 
-    def _mark_biying_failure(self):
+    def _resolve_biying_failure_base_cooldown(self, status_code=None, error_text=""):
+        code = None
+        try:
+            if status_code is not None:
+                code = int(status_code)
+        except Exception:
+            code = None
+
+        if code in {401, 403}:
+            return 300
+        if code == 429:
+            return 120
+        if code is not None and code >= 500:
+            return 45
+        if code is not None and code >= 400:
+            return 90
+
+        text = str(error_text or "").strip().lower()
+        if any(k in text for k in ("certificate", "ssl", "tls", "x509")):
+            return 300
+        if any(k in text for k in ("timed out", "timeout", "connection reset", "remote end closed", "proxyerror", "temporarily unavailable", "bad gateway")):
+            return 45
+        return int(self._biying_fail_cooldown_default_sec or 60)
+
+    def _mark_biying_failure(self, status_code=None, error_text=""):
+        adaptive_base = self._resolve_biying_failure_base_cooldown(status_code=status_code, error_text=error_text)
+        adaptive_base = max(15, min(int(adaptive_base or 60), int(self._biying_fail_cooldown_max_sec or 900)))
+        self._biying_fail_cooldown_base_sec = adaptive_base
         if self._biying_fail_streak <= 0:
             next_cooldown = self._biying_fail_cooldown_base_sec
         else:
             next_cooldown = min(
-                self._biying_fail_cooldown_sec * 2,
+                max(self._biying_fail_cooldown_base_sec, self._biying_fail_cooldown_sec * 2),
                 self._biying_fail_cooldown_max_sec,
             )
         self._biying_fail_streak += 1
@@ -692,11 +715,11 @@ class DataProvider:
                     request_kwargs["cert"] = cert_value
                 resp = self._call_provider("biying", lambda: session.get(url, **request_kwargs))
             if resp.status_code != 200:
-                cooldown = self._mark_biying_failure()
+                body = str((resp.text or "")).strip().replace("\n", " ")
+                if len(body) > 220:
+                    body = body[:220] + "..."
+                cooldown = self._mark_biying_failure(status_code=resp.status_code, error_text=body)
                 if now_ts - self._biying_http_err_log_ts >= 60:
-                    body = str((resp.text or "")).strip().replace("\n", " ")
-                    if len(body) > 220:
-                        body = body[:220] + "..."
                     if body:
                         self.log(f"[!] 必盈接口返回异常状态码 {resp.status_code}: {masked_url}，响应: {body}（进入通道冷却，{cooldown}s 后重试）")
                     else:
@@ -708,17 +731,17 @@ class DataProvider:
             except Exception:
                 text = (resp.text or "").strip()
                 if not text:
-                    self._mark_biying_failure()
+                    self._mark_biying_failure(error_text="empty_response")
                     return None
                 try:
                     payload = json.loads(text)
                 except Exception:
-                    self._mark_biying_failure()
+                    self._mark_biying_failure(error_text=text[:220])
                     return None
             self._mark_biying_success()
             return payload
         except Exception as e:
-            cooldown = self._mark_biying_failure()
+            cooldown = self._mark_biying_failure(error_text=str(e))
             if now_ts - self._biying_http_err_log_ts >= 60:
                 self.log(f"[!] 必盈请求失败: {e}（进入通道冷却，{cooldown}s 后重试）")
                 self._biying_http_err_log_ts = now_ts
