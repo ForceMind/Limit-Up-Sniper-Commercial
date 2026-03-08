@@ -4138,7 +4138,9 @@ async def get_stock_kline(code: str, type: str = "1min", user: models.User = Dep
         clean_code = "".join(filter(str.isdigit, code))
         if type == "1min":
             today_str = datetime.now().strftime('%Y-%m-%d')
-            allow_non_trading_probe = not is_market_open_day()
+            # Probe previous trade dates whenever the market is not in active
+            # intraday session (weekends/holidays, pre-open, lunch break, post-close).
+            allow_non_trading_probe = not (is_market_open_day() and is_trading_time())
             probe_dates = _probe_trade_dates_for_intraday() if allow_non_trading_probe else []
             today_df = lhb_manager.get_kline_1min(
                 clean_code,
@@ -4222,19 +4224,36 @@ async def get_stock_kline(code: str, type: str = "1min", user: models.User = Dep
                 if rows:
                     rows_on_date = [row for row in rows if str(row.get("date", "")).startswith(date_str)]
                     return {"status": "success", "data": (rows_on_date or rows)}
-            return {"status": "success", "data": [], "message": "分时缓存暂无数据，请稍后重试"}
+            msg = "分时缓存暂无数据，请稍后重试"
+            try:
+                biying_cfg = data_provider._get_biying_config()
+                if not data_provider._biying_enabled(biying_cfg):
+                    msg = "分时缓存暂无数据：必盈数据源未启用，且默认公网源暂不可用"
+                elif lhb_manager.is_kline_network_paused():
+                    remain = lhb_manager.get_kline_pause_remaining_seconds()
+                    msg = f"分时缓存暂无数据：上游暂不可用，约{remain}s后重试"
+            except Exception:
+                pass
+            return {"status": "success", "data": [], "message": msg}
         elif type == "day":
             rows = get_day_kline_from_cache(clean_code)
             if not rows:
                 try:
-                    allow_non_trading_probe = not is_market_open_day()
-                    await asyncio.to_thread(refresh_day_kline_cache_for_code, clean_code, allow_non_trading_probe)
+                    # User explicitly opened day-K with empty cache: allow a throttled
+                    # one-shot refresh regardless of current trading clock.
+                    await asyncio.to_thread(refresh_day_kline_cache_for_code, clean_code, True)
                     rows = get_day_kline_from_cache(clean_code)
                 except Exception:
                     rows = []
             if rows:
                 return {"status": "success", "data": rows}
-            return {"status": "success", "data": [], "message": "日K缓存暂无数据，请稍后重试"}
+            msg = "日K缓存暂无数据，请稍后重试"
+            try:
+                if not data_provider._biying_enabled(data_provider._get_biying_config()):
+                    msg = "日K缓存暂无数据：必盈数据源未启用，且默认公网源暂不可用"
+            except Exception:
+                pass
+            return {"status": "success", "data": [], "message": msg}
                 
     except Exception as e:
         return {"status": "error", "message": str(e)}

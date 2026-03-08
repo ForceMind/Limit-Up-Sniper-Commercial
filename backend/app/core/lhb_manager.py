@@ -1032,7 +1032,8 @@ class LHBManager:
 
         if not allow_network:
             return cached_df
-        if self.is_kline_network_paused():
+        biying_enabled = self._is_biying_kline_enabled()
+        if (not biying_enabled) and self.is_kline_network_paused():
             now_ts = time.time()
             if now_ts - self._kline_pause_log_ts >= 60:
                 remain = self.get_kline_pause_remaining_seconds()
@@ -1059,7 +1060,6 @@ class LHBManager:
         self._kline_last_attempt_ts[cache_key] = now_ts
 
         # 优先使用必盈分时；启用必盈时不回退 AKShare，避免触发反爬。
-        biying_enabled = self._is_biying_kline_enabled()
         if biying_enabled:
             try:
                 biying_df = self._fetch_kline_via_biying_5min(clean_code, date_str, is_today)
