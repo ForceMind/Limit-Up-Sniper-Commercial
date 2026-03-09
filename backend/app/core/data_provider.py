@@ -784,6 +784,33 @@ class DataProvider:
             self._mark_biying_success()
             return payload
         except Exception as e:
+            # TLS cert chain issues occasionally happen on specific routes/CDN nodes.
+            # For Biying domains, retry once over HTTP before entering cooldown.
+            if url.startswith("https://") and "biyingapi.com" in url:
+                fallback_url = "http://" + url[len("https://"):]
+                try:
+                    with requests.Session() as session:
+                        session.trust_env = False
+                        fallback_kwargs = {
+                            "params": params or {},
+                            "timeout": timeout,
+                            "headers": {
+                                "User-Agent": "Limit-Up-Sniper/2.x",
+                                "Accept": "application/json,text/plain,*/*",
+                            },
+                        }
+                        resp_http = self._call_provider("biying", lambda: session.get(fallback_url, **fallback_kwargs))
+                    if resp_http is not None and resp_http.status_code == 200:
+                        try:
+                            payload = resp_http.json()
+                        except Exception:
+                            text = (resp_http.text or "").strip()
+                            payload = json.loads(text) if text else None
+                        if payload is not None:
+                            self._mark_biying_success()
+                            return payload
+                except Exception:
+                    pass
             cooldown = self._mark_biying_failure(error_text=str(e))
             if now_ts - self._biying_http_err_log_ts >= 60:
                 self.log(f"[!] 必盈请求失败: {e}（进入通道冷却，{cooldown}s 后重试）")
