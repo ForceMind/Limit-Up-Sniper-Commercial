@@ -4285,6 +4285,10 @@
                 },
                 parseRuntimeLogLine(input) {
                     const raw = String(input ?? '').trim();
+                    const stripNestedPrefix = (text) => String(text || '')
+                        .replace(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?/, '')
+                        .replace(/^\[(\d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?/, '')
+                        .trim();
                     const fallback = {
                         time: new Date().toLocaleTimeString(),
                         msg: raw
@@ -4295,7 +4299,7 @@
                     if (match) {
                         const hhmmss = match[1].slice(11);
                         const level = String(match[2] || '').trim();
-                        const body = String(match[3] || '').trim();
+                        const body = stripNestedPrefix(String(match[3] || '').trim());
                         return {
                             time: hhmmss || fallback.time,
                             msg: body ? (level ? `[${level}] ${body}` : body) : raw
@@ -4305,7 +4309,7 @@
                     match = raw.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?(.*)$/);
                     if (match) {
                         const level = String(match[2] || '').trim();
-                        const body = String(match[3] || '').trim();
+                        const body = stripNestedPrefix(String(match[3] || '').trim());
                         return {
                             time: String(match[1] || fallback.time),
                             msg: body ? (level ? `[${level}] ${body}` : body) : raw

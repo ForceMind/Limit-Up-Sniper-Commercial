@@ -36,7 +36,7 @@ class LHBManager:
         self.config = {
             "enabled": False,
             "days": 2,
-            "min_amount": 10000000, # 1000涓?
+            "min_amount": 10000000, # 1000万
             "last_update": None,
             "sync_time": "18:00",
             "last_ai_cache_update": None,
@@ -137,9 +137,9 @@ class LHBManager:
                 with open(map_path, 'r', encoding='utf-8') as f:
                     self.hot_money_map = json.load(f)
                     self._map_mtime = mtime
-                    # print(f"[榫欒檸姒淽 Hot money map loaded ({len(self.hot_money_map)} entries)")
+                    # print(f"[龙虎榜] Hot money map loaded ({len(self.hot_money_map)} entries)")
             except Exception as e:
-                print(f"[榫欒檸姒淽 鍔犺浇娓歌祫鏄犲皠澶辫触: {e}")
+                print(f"[龙虎榜] 加载游资映射失败: {e}")
 
     def load_vip_seats(self):
         if not SEATS_FILE.exists():
@@ -164,7 +164,7 @@ class LHBManager:
         if not seat_name: return ""
         seat_name = seat_name.strip() # 去除前后空格
         
-        # 1. 鐩存帴鍖归厤
+        # 1. 直接匹配
         name = self.hot_money_map.get(seat_name)
         if name: return name
         
@@ -183,9 +183,9 @@ class LHBManager:
                     saved = json.load(f)
                     self.config.update(saved)
                     self.config["sync_time"] = self._normalize_sync_time(self.config.get("sync_time"))
-                    print(f"[榫欒檸姒淽 閰嶇疆宸插姞杞? {self.config}")
+                    print(f"[龙虎榜] 配置已加载: {self.config}")
             except Exception as e:
-                print(f"[榫欒檸姒淽 鍔犺浇閰嶇疆澶辫触: {e}")
+                print(f"[龙虎榜] 加载配置失败: {e}")
         else:
             self.config["sync_time"] = self._normalize_sync_time(self.config.get("sync_time"))
 
@@ -289,14 +289,14 @@ class LHBManager:
             self._kline_cache_state["last_trade_date"] = latest_trade_date
             self._save_kline_cache_state()
             if removed > 0:
-                print(f"[榫欒檸姒淽 鍒嗘椂缂撳瓨鎸変氦鏄撴棩娓呯悊瀹屾垚: latest={latest_trade_date}, removed={removed}")
+                print(f"[龙虎榜] 分时缓存按交易日清理完成: latest={latest_trade_date}, removed={removed}")
 
     def update_settings(self, enabled, days, min_amount, sync_time=None):
         if sync_time is not None:
             sync_time = self._normalize_sync_time(sync_time)
         else:
             sync_time = self._get_sync_time()
-        print(f"[榫欒檸姒淽 姝ｅ湪鏇存柊璁剧疆: enabled={enabled}, days={days}, min_amount={min_amount}, sync_time={sync_time}")
+        print(f"[龙虎榜] 正在更新设置: enabled={enabled}, days={days}, min_amount={min_amount}, sync_time={sync_time}")
         self.config['enabled'] = enabled
         self.config['days'] = days
         self.config['min_amount'] = min_amount
@@ -437,7 +437,7 @@ class LHBManager:
                     trade_dates = [d for d in trade_dates if d >= start_date.date() and d <= end_date.date()]
                     trade_dates = trade_dates[-days:] # Take last N trading days
                 except Exception as e:
-                    log(f"[榫欒檸姒淽 鑾峰彇浜ゆ槗鏃ュ巻澶辫触: {e}")
+                    log(f"[龙虎榜] 获取交易日历失败: {e}")
                     return
 
             # 2. Load existing data
@@ -511,7 +511,7 @@ class LHBManager:
                            stock_code.startswith('8') or \
                            stock_code.startswith('4') or \
                            stock_code.startswith('9'):
-                            # if logger: logger(f"  - 璺宠繃闈炰富鏉?鍒涗笟鏉? {stock_name}({stock_code})")
+                            # if logger: logger(f"  - 跳过非主板/创业板: {stock_name}({stock_code})")
                             continue
 
                         # Fetch detail for this stock
@@ -624,10 +624,10 @@ class LHBManager:
                             self.generate_daily_report(date_iso, logger)
                             
                         except Exception as save_err:
-                            if logger: logger(f"[榫欒檸姒淽 淇濆瓨鏁版嵁澶辫触 {date_iso}: {save_err}")
+                            if logger: logger(f"[龙虎榜] 保存数据失败 {date_iso}: {save_err}")
 
                 except Exception as e:
-                    if logger: logger(f"[榫欒檸姒淽鑾峰彇 {date_str} 鏁版嵁澶辫触: {e}")
+                    if logger: logger(f"[龙虎榜] 获取 {date_str} 数据失败: {e}")
 
             # 4. Final Cleanup and K-line Download
             if not existing_df.empty:
@@ -644,7 +644,7 @@ class LHBManager:
                 try:
                     build_profiles(logger)
                 except Exception as e:
-                    if logger: logger(f"[榫欒檸姒淽 鏇存柊鐢诲儚澶辫触: {e}")
+                    if logger: logger(f"[龙虎榜] 更新画像失败: {e}")
                 
                 self.download_kline_data(existing_df, logger)
                 
@@ -702,7 +702,7 @@ class LHBManager:
             self.save_config()
             log(f"[龙虎榜] 已完成 {target_date} AI 预分析并写入缓存。")
         except Exception as e:
-            log(f"[榫欒檸姒淽 AI 棰勫垎鏋愬け璐? {e}")
+            log(f"[龙虎榜] AI 预分析失败: {e}")
 
     def update_vip_seats(self, df):
         # Count appearances in recent data, but keep manually maintained base seats.
@@ -1233,7 +1233,7 @@ class LHBManager:
             return result
             
         except Exception as e:
-            print(f"[榫欒檸姒淽 鑾峰彇姣忔棩鏁版嵁澶辫触: {e}")
+            print(f"[龙虎榜] 获取每日数据失败: {e}")
             return []
 
     def get_available_dates(self):
@@ -1286,6 +1286,6 @@ class LHBManager:
                 print(report_str)
                 
         except Exception as e:
-            print(f"[榫欒檸姒淽 鐢熸垚鎶ュ憡澶辫触: {e}")
+            print(f"[龙虎榜] 生成报告失败: {e}")
 
 lhb_manager = LHBManager()

@@ -5,7 +5,7 @@ import time
 import json
 import threading
 import sqlite3
-from datetime import datetime, time as dt_time
+from datetime import datetime, time as dt_time, timedelta
 from zoneinfo import ZoneInfo
 from pathlib import Path
 from urllib.parse import urlsplit
@@ -112,6 +112,11 @@ class DataProvider:
             "eastmoney": 0.3,
             "tushare": 1.0,
         }
+        self._trade_calendar_dates = []
+        self._trade_calendar_cache_ts = 0.0
+        # Trade calendar changes only on new sessions. Cache for 6 hours to reduce external calls.
+        self._trade_calendar_cache_ttl_sec = 21600
+        self._trade_calendar_lock = threading.Lock()
         self._load_biying_cache_files()
 
     def log(self, msg):
@@ -491,16 +496,22 @@ class DataProvider:
         except Exception:
             code = None
 
+        text = str(error_text or "").strip().lower()
+
         if code in {401, 403}:
             return 300
         if code == 429:
             return 120
+        if code == 404:
+            if any(path in text for path in ("/hslt/ztgc/", "/hslt/dtgc/", "/hslt/zbgc/")):
+                # Date-based pool may be unavailable before close; keep cooldown short.
+                return 15
+            return 45
         if code is not None and code >= 500:
             return 45
         if code is not None and code >= 400:
             return 90
 
-        text = str(error_text or "").strip().lower()
         if any(k in text for k in ("certificate", "ssl", "tls", "x509")):
             return 300
         if any(k in text for k in ("timed out", "timeout", "connection reset", "remote end closed", "proxyerror", "temporarily unavailable", "bad gateway")):
@@ -714,11 +725,43 @@ class DataProvider:
                 if cert_value:
                     request_kwargs["cert"] = cert_value
                 resp = self._call_provider("biying", lambda: session.get(url, **request_kwargs))
+                # Some Biying endpoints may only be reachable over HTTP on legacy domains.
+                if (
+                    resp is not None
+                    and resp.status_code == 404
+                    and url.startswith("https://api.biyingapi.com/")
+                ):
+                    fallback_url = f"http://api.biyingapi.com{req_path}"
+                    try:
+                        fallback_kwargs = dict(request_kwargs)
+                        fallback_kwargs.pop("cert", None)
+                        resp_http = self._call_provider("biying", lambda: session.get(fallback_url, **fallback_kwargs))
+                        if resp_http is not None and resp_http.status_code == 200:
+                            resp = resp_http
+                            masked_url = self._mask_biying_url(fallback_url, cfg.get("license_key", ""))
+                    except Exception:
+                        pass
             if resp.status_code != 200:
                 body = str((resp.text or "")).strip().replace("\n", " ")
                 if len(body) > 220:
                     body = body[:220] + "..."
-                cooldown = self._mark_biying_failure(status_code=resp.status_code, error_text=body)
+                is_pool_not_ready = (
+                    resp.status_code == 404
+                    and (
+                        req_path.startswith("/hslt/ztgc/")
+                        or req_path.startswith("/hslt/dtgc/")
+                        or req_path.startswith("/hslt/zbgc/")
+                    )
+                )
+                if is_pool_not_ready:
+                    if now_ts - self._biying_http_err_log_ts >= 60:
+                        self.log(f"[*] 必盈池子当前暂无数据: {masked_url}，稍后自动重试")
+                        self._biying_http_err_log_ts = now_ts
+                    return None
+                cooldown = self._mark_biying_failure(
+                    status_code=resp.status_code,
+                    error_text=f"{req_path} {body}".strip(),
+                )
                 if now_ts - self._biying_http_err_log_ts >= 60:
                     if body:
                         self.log(f"[!] 必盈接口返回异常状态码 {resp.status_code}: {masked_url}，响应: {body}（进入通道冷却，{cooldown}s 后重试）")
@@ -1125,6 +1168,94 @@ class DataProvider:
         if self._is_market_trading_session():
             return max(60, int(self._biying_pool_cache_trading_ttl_sec or 600))
         return max(300, int(self._biying_pool_cache_non_trading_ttl_sec or 21600))
+
+    def _pool_cache_ttl_sec_for_target_date(self, target_date: str):
+        today = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+        if str(target_date or "").strip() == today and self._is_market_trading_session():
+            return max(60, int(self._biying_pool_cache_trading_ttl_sec or 600))
+        return max(300, int(self._biying_pool_cache_non_trading_ttl_sec or 21600))
+
+    def _get_trade_calendar_dates(self, lookback_days: int = 120):
+        now_ts = time.time()
+        with self._trade_calendar_lock:
+            if self._trade_calendar_dates and (now_ts - self._trade_calendar_cache_ts < self._trade_calendar_cache_ttl_sec):
+                return list(self._trade_calendar_dates)
+
+            start_dt = (datetime.now(ZoneInfo("Asia/Shanghai")) - timedelta(days=max(30, int(lookback_days or 120)))).date()
+            today = datetime.now(ZoneInfo("Asia/Shanghai")).date()
+            dates = []
+            try:
+                hist_df = self._call_provider("akshare", lambda: ak.tool_trade_date_hist_sina())
+                if hist_df is not None and not hist_df.empty and "trade_date" in hist_df.columns:
+                    for item in hist_df["trade_date"].tolist():
+                        try:
+                            if hasattr(item, "date"):
+                                day = item.date() if callable(getattr(item, "date", None)) else item
+                            else:
+                                day = datetime.strptime(str(item)[:10], "%Y-%m-%d").date()
+                            if start_dt <= day <= today:
+                                dates.append(day)
+                        except Exception:
+                            continue
+            except Exception:
+                # Keep best-effort: if calendar fetch fails, reuse previous cache if available.
+                if self._trade_calendar_dates:
+                    return list(self._trade_calendar_dates)
+                return []
+
+            if dates:
+                self._trade_calendar_dates = sorted(set(dates))
+                self._trade_calendar_cache_ts = now_ts
+            return list(self._trade_calendar_dates)
+
+    def _resolve_pool_target_trade_date(self):
+        now = datetime.now(ZoneInfo("Asia/Shanghai"))
+        today = now.date()
+        open_time = dt_time(9, 30)
+
+        dates = self._get_trade_calendar_dates(lookback_days=160)
+        valid_dates = sorted({d for d in dates if d <= today})
+        is_today_trade_day = today in valid_dates
+
+        # Use same-day pools after market open; before open fallback to previous trade day.
+        if is_today_trade_day and now.time() >= open_time:
+            return today.strftime("%Y-%m-%d")
+
+        # Before close (and on non-trading days), always fallback to previous trade day.
+        if valid_dates:
+            if valid_dates[-1] < today:
+                return valid_dates[-1].strftime("%Y-%m-%d")
+            prev_candidates = [d for d in valid_dates if d < today]
+            if prev_candidates:
+                return prev_candidates[-1].strftime("%Y-%m-%d")
+
+        # Fallback when calendar service is unavailable.
+        if now.time() >= open_time and today.weekday() < 5:
+            candidate = today
+        else:
+            candidate = today - timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate = candidate - timedelta(days=1)
+        return candidate.strftime("%Y-%m-%d")
+
+    def _resolve_previous_pool_trade_date(self, date_str: str) -> str:
+        raw = str(date_str or "").strip()
+        if not raw:
+            return ""
+        try:
+            base_date = datetime.strptime(raw, "%Y-%m-%d").date()
+        except Exception:
+            return ""
+
+        dates = self._get_trade_calendar_dates(lookback_days=200)
+        prev_candidates = sorted({d for d in dates if d < base_date})
+        if prev_candidates:
+            return prev_candidates[-1].strftime("%Y-%m-%d")
+
+        candidate = base_date - timedelta(days=1)
+        while candidate.weekday() >= 5:
+            candidate = candidate - timedelta(days=1)
+        return candidate.strftime("%Y-%m-%d")
 
     def _get_cached_pool_rows(self, pool_key: str, target_date: str, allow_stale: bool = False):
         if not isinstance(self._biying_pool_cache, dict):
@@ -2207,17 +2338,16 @@ class DataProvider:
 
     def fetch_limit_up_pool(self):
         """Fetch limit-up pool (Biying preferred, AKShare fallback)."""
-        date_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+        date_str = self._resolve_pool_target_trade_date()
+        fallback_date = self._resolve_previous_pool_trade_date(date_str)
         now_ts = time.time()
-        trading = self._is_market_trading_session()
-        ttl = self._pool_cache_ttl_sec()
+        ttl = self._pool_cache_ttl_sec_for_target_date(date_str)
 
-        cached_rows, cached_ts, _ = self._get_cached_pool_rows("limit_up", date_str, allow_stale=not trading)
+        cached_rows, cached_ts, _ = self._get_cached_pool_rows("limit_up", date_str, allow_stale=False)
+        stale_rows = cached_rows
+        if not stale_rows:
+            stale_rows, _, _ = self._get_cached_pool_rows("limit_up", date_str, allow_stale=True)
         if cached_rows and (now_ts - cached_ts < ttl):
-            cached_df = self._parse_biying_limit_up_pool_df(cached_rows)
-            if cached_df is not None and not cached_df.empty:
-                return cached_df
-        if (not trading) and cached_rows:
             cached_df = self._parse_biying_limit_up_pool_df(cached_rows)
             if cached_df is not None and not cached_df.empty:
                 return cached_df
@@ -2231,16 +2361,23 @@ class DataProvider:
         except Exception as e:
             self.log(f"[!] 必盈涨停池抓取失败: {e}")
 
-        if cached_rows:
-            cached_df = self._parse_biying_limit_up_pool_df(cached_rows)
+        if fallback_date and fallback_date != date_str:
+            try:
+                rows = self._fetch_biying_pool_rows("limit_up", fallback_date)
+                df = self._parse_biying_limit_up_pool_df(rows)
+                if df is not None and not df.empty:
+                    self._update_pool_cache_rows("limit_up", fallback_date, rows)
+                    return df
+            except Exception as e:
+                self.log(f"[!] 必盈涨停池回退抓取失败({fallback_date}): {e}")
+
+        if stale_rows:
+            cached_df = self._parse_biying_limit_up_pool_df(stale_rows)
             if cached_df is not None and not cached_df.empty:
                 return cached_df
 
-        if not trading:
-            return pd.DataFrame()
-
         try:
-            date_compact = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+            date_compact = date_str.replace("-", "")
             return self._call_provider("akshare", lambda: ak.stock_zt_pool_em(date=date_compact))
         except Exception as e:
             self.log(f"[!] 涨停池抓取失败: {e}")
@@ -2248,17 +2385,16 @@ class DataProvider:
 
     def fetch_limit_down_pool(self):
         """Fetch limit-down pool (Biying only, fallback empty)."""
-        date_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+        date_str = self._resolve_pool_target_trade_date()
+        fallback_date = self._resolve_previous_pool_trade_date(date_str)
         now_ts = time.time()
-        trading = self._is_market_trading_session()
-        ttl = self._pool_cache_ttl_sec()
+        ttl = self._pool_cache_ttl_sec_for_target_date(date_str)
 
-        cached_rows, cached_ts, _ = self._get_cached_pool_rows("limit_down", date_str, allow_stale=not trading)
+        cached_rows, cached_ts, _ = self._get_cached_pool_rows("limit_down", date_str, allow_stale=False)
+        stale_rows = cached_rows
+        if not stale_rows:
+            stale_rows, _, _ = self._get_cached_pool_rows("limit_down", date_str, allow_stale=True)
         if cached_rows and (now_ts - cached_ts < ttl):
-            cached_df = self._parse_biying_limit_down_pool_df(cached_rows)
-            if cached_df is not None and not cached_df.empty:
-                return cached_df
-        if (not trading) and cached_rows:
             cached_df = self._parse_biying_limit_down_pool_df(cached_rows)
             if cached_df is not None and not cached_df.empty:
                 return cached_df
@@ -2272,25 +2408,34 @@ class DataProvider:
         except Exception as e:
             self.log(f"[!] 必盈跌停池抓取失败: {e}")
 
-        if cached_rows:
-            cached_df = self._parse_biying_limit_down_pool_df(cached_rows)
+        if fallback_date and fallback_date != date_str:
+            try:
+                rows = self._fetch_biying_pool_rows("limit_down", fallback_date)
+                df = self._parse_biying_limit_down_pool_df(rows)
+                if df is not None and not df.empty:
+                    self._update_pool_cache_rows("limit_down", fallback_date, rows)
+                    return df
+            except Exception as e:
+                self.log(f"[!] 必盈跌停池回退抓取失败({fallback_date}): {e}")
+
+        if stale_rows:
+            cached_df = self._parse_biying_limit_down_pool_df(stale_rows)
             if cached_df is not None and not cached_df.empty:
                 return cached_df
         return pd.DataFrame()
 
     def fetch_broken_limit_pool(self):
         """Fetch broken-limit pool (Biying preferred, AKShare fallback)."""
-        date_str = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d")
+        date_str = self._resolve_pool_target_trade_date()
+        fallback_date = self._resolve_previous_pool_trade_date(date_str)
         now_ts = time.time()
-        trading = self._is_market_trading_session()
-        ttl = self._pool_cache_ttl_sec()
+        ttl = self._pool_cache_ttl_sec_for_target_date(date_str)
 
-        cached_rows, cached_ts, _ = self._get_cached_pool_rows("broken", date_str, allow_stale=not trading)
+        cached_rows, cached_ts, _ = self._get_cached_pool_rows("broken", date_str, allow_stale=False)
+        stale_rows = cached_rows
+        if not stale_rows:
+            stale_rows, _, _ = self._get_cached_pool_rows("broken", date_str, allow_stale=True)
         if cached_rows and (now_ts - cached_ts < ttl):
-            cached_df = self._parse_biying_broken_pool_df(cached_rows)
-            if cached_df is not None and not cached_df.empty:
-                return cached_df
-        if (not trading) and cached_rows:
             cached_df = self._parse_biying_broken_pool_df(cached_rows)
             if cached_df is not None and not cached_df.empty:
                 return cached_df
@@ -2304,16 +2449,23 @@ class DataProvider:
         except Exception as e:
             self.log(f"[!] 必盈炸板池抓取失败: {e}")
 
-        if cached_rows:
-            cached_df = self._parse_biying_broken_pool_df(cached_rows)
+        if fallback_date and fallback_date != date_str:
+            try:
+                rows = self._fetch_biying_pool_rows("broken", fallback_date)
+                df = self._parse_biying_broken_pool_df(rows)
+                if df is not None and not df.empty:
+                    self._update_pool_cache_rows("broken", fallback_date, rows)
+                    return df
+            except Exception as e:
+                self.log(f"[!] 必盈炸板池回退抓取失败({fallback_date}): {e}")
+
+        if stale_rows:
+            cached_df = self._parse_biying_broken_pool_df(stale_rows)
             if cached_df is not None and not cached_df.empty:
                 return cached_df
 
-        if not trading:
-            return pd.DataFrame()
-
         try:
-            date_compact = datetime.now(ZoneInfo("Asia/Shanghai")).strftime("%Y%m%d")
+            date_compact = date_str.replace("-", "")
             return self._call_provider("akshare", lambda: ak.stock_zt_pool_zbgc_em(date=date_compact))
         except Exception as e:
             self.log(f"[!] 炸板池抓取失败: {e}")

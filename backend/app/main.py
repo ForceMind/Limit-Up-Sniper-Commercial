@@ -2745,9 +2745,10 @@ async def startup_event():
     # Start periodic cleanup task
     asyncio.create_task(periodic_cleanup_task())
 
-    # 启动时立即执行一次盘中扫描，确保列表不为空。
-    print("启动：正在执行首次盘中扫描...")
-    add_runtime_log("启动：正在执行首次盘中扫描...")
+    # 启动时检查是否需要补跑一次盘中扫描（由 last_run_time 控制，非用户触发）。
+    startup_scan_msg = f"启动：后台任务已接管(pid={os.getpid()})，检查是否需要首次盘中扫描..."
+    print(startup_scan_msg)
+    add_runtime_log(startup_scan_msg)
     asyncio.create_task(run_initial_scan())
 
 def cleanup_kline_cache_files(min_cache_days: int = KLINE_MIN_CACHE_EXPIRE_DAYS, day_cache_days: int = KLINE_DAY_CACHE_EXPIRE_DAYS):
@@ -2844,19 +2845,23 @@ def _resolve_runtime_interval(now: datetime):
 
 
 async def run_initial_scan():
-    """启动时立即运行一次扫描"""
+    """服务启动后按持久化调度状态决定是否补跑一次扫描。"""
     try:
         # 等待几秒确保其他组件就绪
         await asyncio.sleep(2)
         # 仅在交易日且配置开启时执行初始扫描；并严格按上次运行时间判断是否到期。
         if not is_market_open_day() or not SYSTEM_CONFIG["auto_analysis_enabled"]:
-            print("启动: 跳过初始扫描 (非交易日或已禁用).")
+            msg = "启动：跳过首次扫描（非交易日或已禁用自动分析）。"
+            print(msg)
+            add_runtime_log(msg)
             return
 
         now = datetime.now()
         interval_seconds, mode = _resolve_runtime_interval(now)
         if mode == "none":
-            print("启动: 当前时段配置为暂停，跳过初始扫描。")
+            msg = "启动：当前时段配置为暂停，跳过首次扫描。"
+            print(msg)
+            add_runtime_log(msg)
             return
 
         now_ts = time.time()
@@ -2865,15 +2870,24 @@ async def run_initial_scan():
             elapsed = max(0, now_ts - last_run_ts)
             if elapsed < interval_seconds:
                 remain = int(interval_seconds - elapsed)
-                print(f"启动: 距离下次分析还有 {remain}s，跳过初始扫描。")
+                msg = f"启动：距离下次分析还有 {remain}s，跳过首次扫描。"
+                print(msg)
+                add_runtime_log(msg)
                 return
 
+        msg = f"启动：首次扫描条件满足，开始执行（模式={mode}）。"
+        print(msg)
+        add_runtime_log(msg)
         await asyncio.to_thread(execute_analysis, mode)
-        print("启动：首次扫描完成。")
+        msg = "启动：首次扫描完成。"
+        print(msg)
+        add_runtime_log(msg)
         SYSTEM_CONFIG["last_run_time"] = now_ts
         save_config()
     except Exception as e:
-        print(f"初始扫描错误: {e}")
+        err = f"初始扫描错误: {e}"
+        print(err)
+        add_runtime_log(err, level="ERROR")
 
 
 def _public_system_config():
@@ -3170,19 +3184,9 @@ def _is_user_visible_analysis_log(line: str, mode_cn: str = "") -> bool:
 
 
 def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
-    try:
-        logs = get_runtime_logs(limit=max(20, int(limit)))
-    except Exception:
-        return 0
-
-    selected = [line for line in logs if _is_user_visible_analysis_log(line, mode_cn=mode_cn)]
-    if not selected:
-        return 0
-
-    replay_items = [_normalize_runtime_log_for_replay(line) for line in selected[-80:]]
-    for line in replay_items:
-        thread_logger(line)
-    return len(replay_items)
+    # Do not replay historical log lines into runtime queue.
+    # Replaying old lines makes clients treat them as "new now" events and causes misleading timestamps.
+    return 0
 
 
 def _normalize_runtime_log_for_replay(line: str) -> str:
@@ -3250,12 +3254,14 @@ async def run_analysis(
                 reload_watchlist_globals()
             except Exception:
                 pass
-            replayed = _replay_recent_analysis_logs(mode_cn)
-            if replayed <= 0:
-                thread_logger(f"[分析] {mode_cn}任务已受理，正在准备最新数据...")
+            if last_time != datetime.min:
+                last_time_text = last_time.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                last_time_text = "未知"
+            thread_logger(f"[分析] {mode_cn}命中复用策略，本次不重复执行；最近一次完成时间: {last_time_text}")
             return {
                 "status": "success",
-                "message": f"{mode_cn}任务已在后台启动"
+                "message": f"{mode_cn}已复用最近一次结果（{last_time_text}）"
             }
 
         # 3. 执行新的分析
