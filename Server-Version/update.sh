@@ -423,16 +423,21 @@ verify_update_health() {
     local internal_health_url="http://127.0.0.1:${internal_port}/api/status"
     local ok="false"
     local i
-    for i in $(seq 1 20); do
-        if curl -fsS "$internal_health_url" >/dev/null 2>&1; then
+    local status_code
+    local max_attempts="${ZT_HEALTHCHECK_MAX_ATTEMPTS:-90}"
+    local sleep_sec="${ZT_HEALTHCHECK_SLEEP_SEC:-1}"
+    for i in $(seq 1 "$max_attempts"); do
+        status_code="$(curl -sS -o /dev/null -w "%{http_code}" --max-time 3 "$internal_health_url" || echo "000")"
+        # 200: ready; 429: /api/status hit rate-limit but service is alive.
+        if [ "$status_code" = "200" ] || [ "$status_code" = "429" ]; then
             ok="true"
             break
         fi
-        sleep 1
+        sleep "$sleep_sec"
     done
 
     if [ "$ok" != "true" ]; then
-        log_error "[错误] 健康检查失败: $internal_health_url"
+        log_error "[错误] 健康检查失败: $internal_health_url (last_http=${status_code:-000}, attempts=$max_attempts)"
         log_error "请执行: sudo journalctl -u ${SERVICE_NAME} -n 120 --no-pager"
         log_error "若需回滚，可使用备份目录: $BACKUP_DIR"
         exit 1
