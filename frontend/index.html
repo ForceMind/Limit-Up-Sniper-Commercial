@@ -1832,6 +1832,8 @@
                     wsAuthRenewAheadSec: 90,
                     wsAuthRefreshTimer: null,
                     wsAuthTokenPromise: null,
+                    wsPendingConnectLog: false,
+                    wsConnectLogTimer: null,
                     notifyWsConnected: false,
                     notifyWsConnecting: false,
                     notifyReconnectTimer: null,
@@ -4077,7 +4079,19 @@
                         this.marketWsConnected = !!this.hasDataAccess;
                         this.stopMarketFallbackPolling();
                         this.scheduleWsAuthRefresh();
-                        this.addLog('系统连接成功');
+                        // Keep ordering intuitive: replay historical logs first, then show "connected".
+                        this.wsPendingConnectLog = true;
+                        if (this.wsConnectLogTimer) {
+                            clearTimeout(this.wsConnectLogTimer);
+                            this.wsConnectLogTimer = null;
+                        }
+                        this.wsConnectLogTimer = setTimeout(() => {
+                            if (this.wsPendingConnectLog) {
+                                this.addLog('系统连接成功');
+                                this.wsPendingConnectLog = false;
+                            }
+                            this.wsConnectLogTimer = null;
+                        }, 1200);
                     };
                     
                     ws.onmessage = (event) => {
@@ -4102,6 +4116,11 @@
                         this.marketWsConnected = false;
                         this.marketWsConnecting = false;
                         this.logSocket = null;
+                        this.wsPendingConnectLog = false;
+                        if (this.wsConnectLogTimer) {
+                            clearTimeout(this.wsConnectLogTimer);
+                            this.wsConnectLogTimer = null;
+                        }
                         if (!wsOpened || (event && Number(event.code || 0) === 1008)) {
                             this.clearWsAuthTokenState();
                         }
@@ -4122,7 +4141,17 @@
                     if (!payload || !payload.event) return;
                     if (payload.event === 'log_history') {
                         const lines = Array.isArray(payload.lines) ? payload.lines : [];
+                        // Replace current panel with server snapshot to avoid duplicate history after reconnect.
+                        this.logs = [];
                         lines.forEach((line) => this.addLog(line));
+                        if (this.wsPendingConnectLog) {
+                            this.addLog('系统连接成功');
+                            this.wsPendingConnectLog = false;
+                        }
+                        if (this.wsConnectLogTimer) {
+                            clearTimeout(this.wsConnectLogTimer);
+                            this.wsConnectLogTimer = null;
+                        }
                         return;
                     }
                     if (payload.event === 'log_line') {
