@@ -4295,7 +4295,14 @@
                     };
                     if (!raw) return fallback;
 
-                    let match = raw.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?(.*)$/);
+                    // Handle nested timestamp form:
+                    // [10:31:03] [2026-03-09 10:30:39] [INFO] ...
+                    let normalizedRaw = raw.replace(
+                        /^\[(\d{2}:\d{2}:\d{2})\]\s*(?=\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s*(?:\[[^\]]+\]\s*)?)/,
+                        ''
+                    );
+
+                    let match = normalizedRaw.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?(.*)$/);
                     if (match) {
                         const hhmmss = match[1].slice(11);
                         const level = String(match[2] || '').trim();
@@ -4306,13 +4313,40 @@
                         };
                     }
 
-                    match = raw.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?(.*)$/);
+                    match = normalizedRaw.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?(.*)$/);
                     if (match) {
-                        const level = String(match[2] || '').trim();
-                        const body = stripNestedPrefix(String(match[3] || '').trim());
+                        let level = String(match[2] || '').trim();
+                        let body = stripNestedPrefix(String(match[3] || '').trim());
+                        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(level)) {
+                            // If second token is full datetime, use it as real event time.
+                            const nestedRaw = `[${level}] ${String(match[3] || '').trim()}`;
+                            const nestedMatch = nestedRaw.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?(.*)$/);
+                            if (nestedMatch) {
+                                const nestedLevel = String(nestedMatch[2] || '').trim();
+                                const nestedBody = stripNestedPrefix(String(nestedMatch[3] || '').trim());
+                                return {
+                                    time: nestedMatch[1].slice(11) || String(match[1] || fallback.time),
+                                    msg: nestedBody ? (nestedLevel ? `[${nestedLevel}] ${nestedBody}` : nestedBody) : raw
+                                };
+                            }
+                            return {
+                                time: level.slice(11) || String(match[1] || fallback.time),
+                                msg: body || raw
+                            };
+                        }
                         return {
                             time: String(match[1] || fallback.time),
                             msg: body ? (level ? `[${level}] ${body}` : body) : raw
+                        };
+                    }
+
+                    // Last fallback: if message contains full datetime token, use it instead of "now".
+                    const embedded = normalizedRaw.match(/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/);
+                    if (embedded) {
+                        const body = stripNestedPrefix(normalizedRaw);
+                        return {
+                            time: embedded[1].slice(11) || fallback.time,
+                            msg: body || raw
                         };
                     }
                     return fallback;
