@@ -140,23 +140,25 @@ def _apply_admin_path(target_dir: Path, admin_path: str) -> None:
     src.rename(dst)
 
 
-def _write_deploy_readme(target_dir: Path, api_base: str, admin_path: str, admin_api_prefix: str = "") -> None:
+def _write_deploy_readme(target_dir: Path) -> None:
     text = (
         "# 前端分离部署说明\n\n"
-        "1. 将本目录全部文件上传到任意静态服务器（Nginx/CDN/对象存储网站托管均可）。\n"
-        f"2. 默认首页为 index.html，管理后台入口为 {admin_path}/index.html。\n"
-        "3. 当前包已固定后端地址：\n"
-        f"   {api_base or '（未固定，使用前端默认自动识别逻辑）'}\n"
-        "4. 当前包后台 API 前缀：\n"
-        f"   {admin_api_prefix or '（未固定，默认自动推断/读取后台配置）'}\n"
-        "5. 注意：本脚本只修改前端静态文件，不会修改后端运行时的 admin 路由配置。\n"
-        "   若后端通过 backend/data/admin_panel_path.json 与 admin_api_prefix.json 自定义了路由，请保持与前端一致。\n"
-        "6. 如果后端启用了跨域限制，请在后端 CORS 中放行此前端域名。\n"
+        "1. 将本目录全部文件上传到静态服务器（Nginx/CDN/对象存储网站托管）。\n"
+        "2. 默认首页为 index.html。\n"
+        "3. 本说明不包含后端地址、后台入口和管理 API 前缀等敏感信息。\n"
+        "4. 生产部署请在受控渠道单独维护与下发后端接入参数。\n"
+        "5. 若后端启用了跨域限制，请在后端 CORS 中放行此前端域名。\n"
     )
     (target_dir / "DEPLOY_FRONTEND.md").write_text(text, encoding="utf-8")
 
 
-def package_frontend(api_base: str = "", output_name: str = DEFAULT_OUTPUT_NAME, admin_path: str = "admin", admin_api_prefix: str = "") -> None:
+def package_frontend(
+    api_base: str = "",
+    output_name: str = DEFAULT_OUTPUT_NAME,
+    admin_path: str = "admin",
+    admin_api_prefix: str = "",
+    include_deploy_readme: bool = False,
+) -> None:
     base_dir = Path(__file__).resolve().parent.parent
     frontend_dir = base_dir / "frontend"
     dist_dir = base_dir / "dist"
@@ -187,7 +189,8 @@ def package_frontend(api_base: str = "", output_name: str = DEFAULT_OUTPUT_NAME,
     admin_html = output_dir / admin_path / "index.html"
     _inject_html_runtime_vars(admin_html, api_base, admin_api_prefix)
 
-    _write_deploy_readme(output_dir, api_base, admin_path, admin_api_prefix)
+    if include_deploy_readme:
+        _write_deploy_readme(output_dir)
 
     print("[进度 4/4] 生成压缩包...")
     frontend_version = _extract_frontend_version(frontend_dir)
@@ -206,7 +209,7 @@ def package_frontend(api_base: str = "", output_name: str = DEFAULT_OUTPUT_NAME,
     print("=" * 60)
 
 
-def _run_profile_mode_loop() -> int:
+def _run_profile_mode_loop(include_deploy_readme: bool = False) -> int:
     print("----")
     print("前端分离打包工具(windows一键)")
     print("说明:")
@@ -228,6 +231,7 @@ def _run_profile_mode_loop() -> int:
                 output_name=str(raw_output_name or DEFAULT_OUTPUT_NAME),
                 admin_path=normalized_admin_path,
                 admin_api_prefix=normalized_admin_api_prefix,
+                include_deploy_readme=bool(include_deploy_readme),
             )
         except Exception as e:
             print(f"[失败] 打包失败：{e}")
@@ -277,6 +281,12 @@ def parse_args() -> argparse.Namespace:
         dest="profile_mode",
         action="store_true",
         help="环境模式：选择测试/正式，记住本地配置，可回车沿用",
+    )
+    parser.add_argument(
+        "--include-deploy-readme",
+        dest="include_deploy_readme",
+        action="store_true",
+        help="在压缩包中额外生成 DEPLOY_FRONTEND.md（默认关闭）",
     )
     return parser.parse_args()
 
@@ -466,7 +476,7 @@ if __name__ == "__main__":
     interactive_mode = bool(args.interactive)
 
     if profile_mode:
-        sys.exit(_run_profile_mode_loop())
+        sys.exit(_run_profile_mode_loop(include_deploy_readme=bool(args.include_deploy_readme)))
     elif interactive_mode:
         raw_api_base, raw_admin_path, raw_admin_api_prefix, raw_output_name = _collect_interactive_inputs()
     else:
@@ -484,4 +494,5 @@ if __name__ == "__main__":
         output_name=str(raw_output_name or DEFAULT_OUTPUT_NAME),
         admin_path=normalized_admin_path,
         admin_api_prefix=normalized_admin_api_prefix,
+        include_deploy_readme=bool(args.include_deploy_readme),
     )
