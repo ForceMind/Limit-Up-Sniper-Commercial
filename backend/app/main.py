@@ -3184,17 +3184,37 @@ def _is_user_visible_analysis_log(line: str, mode_cn: str = "") -> bool:
 
 
 def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
-    # Do not replay historical log lines into runtime queue.
-    # Replaying old lines makes clients treat them as "new now" events and causes misleading timestamps.
-    return 0
+    try:
+        logs = get_runtime_logs(limit=max(20, int(limit)))
+    except Exception:
+        return 0
+
+    selected = [line for line in logs if _is_user_visible_analysis_log(line, mode_cn=mode_cn)]
+    if not selected:
+        return 0
+
+    replayed = 0
+    replay_items = [_normalize_runtime_log_for_replay(line) for line in selected[-80:]]
+    for line in replay_items:
+        text = str(line or "").strip()
+        if not text:
+            continue
+        thread_logger(text)
+        replayed += 1
+    return replayed
 
 
 def _normalize_runtime_log_for_replay(line: str) -> str:
     text = str(line or "").strip()
     if not text:
         return ""
-    text = re.sub(r"^\[[0-9:\- ]+\]\s*\[[^\]]+\]\s*", "", text)
-    text = re.sub(r"^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]\s*(\[[^\]]+\]\s*)?", "", text)
+    # Strip nested runtime prefixes repeatedly (e.g. [10:31:03] [2026-...][INFO] ...).
+    for _ in range(4):
+        prev = text
+        text = re.sub(r"^\[[0-9:\- ]+\]\s*\[[^\]]+\]\s*", "", text).strip()
+        text = re.sub(r"^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]\s*(\[[^\]]+\]\s*)?", "", text).strip()
+        if text == prev:
+            break
     return text
 
 
@@ -3254,14 +3274,12 @@ async def run_analysis(
                 reload_watchlist_globals()
             except Exception:
                 pass
-            if last_time != datetime.min:
-                last_time_text = last_time.strftime("%Y-%m-%d %H:%M:%S")
-            else:
-                last_time_text = "未知"
-            thread_logger(f"[分析] {mode_cn}命中复用策略，本次不重复执行；最近一次完成时间: {last_time_text}")
+            replayed = _replay_recent_analysis_logs(mode_cn)
+            if replayed <= 0:
+                thread_logger(f"[分析] {mode_cn}任务已受理，正在准备最新数据...")
             return {
                 "status": "success",
-                "message": f"{mode_cn}已复用最近一次结果（{last_time_text}）"
+                "message": f"{mode_cn}任务已在后台启动"
             }
 
         # 3. 执行新的分析
