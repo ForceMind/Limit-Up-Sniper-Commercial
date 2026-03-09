@@ -1764,24 +1764,53 @@ class DataProvider:
             f"/hsrl/real/all/{cfg['license_key']}",
             f"/hsrl/ssjy/all/{cfg['license_key']}",
         )
+        base_url = self._biying_base_url(cfg).rstrip("/")
+        alt_base_url = ""
+        if base_url.startswith("https://"):
+            alt_base_url = "http://" + base_url[len("https://"):]
+        elif base_url.startswith("http://"):
+            alt_base_url = "https://" + base_url[len("http://"):]
+
+        def _has_quote_rows(rows):
+            if not isinstance(rows, list) or not rows:
+                return False
+            for row in rows:
+                if isinstance(row, dict) and self._parse_biying_quote_row(row):
+                    return True
+            return False
+
         for api_path in api_paths:
-            url = f"https://all.biyingapi.com{api_path}"
-            try:
-                with requests.Session() as session:
-                    session.trust_env = False
-                    resp = self._call_provider("biying", lambda: session.get(url, timeout=8))
-                if resp.status_code != 200:
-                    raise RuntimeError(f"status={resp.status_code}")
-                payload = resp.json()
-                rows = self._extract_biying_rows(payload)
-                if not rows and isinstance(payload, dict):
-                    rows = [payload]
-                if rows:
-                    break
-            except Exception as e:
-                fetch_error = e
-                payload = None
-                continue
+            candidate_urls = []
+            # Prefer configured domain first, then legacy all-domain HTTP/HTTPS fallback.
+            candidate_urls.append(f"{base_url}{api_path}")
+            if alt_base_url:
+                candidate_urls.append(f"{alt_base_url}{api_path}")
+            candidate_urls.append(f"http://all.biyingapi.com{api_path}")
+            # all.biyingapi.com should use HTTP here; skip HTTPS to avoid cert-chain failures.
+
+            seen = set()
+            for url in candidate_urls:
+                if not url or url in seen:
+                    continue
+                seen.add(url)
+                try:
+                    with requests.Session() as session:
+                        session.trust_env = False
+                        resp = self._call_provider("biying", lambda: session.get(url, timeout=8))
+                    if resp.status_code != 200:
+                        raise RuntimeError(f"status={resp.status_code}, url={url}")
+                    payload = resp.json()
+                    rows = self._extract_biying_rows(payload)
+                    if _has_quote_rows(rows):
+                        break
+                    payload = None
+                    fetch_error = RuntimeError(f"empty_or_invalid_rows, url={url}")
+                except Exception as e:
+                    fetch_error = e
+                    payload = None
+                    continue
+            if payload is not None:
+                break
 
         if payload is None:
             self._biying_all_market_next_retry_ts = now_ts + self._biying_all_market_fail_cooldown_sec
@@ -1793,8 +1822,6 @@ class DataProvider:
             return None
 
         rows = self._extract_biying_rows(payload)
-        if not rows and isinstance(payload, dict):
-            rows = [payload]
         if not rows:
             self._biying_all_market_next_retry_ts = now_ts + self._biying_all_market_fail_cooldown_sec
             if self._biying_all_market_cache_df is not None:
