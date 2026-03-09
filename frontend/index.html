@@ -4289,9 +4289,21 @@
                         .replace(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?/, '')
                         .replace(/^\[(\d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?/, '')
                         .trim();
+                    const sanitizeReplayHint = (text) => {
+                        const rawText = String(text || '').trim();
+                        if (!rawText) return rawText;
+                        if (!/(命中复用策略|本次不重复执行|最近一次完成时间|已复用最近一次结果)/.test(rawText)) {
+                            return rawText;
+                        }
+                        const modeMatch = rawText.match(/\[分析\]\s*([^\s\[]+?)命中复用策略/);
+                        const modeName = modeMatch && modeMatch[1] ? modeMatch[1].trim() : '';
+                        return modeName
+                            ? `[分析] ${modeName}任务已受理，正在准备最新数据...`
+                            : '[分析] 任务已受理，正在准备最新数据...';
+                    };
                     const fallback = {
                         time: new Date().toLocaleTimeString(),
-                        msg: raw
+                        msg: sanitizeReplayHint(raw)
                     };
                     if (!raw) return fallback;
 
@@ -4309,7 +4321,7 @@
                         const body = stripNestedPrefix(String(match[3] || '').trim());
                         return {
                             time: hhmmss || fallback.time,
-                            msg: body ? (level ? `[${level}] ${body}` : body) : raw
+                            msg: sanitizeReplayHint(body ? (level ? `[${level}] ${body}` : body) : raw)
                         };
                     }
 
@@ -4326,17 +4338,17 @@
                                 const nestedBody = stripNestedPrefix(String(nestedMatch[3] || '').trim());
                                 return {
                                     time: nestedMatch[1].slice(11) || String(match[1] || fallback.time),
-                                    msg: nestedBody ? (nestedLevel ? `[${nestedLevel}] ${nestedBody}` : nestedBody) : raw
+                                    msg: sanitizeReplayHint(nestedBody ? (nestedLevel ? `[${nestedLevel}] ${nestedBody}` : nestedBody) : raw)
                                 };
                             }
                             return {
                                 time: level.slice(11) || String(match[1] || fallback.time),
-                                msg: body || raw
+                                msg: sanitizeReplayHint(body || raw)
                             };
                         }
                         return {
                             time: String(match[1] || fallback.time),
-                            msg: body ? (level ? `[${level}] ${body}` : body) : raw
+                            msg: sanitizeReplayHint(body ? (level ? `[${level}] ${body}` : body) : raw)
                         };
                     }
 
@@ -4346,10 +4358,13 @@
                         const body = stripNestedPrefix(normalizedRaw);
                         return {
                             time: embedded[1].slice(11) || fallback.time,
-                            msg: body || raw
+                            msg: sanitizeReplayHint(body || raw)
                         };
                     }
-                    return fallback;
+                    return {
+                        time: fallback.time,
+                        msg: sanitizeReplayHint(fallback.msg)
+                    };
                 },
                 addLog(msg) {
                     const parsed = this.parseRuntimeLogLine(msg);

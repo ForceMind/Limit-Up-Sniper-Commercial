@@ -3193,13 +3193,68 @@ def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
     if not selected:
         return 0
 
+    def _parse_line_meta(raw_line: str) -> tuple[Optional[datetime], str]:
+        text = str(raw_line or "").strip()
+        m = re.match(
+            r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*\[([^\]]+)\]\s*",
+            text,
+        )
+        if not m:
+            return None, "INFO"
+        try:
+            parsed_dt = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            parsed_dt = None
+        level = str(m.group(2) or "").strip().upper() or "INFO"
+        return parsed_dt, level
+
     replayed = 0
-    replay_items = [_normalize_runtime_log_for_replay(line) for line in selected[-80:]]
-    for line in replay_items:
-        text = str(line or "").strip()
+    replay_items_raw = selected[-80:]
+    replay_items = []
+    for line in replay_items_raw:
+        text = _normalize_runtime_log_for_replay(line)
         if not text:
             continue
-        thread_logger(text)
+        src_dt, src_level = _parse_line_meta(line)
+        replay_items.append({
+            "src_dt": src_dt,
+            "level": src_level,
+            "text": text,
+        })
+    if not replay_items:
+        return 0
+
+    # Shift historical timeline to "now": first line => now, following lines keep original spacing.
+    replay_base = datetime.now()
+    first_src_dt = next((x["src_dt"] for x in replay_items if x["src_dt"] is not None), None)
+    last_replay_dt = replay_base
+    last_src_dt = first_src_dt or replay_base
+
+    for idx, item in enumerate(replay_items):
+        src_dt = item["src_dt"] or last_src_dt
+        last_src_dt = src_dt
+        if first_src_dt is None:
+            replay_dt = last_replay_dt if idx > 0 else replay_base
+        else:
+            delta_seconds = int((src_dt - first_src_dt).total_seconds())
+            if delta_seconds < 0:
+                delta_seconds = 0
+            replay_dt = replay_base + timedelta(seconds=delta_seconds)
+            if idx > 0 and replay_dt <= last_replay_dt:
+                replay_dt = last_replay_dt + timedelta(seconds=1)
+        last_replay_dt = replay_dt
+
+        level = str(item["level"] or "INFO").strip().upper() or "INFO"
+        replay_text = str(item["text"] or "").strip()
+        if not replay_text:
+            continue
+
+        # Replay only to websocket stream; do not write back into runtime cache to avoid duplicate nesting.
+        replay_line = f"[{replay_dt.strftime('%Y-%m-%d %H:%M:%S')}] [{level}] {replay_text}"
+        try:
+            log_queue.put(replay_line)
+        except Exception:
+            thread_logger(replay_line)
         replayed += 1
     return replayed
 
@@ -3215,6 +3270,7 @@ def _normalize_runtime_log_for_replay(line: str) -> str:
         text = re.sub(r"^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]\s*(\[[^\]]+\]\s*)?", "", text).strip()
         if text == prev:
             break
+    text = re.sub(r"^\[(INFO|ERROR|WARN|WARNING|DEBUG|TRACE)\]\s*", "", text, flags=re.IGNORECASE).strip()
     return text
 
 
