@@ -3183,7 +3183,7 @@ def _is_user_visible_analysis_log(line: str, mode_cn: str = "") -> bool:
     return False
 
 
-def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
+def _replay_recent_analysis_logs(mode_cn: str, limit: int = 2000) -> int:
     try:
         logs = get_runtime_logs(limit=max(20, int(limit)))
     except Exception:
