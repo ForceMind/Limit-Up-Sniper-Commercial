@@ -20,10 +20,12 @@ import secrets
 import threading
 import socket
 import re
+import ipaddress
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
+from starlette.routing import Match
 from app.core.news_analyzer import generate_watchlist, analyze_single_stock, analyze_daily_lhb
 from app.core.market_scanner import scan_limit_up_pool, scan_broken_limit_pool, get_market_overview
 from app.core.stock_utils import calculate_metrics, is_trading_time, is_market_open_day
@@ -89,6 +91,8 @@ app.include_router(payment.router, prefix="/api/payment", tags=["payment"])
 
 FRONTEND_DIR = BASE_DIR.parent / "frontend"
 ADMIN_INDEX_FILE = FRONTEND_DIR / "admin" / "index.html"
+AUTH_API_PREFIX_FILE = DATA_DIR / "auth_api_prefix.json"
+IP_BANLIST_FILE = DATA_DIR / "ip_banlist.json"
 USER_OP_LOG_SKIP_PREFIXES = (
     "/api/stocks",
     "/api/indices",
@@ -111,10 +115,13 @@ USER_OP_LOG_SKIP_PREFIXES = (
     "/api/admin/update_password",
     "/api/admin/update_account",
     "/api/admin/panel_path",
+    "/api/admin/api_prefix",
+    "/api/admin/auth_api_prefix",
     "/api/admin/users/reset_password",
     "/api/admin/users/add_time",
     "/api/admin/users/ban",
     "/api/admin/users/set_membership",
+    "/api/admin/users/delete_all_guests",
     "/api/admin/orders/approve",
     "/api/admin/config",
     "/api/admin/referrals",
@@ -156,6 +163,12 @@ WS_TOKEN_BIND_MODE = str(os.getenv("WS_TOKEN_BIND_MODE", "ua") or "ua").strip().
 if WS_TOKEN_BIND_MODE not in {"ua", "ip_ua"}:
     WS_TOKEN_BIND_MODE = "ua"
 _ws_token_secret_cache = None
+_AUTH_API_PREFIX_CACHE_TTL_SEC = 5.0
+_auth_api_prefix_cache: Dict[str, Any] = {"ts": 0.0, "value": "/api/auth"}
+_auth_api_prefix_lock = threading.Lock()
+_ip_ban_lock = threading.Lock()
+_ip_ban_cache: Dict[str, Any] = {"loaded": False, "items": {}}
+UNKNOWN_API_BAN_REASON = "access_unknown_api"
 
 
 def _bool_env(name: str, default: bool = True) -> bool:
@@ -163,6 +176,207 @@ def _bool_env(name: str, default: bool = True) -> bool:
     if not raw:
         return bool(default)
     return raw in {"1", "true", "yes", "on"}
+
+
+def _normalize_auth_api_prefix(raw_prefix: str) -> str:
+    value = str(raw_prefix or "").strip()
+    if not value:
+        return "/api/auth"
+    if not value.startswith("/"):
+        value = "/" + value
+    if not value.startswith("/api/"):
+        value = "/api" + value
+
+    parts = [p for p in value.split("/") if p]
+    value = "/" + "/".join(parts)
+    if value in {"/", "/api"}:
+        raise ValueError("Auth API prefix cannot be / or /api")
+    if value.startswith("/api/admin") or value.startswith("/api/payment"):
+        raise ValueError("Auth API prefix cannot conflict with admin/payment routes")
+    if not re.fullmatch(r"/[A-Za-z0-9/_-]+", value):
+        raise ValueError("Auth API prefix only allows letters, numbers, /, _, -")
+    return value
+
+
+def get_auth_api_prefix() -> str:
+    now_ts = time.time()
+    with _auth_api_prefix_lock:
+        cached_ts = float(_auth_api_prefix_cache.get("ts", 0) or 0)
+        cached_value = str(_auth_api_prefix_cache.get("value", "/api/auth") or "/api/auth").strip() or "/api/auth"
+        if now_ts - cached_ts <= _AUTH_API_PREFIX_CACHE_TTL_SEC:
+            return cached_value
+
+    resolved = "/api/auth"
+    env_val = str(os.getenv("AUTH_API_PREFIX", "") or "").strip()
+    if env_val:
+        try:
+            resolved = _normalize_auth_api_prefix(env_val)
+        except ValueError:
+            resolved = "/api/auth"
+    else:
+        payload = {}
+        try:
+            if AUTH_API_PREFIX_FILE.exists():
+                payload = json.loads(str(AUTH_API_PREFIX_FILE.read_text(encoding="utf-8") or "{}"))
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            try:
+                resolved = _normalize_auth_api_prefix(payload.get("prefix", "/api/auth"))
+            except ValueError:
+                resolved = "/api/auth"
+
+    with _auth_api_prefix_lock:
+        _auth_api_prefix_cache["ts"] = time.time()
+        _auth_api_prefix_cache["value"] = resolved
+    return resolved
+
+
+def _ip_addr_obj(ip_text: str):
+    text = str(ip_text or "").strip()
+    if not text:
+        return None
+    try:
+        return ipaddress.ip_address(text)
+    except Exception:
+        return None
+
+
+def _is_local_or_private_ip(ip_text: str) -> bool:
+    ip_obj = _ip_addr_obj(ip_text)
+    if ip_obj is None:
+        return True
+    return bool(
+        ip_obj.is_loopback
+        or ip_obj.is_private
+        or ip_obj.is_link_local
+        or ip_obj.is_multicast
+        or ip_obj.is_reserved
+        or ip_obj.is_unspecified
+    )
+
+
+def _load_ip_ban_items_locked() -> Dict[str, Dict[str, Any]]:
+    if bool(_ip_ban_cache.get("loaded")):
+        items = _ip_ban_cache.get("items", {})
+        return items if isinstance(items, dict) else {}
+
+    data = {}
+    try:
+        if IP_BANLIST_FILE.exists():
+            data = json.loads(str(IP_BANLIST_FILE.read_text(encoding="utf-8") or "{}"))
+    except Exception:
+        data = {}
+
+    items: Dict[str, Dict[str, Any]] = {}
+    src = data.get("items", {}) if isinstance(data, dict) else {}
+    if isinstance(src, dict):
+        for raw_ip, meta in src.items():
+            ip_text = str(raw_ip or "").strip()
+            if not ip_text:
+                continue
+            if _is_local_or_private_ip(ip_text):
+                continue
+            if isinstance(meta, dict):
+                items[ip_text] = {
+                    "reason": str(meta.get("reason", "") or "").strip(),
+                    "banned_at": str(meta.get("banned_at", "") or "").strip(),
+                    "path": str(meta.get("path", "") or "").strip(),
+                    "method": str(meta.get("method", "") or "").strip().upper(),
+                }
+            else:
+                items[ip_text] = {
+                    "reason": "",
+                    "banned_at": "",
+                    "path": "",
+                    "method": "",
+                }
+
+    _ip_ban_cache["loaded"] = True
+    _ip_ban_cache["items"] = items
+    return items
+
+
+def _save_ip_ban_items_locked(items: Dict[str, Dict[str, Any]]) -> None:
+    payload = {"items": items if isinstance(items, dict) else {}}
+    try:
+        IP_BANLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        IP_BANLIST_FILE.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _is_ip_banned(ip_text: str) -> bool:
+    ip_addr = str(ip_text or "").strip()
+    if not ip_addr or _is_local_or_private_ip(ip_addr):
+        return False
+    with _ip_ban_lock:
+        items = _load_ip_ban_items_locked()
+        return ip_addr in items
+
+
+def _ban_ip(ip_text: str, *, path: str, method: str, reason: str = UNKNOWN_API_BAN_REASON) -> bool:
+    ip_addr = str(ip_text or "").strip()
+    if not ip_addr or _is_local_or_private_ip(ip_addr):
+        return False
+
+    banned_now = False
+    with _ip_ban_lock:
+        items = _load_ip_ban_items_locked()
+        if ip_addr in items:
+            meta = items.get(ip_addr, {})
+            if isinstance(meta, dict):
+                meta["path"] = str(path or "").strip()
+                meta["method"] = str(method or "").strip().upper()
+                items[ip_addr] = meta
+                _save_ip_ban_items_locked(items)
+            return False
+        items[ip_addr] = {
+            "reason": str(reason or "").strip() or UNKNOWN_API_BAN_REASON,
+            "banned_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "path": str(path or "").strip(),
+            "method": str(method or "").strip().upper(),
+        }
+        _save_ip_ban_items_locked(items)
+        banned_now = True
+
+    if banned_now:
+        try:
+            log_user_operation(
+                "ip_auto_ban",
+                status="success",
+                actor="system",
+                method=str(method or "").upper(),
+                path=str(path or "").strip(),
+                ip=ip_addr,
+                detail=f"reason={str(reason or UNKNOWN_API_BAN_REASON)}",
+            )
+        except Exception:
+            pass
+    return banned_now
+
+
+def _api_path_has_matching_route(request: Request) -> bool:
+    path = str(request.scope.get("path", "") or "").strip()
+    if not path.startswith("/api/"):
+        return True
+    scope = dict(request.scope)
+    scope["path"] = path
+    scope["root_path"] = ""
+    for route in app.router.routes:
+        route_path = str(getattr(route, "path", "") or "").strip()
+        if not route_path.startswith("/api/"):
+            continue
+        try:
+            match, _ = route.matches(scope)
+        except Exception:
+            continue
+        if match in {Match.FULL, Match.PARTIAL}:
+            return True
+    return False
 
 
 DISABLE_PUBLIC_FRONTEND = _bool_env("DISABLE_PUBLIC_FRONTEND", False)
@@ -457,10 +671,23 @@ def _device_info_from_request(request: Request) -> str:
     return info[:240]
 
 
+def _normalize_auth_request_path(path: str) -> str:
+    safe_path = str(path or "").strip()
+    normalized = safe_path.rstrip("/") or "/"
+    auth_api_prefix = str(get_auth_api_prefix() or "/api/auth").strip() or "/api/auth"
+    if auth_api_prefix != "/api/auth" and (
+        normalized == auth_api_prefix or normalized.startswith(auth_api_prefix + "/")
+    ):
+        suffix = safe_path[len(auth_api_prefix):]
+        return "/api/auth" + suffix
+    return safe_path
+
+
 def _should_log_api_path(path: str) -> bool:
-    if not path.startswith("/api/"):
+    normalized_path = _normalize_auth_request_path(path)
+    if not normalized_path.startswith("/api/"):
         return False
-    return not any(path.startswith(prefix) for prefix in USER_OP_LOG_SKIP_PREFIXES)
+    return not any(normalized_path.startswith(prefix) for prefix in USER_OP_LOG_SKIP_PREFIXES)
 
 
 def _is_admin_api_path(path: str) -> bool:
@@ -551,7 +778,7 @@ def _safe_bool_text(value: Optional[bool]) -> str:
 
 
 def _resolve_admin_refresh_targets(path: str, method: str, status_code: int) -> List[str]:
-    safe_path = str(path or "").strip().lower()
+    safe_path = _normalize_auth_request_path(path).strip().lower()
     safe_method = str(method or "").upper()
     if int(status_code or 0) >= 400:
         return []
@@ -711,14 +938,53 @@ async def admin_panel_custom_path_guard(request: Request, call_next):
 async def api_device_auth_guard(request: Request, call_next):
     path = request.url.path
     normalized = path.rstrip("/") or "/"
+    method = str(request.method or "").upper()
     admin_api_prefix = admin.get_admin_api_prefix()
-    if request.method == "OPTIONS":
+
+    auth_api_prefix = get_auth_api_prefix()
+    if auth_api_prefix != "/api/auth":
+        if normalized == "/api/auth" or normalized.startswith("/api/auth/"):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        if normalized == auth_api_prefix or normalized.startswith(auth_api_prefix + "/"):
+            suffix = path[len(auth_api_prefix):]
+            new_path = "/api/auth" + suffix
+            request.scope["path"] = new_path
+            request.scope["raw_path"] = new_path.encode("utf-8")
+            path = new_path
+            normalized = path.rstrip("/") or "/"
+
+    if method == "OPTIONS":
         return await call_next(request)
     if not path.startswith("/api/"):
         return await call_next(request)
-    if path.startswith("/api/admin/"):
-        return await call_next(request)
-    if admin_api_prefix != "/api/admin" and (normalized == admin_api_prefix or normalized.startswith(admin_api_prefix + "/")):
+
+    client_ip = _client_ip_from_request(request)
+    if _is_ip_banned(client_ip):
+        return JSONResponse(status_code=403, content={"detail": "IP has been banned"})
+
+    has_admin_token = bool((request.headers.get("X-Admin-Token") or "").strip())
+    is_admin_namespace = bool(
+        path.startswith("/api/admin/")
+        or (
+            admin_api_prefix != "/api/admin"
+            and (normalized == admin_api_prefix or normalized.startswith(admin_api_prefix + "/"))
+        )
+    )
+    should_check_unknown_api = bool(
+        (not has_admin_token)
+        and (not _is_local_or_private_ip(client_ip))
+        and (not is_admin_namespace)
+    )
+    if should_check_unknown_api and (not _api_path_has_matching_route(request)):
+        _ban_ip(
+            client_ip,
+            path=path,
+            method=method,
+            reason=UNKNOWN_API_BAN_REASON,
+        )
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+
+    if is_admin_namespace:
         return await call_next(request)
     if path in API_DEVICE_AUTH_EXEMPT_PATHS:
         return await call_next(request)
@@ -799,12 +1065,14 @@ async def get_system_status(request: Request):
     """获取系统状态（交易日/时间）"""
     if _is_status_rate_limited(request):
         return JSONResponse(status_code=429, content={"detail": "Too many status requests"})
+    auth_api_prefix = get_auth_api_prefix()
     return {
         "status": "success",
         "is_trading_time": is_trading_time(),
         "is_market_open_day": is_market_open_day(),
         "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "server_version": SERVER_VERSION,
+        "auth_api_prefix": auth_api_prefix,
     }
 
 @app.get("/api/news_history/clear")

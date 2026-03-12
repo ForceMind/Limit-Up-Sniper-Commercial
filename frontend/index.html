@@ -52,6 +52,23 @@
             return '';
         };
         const API_BASE_URL = getApiBaseUrl();
+        const normalizeApiPrefix = (value, fallback = '/api/auth') => {
+            let raw = String(value || '').trim();
+            if (!raw) return fallback;
+            if (!raw.startsWith('/')) raw = '/' + raw;
+            if (!raw.startsWith('/api/')) raw = '/api' + raw;
+            raw = '/' + raw.split('/').filter(Boolean).join('/');
+            return raw || fallback;
+        };
+        // Auth path is fixed at build time via window.__AUTH_API_PREFIX__ (fallback: /api/auth).
+        const AUTH_API_PREFIX = normalizeApiPrefix(window.__AUTH_API_PREFIX__ || '/api/auth');
+        const getAuthApiPrefix = () => AUTH_API_PREFIX;
+        const buildAuthApiPath = (suffix = '') => {
+            const clean = String(suffix || '').trim();
+            if (!clean) return getAuthApiPrefix();
+            return `${getAuthApiPrefix()}${clean.startsWith('/') ? clean : `/${clean}`}`;
+        };
+        const buildAuthApiUrl = (suffix = '') => `${API_BASE_URL}${buildAuthApiPath(suffix)}`;
     </script>
     <style>
         [v-cloak] { display: none !important; }
@@ -1743,11 +1760,16 @@
             localStorage.setItem('sniper_guest_token', deviceId);
             return deviceId;
         };
+        const isAuthRequestUrl = (requestUrl, suffix) => {
+            const text = String(requestUrl || '');
+            const tail = String(suffix || '');
+            return text.includes(buildAuthApiPath(tail)) || text.includes(`/api/auth${tail}`);
+        };
         const shouldSkipAuthEvent = (requestUrl) => {
             return (
-                requestUrl.includes('/api/auth/login_user') ||
-                requestUrl.includes('/api/auth/register') ||
-                requestUrl.includes('/api/auth/login') ||
+                isAuthRequestUrl(requestUrl, '/login_user') ||
+                isAuthRequestUrl(requestUrl, '/register') ||
+                isAuthRequestUrl(requestUrl, '/login') ||
                 requestUrl.includes('/api/client/error_popup') ||
                 requestUrl.includes('/api/admin/')
             );
@@ -2260,6 +2282,9 @@
                 }
             },
             methods: {
+                authApiUrl(path = '') {
+                    return buildAuthApiUrl(path);
+                },
                 membershipName(version) {
                     const v = String(version || '').toLowerCase();
                     if (v === 'trial') return '体验版';
@@ -2604,7 +2629,7 @@
                     this.loadInviteCodeStore();
                     this.inviteLoading = true;
                     try {
-                        const res = await fetch(`${API_BASE_URL}/api/auth/invite_info`);
+                        const res = await fetch(this.authApiUrl('/invite_info'));
                         const data = await res.json();
                         if (!res.ok) throw new Error(data.detail || '邀请码获取失败');
 
@@ -2702,7 +2727,7 @@
                     this.deviceId = guestToken;
                     localStorage.setItem('sniper_device_id', guestToken);
 
-                    const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                    const res = await fetch(this.authApiUrl('/login'), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ device_id: guestToken })
@@ -2814,7 +2839,7 @@
                             this.deviceId = token;
                             localStorage.setItem('sniper_device_id', token);
 
-                            const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                            const res = await fetch(this.authApiUrl('/login'), {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ device_id: token })
@@ -2899,8 +2924,8 @@
 
                     this.loginLoading = true;
                     try {
-                        const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login_user';
-                        const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+                        const endpoint = mode === 'register' ? '/register' : '/login_user';
+                        const res = await fetch(this.authApiUrl(endpoint), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -2982,7 +3007,7 @@
                     }
                     this.loginLoading = true;
                     try {
-                        const res = await fetch(`${API_BASE_URL}/api/auth/apply_trial`, {
+                        const res = await fetch(this.authApiUrl('/apply_trial'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ fingerprint_id: this.fingerprintId })
@@ -3379,7 +3404,7 @@
                     this.activationError = false
                     
                     try {
-                        const res = await fetch(API_BASE_URL + '/api/auth/activate', {
+                        const res = await fetch(this.authApiUrl('/activate'), {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
                             body: JSON.stringify({
@@ -3790,7 +3815,7 @@
                     if (!this.deviceId) return;
                     if (this.bootstrapConfigLoaded && !force) return;
                     try {
-                        const response = await fetch(API_BASE_URL + '/api/auth/bootstrap');
+                        const response = await fetch(this.authApiUrl('/bootstrap'));
                         const data = await response.json();
                         if (!response.ok) {
                             throw new Error(data.detail || data.message || '基础信息加载失败');
@@ -4227,7 +4252,7 @@
                 async refreshCurrentUserInfo() {
                     if (!this.deviceId) return;
                     try {
-                        const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                        const res = await fetch(this.authApiUrl('/login'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ device_id: this.deviceId })
@@ -5586,7 +5611,8 @@
                 this.loadNewsCache();
                 
                 // Init User
-                this.checkLogin().then(() => {
+                (async () => {
+                    await this.checkLogin();
                     if (this.deviceId && this.isRegisteredAccount) {
                         this.connectWebSocket();
                     }
@@ -5597,7 +5623,7 @@
                         localStorage.removeItem('sniper_open_subscription');
                         this.openSubscription();
                     }
-                });
+                })();
                 this.startUserTimers();
                 
                 this.globalAuthErrorHandler = (event) => this.handleGlobalAuthError(event);
