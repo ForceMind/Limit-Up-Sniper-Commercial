@@ -4,7 +4,7 @@
 
 ![Version](https://img.shields.io/badge/Version-Commercial-gold) ![Status](https://img.shields.io/badge/Status-Active-green) ![Python](https://img.shields.io/badge/Python-3.8%2B-blue)
 
-当前版本：`v3.0.2`，更新记录见 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
+当前版本：`v3.1.0`，更新记录见 [`docs/CHANGELOG.md`](docs/CHANGELOG.md)。
 
 ---
 

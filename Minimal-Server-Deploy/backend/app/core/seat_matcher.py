@@ -86,6 +86,7 @@ class SeatMatcher:
             return []
 
         matches = []
+        relaxed_pool = []
         for name, profile in self.profiles.items():
             features = profile.get('features', {})
             # Ensure order matches: time, slope, vol_ratio, cap, board
@@ -115,16 +116,24 @@ class SeatMatcher:
             else:
                 similarity = np.dot(vector_a, vector_b) / (norm_a * norm_b)
 
+            item = {
+                'name': name,
+                'similarity': round(similarity * 100, 1),
+                'desc': profile.get('desc', '')
+            }
             if similarity > 0.85:
-                matches.append({
-                    'name': name,
-                    'similarity': round(similarity * 100, 1),
-                    'desc': profile.get('desc', '')
-                })
+                matches.append(item)
+            elif similarity > 0.65:
+                relaxed_pool.append(item)
 
         # Sort by similarity desc
         matches.sort(key=lambda x: x['similarity'], reverse=True)
-        return matches[:3] # Return top 3
+        if matches:
+            return matches[:3]
+
+        # If strict threshold has no hit, return top relaxed candidates to avoid empty output.
+        relaxed_pool.sort(key=lambda x: x['similarity'], reverse=True)
+        return relaxed_pool[:2]
 
 # Global instance
 matcher = SeatMatcher()

@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>涨停狙击手 (Limit-Up Sniper) v3.0.2</title>
+    <title>涨停狙击手 (Limit-Up Sniper) v3.1.0</title>
     <link rel="icon" type="image/svg+xml" href="static/favicon.svg">
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
@@ -52,6 +52,23 @@
             return '';
         };
         const API_BASE_URL = getApiBaseUrl();
+        const normalizeApiPrefix = (value, fallback = '/api/auth') => {
+            let raw = String(value || '').trim();
+            if (!raw) return fallback;
+            if (!raw.startsWith('/')) raw = '/' + raw;
+            if (!raw.startsWith('/api/')) raw = '/api' + raw;
+            raw = '/' + raw.split('/').filter(Boolean).join('/');
+            return raw || fallback;
+        };
+        // Auth path is fixed at build time via window.__AUTH_API_PREFIX__ (fallback: /api/auth).
+        const AUTH_API_PREFIX = normalizeApiPrefix(window.__AUTH_API_PREFIX__ || '/api/auth');
+        const getAuthApiPrefix = () => AUTH_API_PREFIX;
+        const buildAuthApiPath = (suffix = '') => {
+            const clean = String(suffix || '').trim();
+            if (!clean) return getAuthApiPrefix();
+            return `${getAuthApiPrefix()}${clean.startsWith('/') ? clean : `/${clean}`}`;
+        };
+        const buildAuthApiUrl = (suffix = '') => `${API_BASE_URL}${buildAuthApiPath(suffix)}`;
     </script>
     <style>
         [v-cloak] { display: none !important; }
@@ -148,10 +165,11 @@
                         AI:{{userInfo.remaining_ai}} | 突:{{userInfo.remaining_raid}} | 复:{{userInfo.remaining_review}}
                     </div>
 
-                <!-- Settings Button (Merged Filter & Config) -->
+                <!-- Settings Button -->
                 <button v-if="!isSearchFocused || !isMobile" @click.stop="showSettingsModal = true" class="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400 transition-colors z-10 relative" title="打开设置">
                     <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 4a1 1 0 011-1h16a1 1 0 011 1v2.586a1 1 0 01-.293.707l-6.414 6.414a1 1 0 00-.293.707V17l-4 4v-6.586a1 1 0 00-.293-.707L3.293 7.293A1 1 0 013 6.586V4z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"></path>
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path>
                     </svg>
                 </button>
 
@@ -934,7 +952,7 @@
             </div>
         </div>
 
-        <!-- Settings Modal (Merged Filter & Config) -->
+        <!-- Settings Modal -->
         <div v-if="showSettingsModal" class="fixed inset-0 z-[60] flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm" @click.self="showSettingsModal = false">
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-md flex flex-col max-h-[90vh]">
                 <div class="p-4 border-b border-gray-200 dark:border-gray-700 flex justify-between items-center">
@@ -949,9 +967,48 @@
                 </div>
                 
                 <div class="p-6 overflow-y-auto space-y-4">
+                    <div class="rounded border border-gray-200 dark:border-gray-700 p-4">
+                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-1 flex items-center gap-2">
+                            <span>📊</span> 市场过滤
+                        </h4>
+                        <div class="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                            以下开关会实时影响列表显示结果。
+                        </div>
+                        <div class="space-y-3 pl-2">
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">主板 (60/00)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showMainBoard" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">创业板 (30)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showChiNext" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">科创板 (68)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showStar" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                            <div class="flex items-center justify-between">
+                                <span class="text-sm text-gray-700 dark:text-gray-300">北交所 (8/4/92)</span>
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" v-model="filterSettings.showBSE" class="sr-only peer" @change="saveFilterSettings">
+                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="rounded border border-gray-200 dark:border-gray-700">
                         <button @click="settingsSectionCommonOpen = !settingsSectionCommonOpen" class="w-full px-3 py-2 flex items-center justify-between text-sm font-bold text-gray-800 dark:text-gray-100">
-                            <span>⚙️ 常用设置</span>
+                            <span>👤 账号管理</span>
                             <span>{{ settingsSectionCommonOpen ? '收起' : '展开' }}</span>
                         </button>
                     </div>
@@ -981,14 +1038,14 @@
                         </div>
                         <div class="mt-3 text-xs text-blue-600 dark:text-blue-400 font-bold flex items-center justify-center gap-1">
                             <span>💳</span>
-                            <span>{{ (isRegisteredAccount && isPaidMember && !userInfo.is_expired) ? '查看会员详情' : (canShowTenMinuteTrialOption ? '申请10分钟体验' : '立即购买会员') }}</span>
+                            <span>{{ (isRegisteredAccount && isPaidMember && !userInfo.is_expired) ? '查看会员详情' : (canShowTenMinuteTrialOption ? '申请3天体验' : '立即购买会员') }}</span>
                         </div>
                     </div>
 
-                    <!-- 1. 账号入口 -->
-                    <div class="pt-4 border-t border-gray-100 dark:border-gray-700">
+                    <!-- 1. Account Actions -->
+                    <div class="rounded border border-gray-200 dark:border-gray-700 p-4">
                         <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
-                            <span>👤</span> 账号入口
+                            <span>👤</span> 账号操作
                         </h4>
                         <div class="space-y-2">
                             <div class="text-sm text-gray-700 dark:text-gray-300">
@@ -1003,43 +1060,6 @@
                                 <button @click="openSubscription()" class="py-2 rounded bg-red-600 text-white text-sm font-bold">
                                     {{ isRegisteredAccount ? '会员中心' : '查看会员方案' }}
                                 </button>
-                            </div>
-                        </div>
-                    </div>
-                
-                    <!-- 2. Filter Settings -->
-                    <div>
-                        <h4 class="text-sm font-bold text-gray-900 dark:text-gray-100 mb-3 flex items-center gap-2">
-                            <span>🔍</span> 市场过滤
-                        </h4>
-                        <div class="space-y-3 pl-2">
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">主板 (60/00)</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="filterSettings.showMainBoard" class="sr-only peer" @change="saveFilterSettings">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                                </label>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">创业板 (30)</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="filterSettings.showChiNext" class="sr-only peer" @change="saveFilterSettings">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                                </label>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">科创板 (68)</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="filterSettings.showStar" class="sr-only peer" @change="saveFilterSettings">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                                </label>
-                            </div>
-                            <div class="flex items-center justify-between">
-                                <span class="text-sm text-gray-700 dark:text-gray-300">北交所 (8/4/92)</span>
-                                <label class="relative inline-flex items-center cursor-pointer">
-                                    <input type="checkbox" v-model="filterSettings.showBSE" class="sr-only peer" @change="saveFilterSettings">
-                                    <div class="w-9 h-5 bg-gray-200 peer-focus:outline-none rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all dark:border-gray-600 peer-checked:bg-blue-600"></div>
-                                </label>
                             </div>
                         </div>
                     </div>
@@ -1121,7 +1141,7 @@
         <div v-if="showGuestReminderModal" class="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl w-full max-w-sm p-6">
                 <h3 class="text-lg font-bold mb-2 text-gray-900 dark:text-gray-100">首次使用提醒</h3>
-                <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">当前为游客账号，可浏览10分钟。使用权限功能请先注册账号并购买会员。</p>
+                <p class="text-sm text-gray-600 dark:text-gray-300 mb-4">当前为游客账号，可浏览10分钟。注册后可点击申请3天体验，权限功能需开通会员。</p>
                 <div class="flex gap-2">
                     <button @click="showGuestReminderModal = false" class="flex-1 py-2 border rounded text-sm">我知道了</button>
                     <button @click="showGuestReminderModal = false; showLoginModal = true" class="flex-1 py-2 bg-blue-600 text-white rounded text-sm">去注册</button>
@@ -1247,10 +1267,10 @@
 
                 <div v-if="canShowTenMinuteTrialOption || showTenMinuteTrialUsedHint" class="rounded border border-orange-200 bg-orange-50 dark:bg-orange-900/20 dark:border-orange-800 p-3">
                     <button v-if="canShowTenMinuteTrialOption" @click="applyTrialExperience" :disabled="loginLoading" class="w-full py-2 rounded bg-orange-500 text-white text-sm font-bold disabled:opacity-50">
-                        {{ loginLoading ? '处理中...' : '申请10分钟体验' }}
+                        {{ loginLoading ? '处理中...' : '申请3天体验' }}
                     </button>
                     <div v-else class="text-[11px] text-orange-700 dark:text-orange-300 text-center">
-                        10分钟体验资格已使用，可直接购买3天体验或正式会员。
+                        3天体验资格已使用，可直接购买正式会员。
                     </div>
                 </div>
                 <div class='text-xs text-center text-gray-400 mt-2 font-mono'>{{ serverVersion }}</div>
@@ -1450,12 +1470,12 @@
                     <div v-else>
                         <div v-if="canShowTenMinuteTrialOption || showTenMinuteTrialUsedHint" class="mb-4 rounded border border-orange-200 bg-orange-50 dark:bg-orange-900/20 dark:border-orange-800 p-3">
                             <div class="text-xs text-orange-700 dark:text-orange-300 mb-2">
-                                注册账号专属10分钟体验，仅可申请一次。
+                            注册账号专属3天体验，仅可申请一次。
                             </div>
                             <button v-if="canShowTenMinuteTrialOption" @click="applyTrialExperience" :disabled="loginLoading" class="w-full py-2 rounded bg-orange-500 text-white text-sm font-bold disabled:opacity-50">
-                                {{ loginLoading ? '处理中...' : '立即申请10分钟体验' }}
+                                {{ loginLoading ? '处理中...' : '立即申请3天体验' }}
                             </button>
-                            <div v-else class="text-[11px] text-orange-700 dark:text-orange-300">10分钟体验资格已使用，可直接购买3天体验或正式会员。</div>
+                            <div v-else class="text-[11px] text-orange-700 dark:text-orange-300">3天体验资格已使用，可直接购买正式会员。</div>
                         </div>
 
                         <div v-if="inviteInfo.enabled !== false" class="mb-4 rounded border border-blue-200 bg-blue-50 dark:bg-blue-900/20 dark:border-blue-800 p-3 text-xs">
@@ -1594,7 +1614,7 @@
         </div>
 
         <!-- Custom Message Modal -->
-        <div v-if="msgModal.show" class="fixed inset-0 z-[100] flex items-center justify-center p-4 pointer-events-none">
+        <div v-if="msgModal.show" class="fixed inset-0 z-[200] flex items-center justify-center p-4 pointer-events-none">
             <div class="bg-white dark:bg-gray-800 rounded-lg shadow-2xl p-4 min-w-[200px] max-w-sm pointer-events-auto border border-gray-100 dark:border-gray-700 transform transition-all animate-[fade_0.2s_ease-out]">
                 <div class="flex items-center gap-3">
                     <div :class="{
@@ -1740,11 +1760,16 @@
             localStorage.setItem('sniper_guest_token', deviceId);
             return deviceId;
         };
+        const isAuthRequestUrl = (requestUrl, suffix) => {
+            const text = String(requestUrl || '');
+            const tail = String(suffix || '');
+            return text.includes(buildAuthApiPath(tail)) || text.includes(`/api/auth${tail}`);
+        };
         const shouldSkipAuthEvent = (requestUrl) => {
             return (
-                requestUrl.includes('/api/auth/login_user') ||
-                requestUrl.includes('/api/auth/register') ||
-                requestUrl.includes('/api/auth/login') ||
+                isAuthRequestUrl(requestUrl, '/login_user') ||
+                isAuthRequestUrl(requestUrl, '/register') ||
+                isAuthRequestUrl(requestUrl, '/login') ||
                 requestUrl.includes('/api/client/error_popup') ||
                 requestUrl.includes('/api/admin/')
             );
@@ -1829,6 +1854,8 @@
                     wsAuthRenewAheadSec: 90,
                     wsAuthRefreshTimer: null,
                     wsAuthTokenPromise: null,
+                    wsPendingConnectLog: false,
+                    wsConnectLogTimer: null,
                     notifyWsConnected: false,
                     notifyWsConnecting: false,
                     notifyReconnectTimer: null,
@@ -1863,7 +1890,7 @@
                             broken_count: 0,
                             total_volume: 0,
                             sentiment: 'Neutral',
-                            suggestion: '等待数据'
+                            suggestion: '观察'
                         }
                     },
                     sentimentLoading: false,
@@ -1935,7 +1962,7 @@
                     isRegisteredAccount: hasPersistedLogin,
                     accountCanApplyTrial: false,
                     fingerprintId: '',
-                    frontendVersion: 'v3.0.2',
+                    frontendVersion: 'v3.1.0',
                     serverVersion: '获取中...',
                     loginLoading: false,
                     loadingChart: false,
@@ -2004,7 +2031,7 @@
                         { title: '会员与充值', desc: '在会员中心可续费、升级，并可使用邀请码获得赠送权益。', tab: 'manual', openSubscription: true }
                     ],
                     features: {
-                        'trial': { ai: '每日1次', raid: '暂不支持', review: '暂不支持', desc: '体验10分钟' },
+                        'trial': { ai: '每日1次', raid: '暂不支持', review: '暂不支持', desc: '游客10分钟，注册可申请3天体验' },
                         'basic': { ai: '每日5次', raid: '暂不支持', review: '暂不支持', desc: '入门首选' },
                         'advanced': { ai: '每日10次', raid: '每日3次', review: '每日1次', desc: '进阶利器' },
                         'flagship': { ai: '每日1000次', raid: '每日50次', review: '每日5次', desc: '专业游资' }
@@ -2181,8 +2208,13 @@
                 isDataIncomplete() {
                     if (!this.marketSentiment || !this.marketSentiment.stats) return true;
                     const s = this.marketSentiment.stats;
-                    // If total volume is 0 or undefined, or if up+down counts are 0
-                    return (s.total_volume === 0 || (s.up_count === 0 && s.down_count === 0));
+                    const totalVolume = Number(s.total_volume || 0);
+                    const upCount = Number(s.up_count || 0);
+                    const downCount = Number(s.down_count || 0);
+                    const flatCount = Number(s.flat_count || 0);
+                    const breadthCount = upCount + downCount + flatCount;
+                    // Only treat as incomplete when both成交额和涨跌分布都缺失.
+                    return totalVolume <= 0 && breadthCount <= 0;
                 }
             },
                 watch: {
@@ -2202,6 +2234,11 @@
                         if (!isOpen || !this.hasDataAccess) return;
                         this.fetchConfig(true);
                         this.fetchLHBConfig();
+                    },
+                    isRegisteredAccount(newVal) {
+                        if (newVal) {
+                            this.showGuestReminderModal = false;
+                        }
                     },
                 },
                 beforeUnmount() {
@@ -2245,6 +2282,9 @@
                 }
             },
             methods: {
+                authApiUrl(path = '') {
+                    return buildAuthApiUrl(path);
+                },
                 membershipName(version) {
                     const v = String(version || '').toLowerCase();
                     if (v === 'trial') return '体验版';
@@ -2340,7 +2380,7 @@
                             ? '请先升级会员后使用'
                             : ((this.isPaidMember && this.userInfo?.is_expired)
                                 ? '请先续费会员后使用'
-                                : (this.canShowTenMinuteTrialOption ? '请先申请10分钟体验后使用' : '请先购买会员后使用'));
+                                : (this.canShowTenMinuteTrialOption ? '请先申请3天体验后使用' : '请先购买会员后使用'));
                         this.showMsg(`当前功能需要会员权限，${actionHint}`, 'info');
                         this.openSubscription();
                         return;
@@ -2589,7 +2629,7 @@
                     this.loadInviteCodeStore();
                     this.inviteLoading = true;
                     try {
-                        const res = await fetch(`${API_BASE_URL}/api/auth/invite_info`);
+                        const res = await fetch(this.authApiUrl('/invite_info'));
                         const data = await res.json();
                         if (!res.ok) throw new Error(data.detail || '邀请码获取失败');
 
@@ -2687,7 +2727,7 @@
                     this.deviceId = guestToken;
                     localStorage.setItem('sniper_device_id', guestToken);
 
-                    const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                    const res = await fetch(this.authApiUrl('/login'), {
                         method: 'POST',
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ device_id: guestToken })
@@ -2799,7 +2839,7 @@
                             this.deviceId = token;
                             localStorage.setItem('sniper_device_id', token);
 
-                            const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                            const res = await fetch(this.authApiUrl('/login'), {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ device_id: token })
@@ -2861,7 +2901,7 @@
                         this.localFavoriteQuotes = [];
                     }
 
-                    if (!localStorage.getItem('guest_reminder_shown')) {
+                    if (!this.isRegisteredAccount && !this.showLoginModal && !localStorage.getItem('guest_reminder_shown')) {
                         this.showGuestReminderModal = true;
                         localStorage.setItem('guest_reminder_shown', '1');
                     }
@@ -2884,8 +2924,8 @@
 
                     this.loginLoading = true;
                     try {
-                        const endpoint = mode === 'register' ? '/api/auth/register' : '/api/auth/login_user';
-                        const res = await fetch(`${API_BASE_URL}${endpoint}`, {
+                        const endpoint = mode === 'register' ? '/register' : '/login_user';
+                        const res = await fetch(this.authApiUrl(endpoint), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({
@@ -2903,6 +2943,7 @@
                         localStorage.setItem('sniper_username', data.username || username);
                         this.deviceId = data.token;
                         this.isRegisteredAccount = true;
+                        this.showGuestReminderModal = false;
                         this.connectWebSocket();
                         this.displayUsername = data.username || username;
                         this.accountCanApplyTrial = !!data.can_apply_trial;
@@ -2957,7 +2998,7 @@
                         return;
                     }
                     if (this.isPaidMember) {
-                        this.showMsg('会员账号无需申请10分钟体验', 'info');
+                        this.showMsg('会员账号无需申请3天体验', 'info');
                         return;
                     }
                     if (!this.accountCanApplyTrial) {
@@ -2966,7 +3007,7 @@
                     }
                     this.loginLoading = true;
                     try {
-                        const res = await fetch(`${API_BASE_URL}/api/auth/apply_trial`, {
+                        const res = await fetch(this.authApiUrl('/apply_trial'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ fingerprint_id: this.fingerprintId })
@@ -3047,7 +3088,7 @@
                     // Global Block for expired users on advanced actions
                     if (expired) {
                         if (version === 'trial') {
-                            this.showMsg(this.canShowTenMinuteTrialOption ? '请先申请10分钟体验后使用该功能' : '请先购买会员后使用该功能', 'info');
+                            this.showMsg(this.canShowTenMinuteTrialOption ? '请先申请3天体验后使用该功能' : '请先购买会员后使用该功能', 'info');
                         } else {
                             this.showMsg('会员已过期，请续费解锁完整功能', 'error');
                         }
@@ -3363,7 +3404,7 @@
                     this.activationError = false
                     
                     try {
-                        const res = await fetch(API_BASE_URL + '/api/auth/activate', {
+                        const res = await fetch(this.authApiUrl('/activate'), {
                             method: 'POST',
                             headers: {'Content-Type': 'application/json'},
                             body: JSON.stringify({
@@ -3774,7 +3815,7 @@
                     if (!this.deviceId) return;
                     if (this.bootstrapConfigLoaded && !force) return;
                     try {
-                        const response = await fetch(API_BASE_URL + '/api/auth/bootstrap');
+                        const response = await fetch(this.authApiUrl('/bootstrap'));
                         const data = await response.json();
                         if (!response.ok) {
                             throw new Error(data.detail || data.message || '基础信息加载失败');
@@ -4063,7 +4104,19 @@
                         this.marketWsConnected = !!this.hasDataAccess;
                         this.stopMarketFallbackPolling();
                         this.scheduleWsAuthRefresh();
-                        this.addLog('系统连接成功');
+                        // Keep ordering intuitive: replay historical logs first, then show "connected".
+                        this.wsPendingConnectLog = true;
+                        if (this.wsConnectLogTimer) {
+                            clearTimeout(this.wsConnectLogTimer);
+                            this.wsConnectLogTimer = null;
+                        }
+                        this.wsConnectLogTimer = setTimeout(() => {
+                            if (this.wsPendingConnectLog) {
+                                this.addLog('系统连接成功');
+                                this.wsPendingConnectLog = false;
+                            }
+                            this.wsConnectLogTimer = null;
+                        }, 1200);
                     };
                     
                     ws.onmessage = (event) => {
@@ -4088,6 +4141,11 @@
                         this.marketWsConnected = false;
                         this.marketWsConnecting = false;
                         this.logSocket = null;
+                        this.wsPendingConnectLog = false;
+                        if (this.wsConnectLogTimer) {
+                            clearTimeout(this.wsConnectLogTimer);
+                            this.wsConnectLogTimer = null;
+                        }
                         if (!wsOpened || (event && Number(event.code || 0) === 1008)) {
                             this.clearWsAuthTokenState();
                         }
@@ -4108,7 +4166,17 @@
                     if (!payload || !payload.event) return;
                     if (payload.event === 'log_history') {
                         const lines = Array.isArray(payload.lines) ? payload.lines : [];
+                        // Replace current panel with server snapshot to avoid duplicate history after reconnect.
+                        this.logs = [];
                         lines.forEach((line) => this.addLog(line));
+                        if (this.wsPendingConnectLog) {
+                            this.addLog('系统连接成功');
+                            this.wsPendingConnectLog = false;
+                        }
+                        if (this.wsConnectLogTimer) {
+                            clearTimeout(this.wsConnectLogTimer);
+                            this.wsConnectLogTimer = null;
+                        }
                         return;
                     }
                     if (payload.event === 'log_line') {
@@ -4184,7 +4252,7 @@
                 async refreshCurrentUserInfo() {
                     if (!this.deviceId) return;
                     try {
-                        const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
+                        const res = await fetch(this.authApiUrl('/login'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ device_id: this.deviceId })
@@ -4269,9 +4337,92 @@
                         });
                     }
                 },
+                parseRuntimeLogLine(input) {
+                    const raw = String(input ?? '').trim();
+                    const stripNestedPrefix = (text) => String(text || '')
+                        .replace(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?/, '')
+                        .replace(/^\[(\d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?/, '')
+                        .trim();
+                    const sanitizeReplayHint = (text) => {
+                        const rawText = String(text || '').trim();
+                        if (!rawText) return rawText;
+                        if (!/(命中复用策略|本次不重复执行|最近一次完成时间|已复用最近一次结果)/.test(rawText)) {
+                            return rawText;
+                        }
+                        const modeMatch = rawText.match(/\[分析\]\s*([^\s\[]+?)命中复用策略/);
+                        const modeName = modeMatch && modeMatch[1] ? modeMatch[1].trim() : '';
+                        return modeName
+                            ? `[分析] ${modeName}任务已受理，正在准备最新数据...`
+                            : '[分析] 任务已受理，正在准备最新数据...';
+                    };
+                    const fallback = {
+                        time: new Date().toLocaleTimeString(),
+                        msg: sanitizeReplayHint(raw)
+                    };
+                    if (!raw) return fallback;
+
+                    // Handle nested timestamp form:
+                    // [10:31:03] [2026-03-09 10:30:39] [INFO] ...
+                    let normalizedRaw = raw.replace(
+                        /^\[(\d{2}:\d{2}:\d{2})\]\s*(?=\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\]\s*(?:\[[^\]]+\]\s*)?)/,
+                        ''
+                    );
+
+                    let match = normalizedRaw.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?(.*)$/);
+                    if (match) {
+                        const hhmmss = match[1].slice(11);
+                        const level = String(match[2] || '').trim();
+                        const body = stripNestedPrefix(String(match[3] || '').trim());
+                        return {
+                            time: hhmmss || fallback.time,
+                            msg: sanitizeReplayHint(body ? (level ? `[${level}] ${body}` : body) : raw)
+                        };
+                    }
+
+                    match = normalizedRaw.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?(.*)$/);
+                    if (match) {
+                        let level = String(match[2] || '').trim();
+                        let body = stripNestedPrefix(String(match[3] || '').trim());
+                        if (/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(level)) {
+                            // If second token is full datetime, use it as real event time.
+                            const nestedRaw = `[${level}] ${String(match[3] || '').trim()}`;
+                            const nestedMatch = nestedRaw.match(/^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*(?:\[([^\]]+)\]\s*)?(.*)$/);
+                            if (nestedMatch) {
+                                const nestedLevel = String(nestedMatch[2] || '').trim();
+                                const nestedBody = stripNestedPrefix(String(nestedMatch[3] || '').trim());
+                                return {
+                                    time: nestedMatch[1].slice(11) || String(match[1] || fallback.time),
+                                    msg: sanitizeReplayHint(nestedBody ? (nestedLevel ? `[${nestedLevel}] ${nestedBody}` : nestedBody) : raw)
+                                };
+                            }
+                            return {
+                                time: level.slice(11) || String(match[1] || fallback.time),
+                                msg: sanitizeReplayHint(body || raw)
+                            };
+                        }
+                        return {
+                            time: String(match[1] || fallback.time),
+                            msg: sanitizeReplayHint(body ? (level ? `[${level}] ${body}` : body) : raw)
+                        };
+                    }
+
+                    // Last fallback: if message contains full datetime token, use it instead of "now".
+                    const embedded = normalizedRaw.match(/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/);
+                    if (embedded) {
+                        const body = stripNestedPrefix(normalizedRaw);
+                        return {
+                            time: embedded[1].slice(11) || fallback.time,
+                            msg: sanitizeReplayHint(body || raw)
+                        };
+                    }
+                    return {
+                        time: fallback.time,
+                        msg: sanitizeReplayHint(fallback.msg)
+                    };
+                },
                 addLog(msg) {
-                    const time = new Date().toLocaleTimeString();
-                    this.logs.push({ time, msg });
+                    const parsed = this.parseRuntimeLogLine(msg);
+                    this.logs.push({ time: parsed.time, msg: parsed.msg });
                     if (this.logs.length > 100) this.logs.shift();
                     // Auto scroll
                     this.$nextTick(() => {
@@ -5460,7 +5611,8 @@
                 this.loadNewsCache();
                 
                 // Init User
-                this.checkLogin().then(() => {
+                (async () => {
+                    await this.checkLogin();
                     if (this.deviceId && this.isRegisteredAccount) {
                         this.connectWebSocket();
                     }
@@ -5471,7 +5623,7 @@
                         localStorage.removeItem('sniper_open_subscription');
                         this.openSubscription();
                     }
-                });
+                })();
                 this.startUserTimers();
                 
                 this.globalAuthErrorHandler = (event) => this.handleGlobalAuthError(event);

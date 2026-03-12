@@ -3,12 +3,15 @@ import sys
 import re
 import shutil
 import json
+import os
 from datetime import datetime
 from pathlib import Path
 
 DEFAULT_OUTPUT_NAME = "frontend_split_package"
 DEFAULT_FRONTEND_VERSION = "v0.0.0"
 LOCAL_PROFILE_CONFIG_NAME = "package_frontend.local.conf"
+DEFAULT_AUTH_API_PREFIX_SOURCE = "manual"
+DEFAULT_AUTH_API_PREFIX_ENV_KEY = "AUTH_API_PREFIX"
 
 DEFAULT_PROFILE_CONFIG = {
     "last_env": "test",
@@ -17,12 +20,16 @@ DEFAULT_PROFILE_CONFIG = {
         "admin_path": "admin_qw128hddn21ohi",
         "admin_api_prefix": "/api/limit_admin_z68dqwu7wz9",
         "auth_api_prefix": "/api/auth",
+        "auth_api_prefix_source": DEFAULT_AUTH_API_PREFIX_SOURCE,
+        "auth_api_prefix_env_key": DEFAULT_AUTH_API_PREFIX_ENV_KEY,
     },
     "prod": {
         "api_base": "https://ztapi.zhangting.ai/",
         "admin_path": "admin_zyio32qwe19h",
         "admin_api_prefix": "/api/limit_ad21dq12_z68dqwu7wz9",
         "auth_api_prefix": "/api/auth",
+        "auth_api_prefix_source": DEFAULT_AUTH_API_PREFIX_SOURCE,
+        "auth_api_prefix_env_key": DEFAULT_AUTH_API_PREFIX_ENV_KEY,
     },
 }
 
@@ -68,6 +75,49 @@ def _normalize_auth_api_prefix(auth_api_prefix: str) -> str:
     if not re.match(r"^/[A-Za-z0-9/_-]+$", normalized):
         raise ValueError("认证 API 前缀只允许字母、数字、/、_、-")
     return normalized
+
+
+def _normalize_auth_api_prefix_source(source: str) -> str:
+    value = str(source or "").strip().lower()
+    if not value:
+        return DEFAULT_AUTH_API_PREFIX_SOURCE
+    if value in {"manual", "path", "fixed"}:
+        return "manual"
+    if value in {"env", "environment"}:
+        return "env"
+    raise ValueError("认证API前缀来源仅支持 manual 或 env")
+
+
+def _normalize_env_var_key(key: str) -> str:
+    value = str(key or "").strip()
+    if not value:
+        return DEFAULT_AUTH_API_PREFIX_ENV_KEY
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", value):
+        raise ValueError("环境变量名不合法")
+    return value
+
+
+def _resolve_auth_prefix_for_package(
+    auth_api_prefix: str,
+    source: str,
+    env_key: str,
+) -> tuple[str, str]:
+    mode = _normalize_auth_api_prefix_source(source)
+    var_name = _normalize_env_var_key(env_key)
+
+    if mode == "env":
+        env_val = str(os.getenv(var_name, "") or "").strip()
+        if env_val:
+            return _normalize_auth_api_prefix(env_val), f"env:{var_name}"
+        manual_fallback = str(auth_api_prefix or "").strip()
+        if manual_fallback:
+            return _normalize_auth_api_prefix(manual_fallback), f"manual_fallback:{var_name}"
+        return "", f"default:/api/auth (missing env {var_name})"
+
+    manual = str(auth_api_prefix or "").strip()
+    if manual:
+        return _normalize_auth_api_prefix(manual), "manual"
+    return "", "default:/api/auth"
 
 
 def _inject_html_runtime_vars(
@@ -184,6 +234,8 @@ def package_frontend(
     admin_path: str = "admin",
     admin_api_prefix: str = "",
     auth_api_prefix: str = "",
+    auth_api_prefix_source: str = DEFAULT_AUTH_API_PREFIX_SOURCE,
+    auth_api_prefix_env_key: str = DEFAULT_AUTH_API_PREFIX_ENV_KEY,
     include_deploy_readme: bool = False,
 ) -> None:
     base_dir = Path(__file__).resolve().parent.parent
@@ -204,6 +256,11 @@ def package_frontend(
 
     print("[进度 3/4] 注入环境配置...")
     _apply_admin_path(output_dir, admin_path)
+    resolved_auth_api_prefix, auth_prefix_from = _resolve_auth_prefix_for_package(
+        auth_api_prefix=auth_api_prefix,
+        source=auth_api_prefix_source,
+        env_key=auth_api_prefix_env_key,
+    )
 
     public_html_targets = [
         output_dir / "index.html",
@@ -211,10 +268,10 @@ def package_frontend(
         output_dir / "help.html",
     ]
     for html in public_html_targets:
-        _inject_html_runtime_vars(html, api_base, "", auth_api_prefix)
+        _inject_html_runtime_vars(html, api_base, "", resolved_auth_api_prefix)
 
     admin_html = output_dir / admin_path / "index.html"
-    _inject_html_runtime_vars(admin_html, api_base, admin_api_prefix, auth_api_prefix)
+    _inject_html_runtime_vars(admin_html, api_base, admin_api_prefix, resolved_auth_api_prefix)
 
     if include_deploy_readme:
         _write_deploy_readme(output_dir)
@@ -233,7 +290,8 @@ def package_frontend(
     print(f"后端地址：{api_base or '（自动识别默认逻辑）'}")
     print(f"后台目录：{admin_path}")
     print(f"管理员API前缀：{admin_api_prefix or '（自动推断默认逻辑）'}")
-    print(f"认证API前缀：{auth_api_prefix or '（前端默认 /api/auth）'}")
+    print(f"认证API前缀：{resolved_auth_api_prefix or '（前端默认 /api/auth）'}")
+    print(f"认证前缀来源：{auth_prefix_from}")
     print("=" * 60)
 
 
@@ -248,12 +306,22 @@ def _run_profile_mode_loop(include_deploy_readme: bool = False) -> int:
 
     while True:
         try:
-            raw_api_base, raw_admin_path, raw_admin_api_prefix, raw_auth_api_prefix, raw_output_name = _collect_profile_mode_inputs()
+            (
+                raw_api_base,
+                raw_admin_path,
+                raw_admin_api_prefix,
+                raw_auth_api_prefix,
+                raw_auth_api_prefix_source,
+                raw_auth_api_prefix_env_key,
+                raw_output_name,
+            ) = _collect_profile_mode_inputs()
 
             normalized = _normalize_api_base(raw_api_base)
             normalized_admin_path = _normalize_admin_path(raw_admin_path)
             normalized_admin_api_prefix = _normalize_admin_api_prefix(raw_admin_api_prefix)
-            normalized_auth_api_prefix = _normalize_auth_api_prefix(raw_auth_api_prefix)
+            normalized_auth_api_prefix = _normalize_auth_api_prefix(raw_auth_api_prefix) if str(raw_auth_api_prefix or "").strip() else ""
+            normalized_auth_api_prefix_source = _normalize_auth_api_prefix_source(raw_auth_api_prefix_source)
+            normalized_auth_api_prefix_env_key = _normalize_env_var_key(raw_auth_api_prefix_env_key)
 
             package_frontend(
                 api_base=normalized,
@@ -261,6 +329,8 @@ def _run_profile_mode_loop(include_deploy_readme: bool = False) -> int:
                 admin_path=normalized_admin_path,
                 admin_api_prefix=normalized_admin_api_prefix,
                 auth_api_prefix=normalized_auth_api_prefix,
+                auth_api_prefix_source=normalized_auth_api_prefix_source,
+                auth_api_prefix_env_key=normalized_auth_api_prefix_env_key,
                 include_deploy_readme=bool(include_deploy_readme),
             )
         except Exception as e:
@@ -307,6 +377,19 @@ def parse_args() -> argparse.Namespace:
         help="认证 API 前缀，示例：/api/auth_xxx；留空使用 /api/auth",
     )
     parser.add_argument(
+        "--auth-api-prefix-source",
+        dest="auth_api_prefix_source",
+        default=DEFAULT_AUTH_API_PREFIX_SOURCE,
+        choices=["manual", "env"],
+        help="认证前缀来源：manual=使用 --auth-api-prefix；env=从环境变量读取",
+    )
+    parser.add_argument(
+        "--auth-api-prefix-env-key",
+        dest="auth_api_prefix_env_key",
+        default=DEFAULT_AUTH_API_PREFIX_ENV_KEY,
+        help=f"当来源为 env 时读取的环境变量名（默认 {DEFAULT_AUTH_API_PREFIX_ENV_KEY}）",
+    )
+    parser.add_argument(
         "--interactive",
         dest="interactive",
         action="store_true",
@@ -334,13 +417,14 @@ def _prompt_line(prompt: str) -> str:
         return ""
 
 
-def _collect_interactive_inputs() -> tuple[str, str, str, str, str]:
+def _collect_interactive_inputs() -> tuple[str, str, str, str, str, str, str]:
     print("=" * 60)
     print("前端分离打包交互模式")
     print("- 后端 API 地址：留空则使用默认自动识别逻辑")
     print("- 后台目录：留空则使用 admin")
     print("- 管理员 API 前缀：留空按默认逻辑")
     print("- 认证 API 前缀：留空使用 /api/auth")
+    print("- 认证前缀来源：手动路径(manual) 或 环境变量(env)")
     print(f"- 输出包名称：留空则使用 {DEFAULT_OUTPUT_NAME}")
     print("=" * 60)
 
@@ -348,8 +432,18 @@ def _collect_interactive_inputs() -> tuple[str, str, str, str, str]:
     admin_path = _prompt_line("请输入后台目录名（默认 admin）：").strip() or "admin"
     admin_api_prefix = _prompt_line("请输入管理员 API 前缀（可留空）：").strip()
     auth_api_prefix = _prompt_line("请输入认证 API 前缀（可留空，默认 /api/auth）：").strip()
+    auth_api_prefix_source = _prompt_line("认证前缀来源（manual/env，默认 manual）：").strip() or DEFAULT_AUTH_API_PREFIX_SOURCE
+    auth_api_prefix_env_key = _prompt_line(f"认证前缀环境变量名（默认 {DEFAULT_AUTH_API_PREFIX_ENV_KEY}）：").strip() or DEFAULT_AUTH_API_PREFIX_ENV_KEY
     output_name = _prompt_line(f"请输入输出压缩包名（默认 {DEFAULT_OUTPUT_NAME}）：").strip() or DEFAULT_OUTPUT_NAME
-    return api_base, admin_path, admin_api_prefix, auth_api_prefix, output_name
+    return (
+        api_base,
+        admin_path,
+        admin_api_prefix,
+        auth_api_prefix,
+        auth_api_prefix_source,
+        auth_api_prefix_env_key,
+        output_name,
+    )
 
 
 def _profile_config_path() -> Path:
@@ -375,7 +469,14 @@ def _load_profile_config() -> dict:
             for env_key in ("test", "prod"):
                 env_loaded = loaded.get(env_key, {})
                 if isinstance(env_loaded, dict):
-                    for k in ("api_base", "admin_path", "admin_api_prefix", "auth_api_prefix"):
+                    for k in (
+                        "api_base",
+                        "admin_path",
+                        "admin_api_prefix",
+                        "auth_api_prefix",
+                        "auth_api_prefix_source",
+                        "auth_api_prefix_env_key",
+                    ):
                         v = str(env_loaded.get(k, cfg[env_key][k]) or cfg[env_key][k]).strip()
                         if v:
                             cfg[env_key][k] = v
@@ -412,12 +513,16 @@ def _load_profile_config() -> dict:
             "admin_path": "TEST_ADMIN_PATH",
             "admin_api_prefix": "TEST_ADMIN_API_PREFIX",
             "auth_api_prefix": "TEST_AUTH_API_PREFIX",
+            "auth_api_prefix_source": "TEST_AUTH_API_PREFIX_SOURCE",
+            "auth_api_prefix_env_key": "TEST_AUTH_API_PREFIX_ENV_KEY",
         },
         "prod": {
             "api_base": "PROD_API_BASE",
             "admin_path": "PROD_ADMIN_PATH",
             "admin_api_prefix": "PROD_ADMIN_API_PREFIX",
             "auth_api_prefix": "PROD_AUTH_API_PREFIX",
+            "auth_api_prefix_source": "PROD_AUTH_API_PREFIX_SOURCE",
+            "auth_api_prefix_env_key": "PROD_AUTH_API_PREFIX_ENV_KEY",
         },
     }
     for env_key, m in mapping.items():
@@ -437,12 +542,16 @@ def _save_profile_config(cfg: dict) -> None:
             "admin_path": str((cfg.get("test", {}) or {}).get("admin_path", DEFAULT_PROFILE_CONFIG["test"]["admin_path"]) or DEFAULT_PROFILE_CONFIG["test"]["admin_path"]).strip(),
             "admin_api_prefix": str((cfg.get("test", {}) or {}).get("admin_api_prefix", DEFAULT_PROFILE_CONFIG["test"]["admin_api_prefix"]) or DEFAULT_PROFILE_CONFIG["test"]["admin_api_prefix"]).strip(),
             "auth_api_prefix": str((cfg.get("test", {}) or {}).get("auth_api_prefix", DEFAULT_PROFILE_CONFIG["test"]["auth_api_prefix"]) or DEFAULT_PROFILE_CONFIG["test"]["auth_api_prefix"]).strip(),
+            "auth_api_prefix_source": str((cfg.get("test", {}) or {}).get("auth_api_prefix_source", DEFAULT_PROFILE_CONFIG["test"]["auth_api_prefix_source"]) or DEFAULT_PROFILE_CONFIG["test"]["auth_api_prefix_source"]).strip(),
+            "auth_api_prefix_env_key": str((cfg.get("test", {}) or {}).get("auth_api_prefix_env_key", DEFAULT_PROFILE_CONFIG["test"]["auth_api_prefix_env_key"]) or DEFAULT_PROFILE_CONFIG["test"]["auth_api_prefix_env_key"]).strip(),
         },
         "prod": {
             "api_base": str((cfg.get("prod", {}) or {}).get("api_base", DEFAULT_PROFILE_CONFIG["prod"]["api_base"]) or DEFAULT_PROFILE_CONFIG["prod"]["api_base"]).strip(),
             "admin_path": str((cfg.get("prod", {}) or {}).get("admin_path", DEFAULT_PROFILE_CONFIG["prod"]["admin_path"]) or DEFAULT_PROFILE_CONFIG["prod"]["admin_path"]).strip(),
             "admin_api_prefix": str((cfg.get("prod", {}) or {}).get("admin_api_prefix", DEFAULT_PROFILE_CONFIG["prod"]["admin_api_prefix"]) or DEFAULT_PROFILE_CONFIG["prod"]["admin_api_prefix"]).strip(),
             "auth_api_prefix": str((cfg.get("prod", {}) or {}).get("auth_api_prefix", DEFAULT_PROFILE_CONFIG["prod"]["auth_api_prefix"]) or DEFAULT_PROFILE_CONFIG["prod"]["auth_api_prefix"]).strip(),
+            "auth_api_prefix_source": str((cfg.get("prod", {}) or {}).get("auth_api_prefix_source", DEFAULT_PROFILE_CONFIG["prod"]["auth_api_prefix_source"]) or DEFAULT_PROFILE_CONFIG["prod"]["auth_api_prefix_source"]).strip(),
+            "auth_api_prefix_env_key": str((cfg.get("prod", {}) or {}).get("auth_api_prefix_env_key", DEFAULT_PROFILE_CONFIG["prod"]["auth_api_prefix_env_key"]) or DEFAULT_PROFILE_CONFIG["prod"]["auth_api_prefix_env_key"]).strip(),
         },
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -464,7 +573,7 @@ def _prompt_keep_value(prompt: str, current: str) -> str:
     return entered if entered else current
 
 
-def _collect_profile_mode_inputs() -> tuple[str, str, str, str, str]:
+def _collect_profile_mode_inputs() -> tuple[str, str, str, str, str, str, str]:
     cfg = _load_profile_config()
     last_env = str(cfg.get("last_env", "test") or "test").strip().lower()
     if last_env not in {"test", "prod"}:
@@ -501,6 +610,14 @@ def _collect_profile_mode_inputs() -> tuple[str, str, str, str, str]:
         env_cfg.get("auth_api_prefix", DEFAULT_PROFILE_CONFIG[env_key]["auth_api_prefix"])
         or DEFAULT_PROFILE_CONFIG[env_key]["auth_api_prefix"]
     ).strip()
+    auth_api_prefix_source = str(
+        env_cfg.get("auth_api_prefix_source", DEFAULT_PROFILE_CONFIG[env_key]["auth_api_prefix_source"])
+        or DEFAULT_PROFILE_CONFIG[env_key]["auth_api_prefix_source"]
+    ).strip()
+    auth_api_prefix_env_key = str(
+        env_cfg.get("auth_api_prefix_env_key", DEFAULT_PROFILE_CONFIG[env_key]["auth_api_prefix_env_key"])
+        or DEFAULT_PROFILE_CONFIG[env_key]["auth_api_prefix_env_key"]
+    ).strip()
 
     print("-" * 60)
     print(f"当前环境：{'测试' if env_key == 'test' else '正式'}")
@@ -508,6 +625,8 @@ def _collect_profile_mode_inputs() -> tuple[str, str, str, str, str]:
     print(f"ADMIN_PATH        = {admin_path}")
     print(f"ADMIN_API_PREFIX  = {admin_api_prefix}")
     print(f"AUTH_API_PREFIX   = {auth_api_prefix}")
+    print(f"AUTH_PREFIX_SOURCE= {auth_api_prefix_source}")
+    print(f"AUTH_PREFIX_ENV   = {auth_api_prefix_env_key}")
     print("-" * 60)
 
     modify = _prompt_line("是否修改当前环境配置？[y/N]：").strip().lower()
@@ -516,16 +635,28 @@ def _collect_profile_mode_inputs() -> tuple[str, str, str, str, str]:
         admin_path = _prompt_keep_value("后台目录", admin_path)
         admin_api_prefix = _prompt_keep_value("管理员 API 前缀", admin_api_prefix)
         auth_api_prefix = _prompt_keep_value("认证 API 前缀", auth_api_prefix)
+        auth_api_prefix_source = _prompt_keep_value("认证前缀来源(manual/env)", auth_api_prefix_source)
+        auth_api_prefix_env_key = _prompt_keep_value("认证前缀环境变量名", auth_api_prefix_env_key)
 
     cfg.setdefault(env_key, {})
     cfg[env_key]["api_base"] = api_base
     cfg[env_key]["admin_path"] = admin_path
     cfg[env_key]["admin_api_prefix"] = admin_api_prefix
     cfg[env_key]["auth_api_prefix"] = auth_api_prefix
+    cfg[env_key]["auth_api_prefix_source"] = auth_api_prefix_source
+    cfg[env_key]["auth_api_prefix_env_key"] = auth_api_prefix_env_key
     cfg["last_env"] = env_key
     _save_profile_config(cfg)
     print(f"配置已保存到：{_profile_config_path()}")
-    return api_base, admin_path, admin_api_prefix, auth_api_prefix, DEFAULT_OUTPUT_NAME
+    return (
+        api_base,
+        admin_path,
+        admin_api_prefix,
+        auth_api_prefix,
+        auth_api_prefix_source,
+        auth_api_prefix_env_key,
+        DEFAULT_OUTPUT_NAME,
+    )
 
 
 if __name__ == "__main__":
@@ -536,18 +667,30 @@ if __name__ == "__main__":
     if profile_mode:
         sys.exit(_run_profile_mode_loop(include_deploy_readme=bool(args.include_deploy_readme)))
     elif interactive_mode:
-        raw_api_base, raw_admin_path, raw_admin_api_prefix, raw_auth_api_prefix, raw_output_name = _collect_interactive_inputs()
+        (
+            raw_api_base,
+            raw_admin_path,
+            raw_admin_api_prefix,
+            raw_auth_api_prefix,
+            raw_auth_api_prefix_source,
+            raw_auth_api_prefix_env_key,
+            raw_output_name,
+        ) = _collect_interactive_inputs()
     else:
         raw_api_base = args.api_base
         raw_admin_path = args.admin_path
         raw_admin_api_prefix = args.admin_api_prefix
         raw_auth_api_prefix = args.auth_api_prefix
+        raw_auth_api_prefix_source = args.auth_api_prefix_source
+        raw_auth_api_prefix_env_key = args.auth_api_prefix_env_key
         raw_output_name = args.output_name
 
     normalized = _normalize_api_base(raw_api_base)
     normalized_admin_path = _normalize_admin_path(raw_admin_path)
     normalized_admin_api_prefix = _normalize_admin_api_prefix(raw_admin_api_prefix)
-    normalized_auth_api_prefix = _normalize_auth_api_prefix(raw_auth_api_prefix)
+    normalized_auth_api_prefix = _normalize_auth_api_prefix(raw_auth_api_prefix) if str(raw_auth_api_prefix or "").strip() else ""
+    normalized_auth_api_prefix_source = _normalize_auth_api_prefix_source(raw_auth_api_prefix_source)
+    normalized_auth_api_prefix_env_key = _normalize_env_var_key(raw_auth_api_prefix_env_key)
 
     package_frontend(
         api_base=normalized,
@@ -555,5 +698,7 @@ if __name__ == "__main__":
         admin_path=normalized_admin_path,
         admin_api_prefix=normalized_admin_api_prefix,
         auth_api_prefix=normalized_auth_api_prefix,
+        auth_api_prefix_source=normalized_auth_api_prefix_source,
+        auth_api_prefix_env_key=normalized_auth_api_prefix_env_key,
         include_deploy_readme=bool(args.include_deploy_readme),
     )

@@ -1,4 +1,4 @@
-import akshare as ak
+﻿import akshare as ak
 import pandas as pd
 import os
 import json
@@ -14,6 +14,7 @@ DATA_DIR = BASE_DIR / "data"
 KLINE_DIR = DATA_DIR / "kline_cache"
 LHB_FILE = DATA_DIR / "lhb_history.csv"
 SEATS_FILE = DATA_DIR / "vip_seats.json"
+KLINE_CACHE_STATE_FILE = DATA_DIR / "kline_cache_state.json"
 
 # Ensure directories exist
 DATA_DIR.mkdir(exist_ok=True)
@@ -64,7 +65,12 @@ class LHBManager:
         self._akshare_request_lock = threading.Lock()
         self._akshare_last_request_ts = 0.0
         self._akshare_min_interval_sec = 1.2
+        self._kline_cache_state = {"last_trade_date": ""}
+        self._kline_cleanup_lock = threading.Lock()
+        self._kline_cleanup_last_check_ts = 0.0
+        self._kline_cleanup_min_check_sec = 300
         self.load_config()
+        self._load_kline_cache_state()
         self.load_hot_money_map()
         self.load_vip_seats()
 
@@ -107,7 +113,7 @@ class LHBManager:
             "sync_datetime": sync_dt.strftime("%Y-%m-%d %H:%M:%S"),
             "before_sync_time": bool(before_sync_time),
             "today_has_data": bool(today_has_data),
-            "message": f"今日龙虎榜数据预计 {sync_time} 后同步，请稍后查看。" if (before_sync_time and not today_has_data) else "",
+            "message": f"\u4eca\u65e5\u9f99\u864e\u699c\u6570\u636e\u9884\u8ba1 {sync_time} \u540e\u540c\u6b65\uff0c\u8bf7\u7a0d\u540e\u67e5\u770b\u3002" if (before_sync_time and not today_has_data) else "",
         }
 
     def _throttle_akshare_request(self, min_interval_sec=None):
@@ -162,7 +168,7 @@ class LHBManager:
         name = self.hot_money_map.get(seat_name)
         if name: return name
         
-        # 2. 模糊匹配 (关键字) - 增加长度保护，防止匹配单个字
+        # 2. 模糊匹配（关键词）- 增加长度保护，防止误匹配单个字
         for k, v in self.hot_money_map.items():
             k_clean = k.strip()
             if len(k_clean) > 1 and k_clean in seat_name:
@@ -188,6 +194,102 @@ class LHBManager:
         config_path = DATA_DIR / "lhb_config.json"
         with open(config_path, 'w', encoding='utf-8') as f:
             json.dump(self.config, f, indent=2, ensure_ascii=False)
+
+    def _load_kline_cache_state(self):
+        if not KLINE_CACHE_STATE_FILE.exists():
+            self._kline_cache_state = {"last_trade_date": ""}
+            return
+        try:
+            with open(KLINE_CACHE_STATE_FILE, "r", encoding="utf-8") as f:
+                raw = json.load(f)
+            if isinstance(raw, dict):
+                self._kline_cache_state = {
+                    "last_trade_date": str(raw.get("last_trade_date", "") or "").strip(),
+                }
+                return
+        except Exception:
+            pass
+        self._kline_cache_state = {"last_trade_date": ""}
+
+    def _save_kline_cache_state(self):
+        try:
+            with open(KLINE_CACHE_STATE_FILE, "w", encoding="utf-8") as f:
+                json.dump(self._kline_cache_state, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+
+    def _resolve_latest_trade_date(self) -> str:
+        today = datetime.now().date()
+        start = (today - timedelta(days=45)).strftime("%Y-%m-%d")
+        end = today.strftime("%Y-%m-%d")
+        dates = []
+        try:
+            dates = self.get_trade_dates_between(start, end) or []
+        except Exception:
+            dates = []
+
+        valid = []
+        for item in dates:
+            text = str(item or "").strip()[:10]
+            if not text:
+                continue
+            try:
+                dt = datetime.strptime(text, "%Y-%m-%d").date()
+            except Exception:
+                continue
+            if dt <= today:
+                valid.append(dt)
+
+        if valid:
+            return max(valid).strftime("%Y-%m-%d")
+
+        # Fallback: weekday-only heuristic when calendar service fails.
+        fallback = today
+        while fallback.weekday() >= 5:
+            fallback = fallback - timedelta(days=1)
+        return fallback.strftime("%Y-%m-%d")
+
+    def _cleanup_intraday_cache_by_trade_day(self):
+        now_ts = time.time()
+        if now_ts - self._kline_cleanup_last_check_ts < self._kline_cleanup_min_check_sec:
+            return
+
+        with self._kline_cleanup_lock:
+            now_ts = time.time()
+            if now_ts - self._kline_cleanup_last_check_ts < self._kline_cleanup_min_check_sec:
+                return
+            self._kline_cleanup_last_check_ts = now_ts
+
+            latest_trade_date = self._resolve_latest_trade_date()
+            if not latest_trade_date:
+                return
+
+            last_trade_date = str((self._kline_cache_state or {}).get("last_trade_date", "") or "").strip()
+            if latest_trade_date == last_trade_date:
+                return
+
+            removed = 0
+            try:
+                for file_path in KLINE_DIR.glob("*.csv"):
+                    stem = str(file_path.stem or "")
+                    if "_" not in stem:
+                        continue
+                    maybe_date = stem.rsplit("_", 1)[-1]
+                    if maybe_date and maybe_date != latest_trade_date:
+                        try:
+                            file_path.unlink()
+                            removed += 1
+                        except Exception:
+                            continue
+            except Exception:
+                pass
+
+            self._kline_last_fetch_ts = {}
+            self._kline_last_attempt_ts = {}
+            self._kline_cache_state["last_trade_date"] = latest_trade_date
+            self._save_kline_cache_state()
+            if removed > 0:
+                print(f"[龙虎榜] 分时缓存按交易日清理完成: latest={latest_trade_date}, removed={removed}")
 
     def update_settings(self, enabled, days, min_amount, sync_time=None):
         if sync_time is not None:
@@ -290,14 +392,14 @@ class LHBManager:
             print(msg)
 
         if self.is_syncing:
-            log("[龙虎榜] 同步任务正在进行中，请勿重复操作。")
+            log("当前同步任务正在进行中，请勿重复操作。")
             return
 
         # Always reload config before sync to ensure we have latest settings (e.g. from other workers)
         self.load_config()
 
         if not self.config['enabled'] and not force_dates:
-            log("[龙虎榜] 龙虎榜功能未开启，跳过更新。")
+            log("龙虎榜功能未开启，跳过更新。")
             return
 
         self.is_syncing = True
@@ -315,13 +417,13 @@ class LHBManager:
             
             if force_dates:
                 trade_dates = forced_trade_dates
-                log(f"[龙虎榜] 使用范围内缺失日期补齐，同步 {len(trade_dates)} 个交易日。")
+                log(f"使用指定范围补齐缺失日期，同步 {len(trade_dates)} 个交易日。")
                 if not trade_dates:
-                    log("[龙虎榜] 范围内无有效交易日，跳过同步。")
+                    log("范围内没有有效交易日，跳过同步。")
                     return
             else:
                 desc = "最近1个" if days == 1 else f"最近 {days} 个"
-                log(f"[龙虎榜] 开始同步{desc}交易日的龙虎榜数据...")
+                log(f"开始同步 {desc} 交易日的龙虎榜数据...")
 
                 # 1. Get Trading Dates
                 end_date = datetime.now()
@@ -364,7 +466,7 @@ class LHBManager:
                 if check_date == now.date():
                     sync_dt = self._get_sync_datetime_for_date(check_date)
                     if now < sync_dt:
-                        log(f"[龙虎榜] 今日({date_iso})数据尚未到同步时间（{self._get_sync_time()}后），跳过。")
+                        log(f"今日({date_iso})数据尚未到同步时间（{self._get_sync_time()}后），跳过。")
                         continue
                 
                 # Check if we already have data for this date (Optimization)
@@ -388,7 +490,7 @@ class LHBManager:
                 log(f"[龙虎榜] 正在抓取 {date_iso} 龙虎榜数据...")
                 
                 try:
-                    # akshare: stock_lhb_detail_em (东方财富)
+                    # akshare: stock_lhb_detail_em (涓滄柟璐㈠瘜)
                     self._throttle_akshare_request()
                     lhb_df = ak.stock_lhb_detail_em(start_date=date_str, end_date=date_str)
                     if lhb_df is None or lhb_df.empty:
@@ -396,12 +498,12 @@ class LHBManager:
                         continue
                     
                     # Filter by buy amount
-                    potential_stocks = lhb_df[lhb_df['龙虎榜买入额'] > min_amount]
+                    potential_stocks = lhb_df[lhb_df["龙虎榜买入额"] > min_amount]
                     log(f"  - 发现 {len(potential_stocks)} 只符合金额条件的个股")
                     
                     for _, row in potential_stocks.iterrows():
-                        stock_code = str(row['代码']).zfill(6)
-                        stock_name = row['名称']
+                        stock_code = str(row["代码"]).zfill(6)
+                        stock_name = row["名称"]
                         
                         # [Modified] Filter: Only keep Main Board (00/60) and ChiNext (30)
                         # Skip STAR (68) and BSE (8/4/9)
@@ -429,20 +531,20 @@ class LHBManager:
                                 # 1: Seat Name, 2: Buy Amount, 4: Sell Amount
                                 # Use rename to avoid SettingWithCopy warning on values
                                 new_cols = list(detail_df.columns)
-                                new_cols[1] = '营业部名称'
-                                new_cols[2] = '买入金额'
-                                new_cols[4] = '卖出金额'
+                                new_cols[1] = "营业部名称"
+                                new_cols[2] = "买入金额"
+                                new_cols[4] = "卖出金额"
                                 detail_df.columns = new_cols
 
                             # Filter seats
                             # Columns: 序号, 营业部名称, 买入金额, 卖出金额, 净买入金额...
                             # Use a lower threshold for individual seats (e.g. 10M) to capture more Hot Money
                             seat_min_amount = 10000000 
-                            buy_seats = detail_df[detail_df['买入金额'] > seat_min_amount]
+                            buy_seats = detail_df[detail_df["买入金额"] > seat_min_amount]
                             
                             if not buy_seats.empty:
                                 display_names = []
-                                for s in buy_seats['营业部名称'].tolist():
+                                for s in buy_seats["营业部名称"].tolist():
                                     # Check for Hot Money match
                                     hm_name = self.hot_money_map.get(s)
                                     if not hm_name:
@@ -455,12 +557,15 @@ class LHBManager:
                                     if hm_name:
                                         display_names.append(f"{hm_name}")
                                     else:
-                                        display_names.append(s.replace('证券股份有限公司', '').replace('有限责任公司', ''))
+                                        display_names.append(
+                                            s.replace("证券股份有限公司", "").replace("有限责任公司", "")
+                                        )
                                         
-                                if logger: logger(f"  + {stock_name}({stock_code}): 发现 {len(buy_seats)} 个席位 {display_names}")
+                                if logger:
+                                    logger(f"  + {stock_name}({stock_code}): 发现 {len(buy_seats)} 个席位 {display_names}")
                             
                             for _, seat in buy_seats.iterrows():
-                                seat_name = seat['营业部名称']
+                                seat_name = seat["营业部名称"]
                                 hm_name = self.hot_money_map.get(seat_name)
                                 if not hm_name:
                                     for k, v in self.hot_money_map.items():
@@ -473,13 +578,14 @@ class LHBManager:
                                     'stock_code': stock_code,
                                     'stock_name': stock_name,
                                     'buyer_seat_name': seat_name,
-                                    'buy_amount': seat['买入金额'],
-                                    'sell_amount': seat['卖出金额'],
+                                    'buy_amount': seat["买入金额"],
+                                    'sell_amount': seat["卖出金额"],
                                     'hot_money': hm_name if hm_name else ''
                                 })
                                 
                         except Exception as e:
-                            if logger: logger(f"  !获取股票详情失败 {stock_code}: {e}")
+                            if logger:
+                                logger(f"  !获取股票详情失败 {stock_code}: {e}")
                             # pass
                         
                         # Sleep between stocks to avoid ban
@@ -506,7 +612,8 @@ class LHBManager:
                             
                             # Save to disk
                             combined_df.to_csv(LHB_FILE, index=False)
-                            if logger: logger(f"[龙虎榜] 已保存 {date_iso} 数据 (累计 {len(combined_df)} 条)")
+                            if logger:
+                                logger(f"[龙虎榜] 已保存 {date_iso} 数据 (累计 {len(combined_df)} 条)")
                             
                             # Update in-memory existing_df for next iteration
                             existing_df = combined_df
@@ -520,7 +627,7 @@ class LHBManager:
                             if logger: logger(f"[龙虎榜] 保存数据失败 {date_iso}: {save_err}")
 
                 except Exception as e:
-                    if logger: logger(f"[龙虎榜]获取 {date_str} 数据失败: {e}")
+                    if logger: logger(f"[龙虎榜] 获取 {date_str} 数据失败: {e}")
 
             # 4. Final Cleanup and K-line Download
             if not existing_df.empty:
@@ -542,7 +649,8 @@ class LHBManager:
                 self.download_kline_data(existing_df, logger)
                 
             else:
-                if logger: logger("[龙虎榜] 无数据。")
+                if logger:
+                    logger("[龙虎榜] 无数据。")
             self.config["last_update"] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             self.save_config()
         finally:
@@ -625,61 +733,93 @@ class LHBManager:
 
     def _fetch_kline_via_biying_5min(self, code: str, date_str: str, is_today: bool = False):
         try:
+            clean_code = "".join(filter(str.isdigit, str(code or "")))
+            if len(clean_code) != 6:
+                return None
+
             cfg = data_provider._get_biying_config()
             if not data_provider._biying_enabled(cfg):
                 return None
 
-            clean_code = "".join(filter(str.isdigit, str(code or "")))
-            if len(clean_code) != 6:
-                return None
-            symbol = data_provider._normalize_biying_symbol(clean_code)
-            if not symbol:
-                return None
-
-            date_compact = str(date_str or "").replace("-", "")
-            payload = data_provider._biying_request_json(
-                f"/hsstock/history/{symbol}/5/n/{cfg['license_key']}",
-                params={"st": date_compact, "et": date_compact, "lt": 360},
-                timeout=8,
+            # Exact-date pull via Biying history minute endpoint to guarantee
+            # previous-trade-day fallback in off-session.
+            base_df = data_provider._fetch_intraday_data_biying_for_trade_date(
+                clean_code,
+                date_str,
+                include_latest=bool(is_today),
+                force_refresh=False,
             )
-            rows = data_provider._parse_biying_kline_rows(payload) or []
-
-            if not rows:
+            if base_df is None or base_df.empty:
+                # Legacy fallback: broad intraday snapshot.
+                base_df = data_provider._fetch_intraday_data_biying(clean_code)
+            if base_df is None or base_df.empty:
                 return None
 
-            selected = []
-            for row in rows:
-                row_date = str(row.get("date", "") or "")[:10]
-                if row_date == date_str:
-                    selected.append(row)
-            if not selected and is_today:
-                selected = rows
-            if not selected:
+            work_df = base_df.copy()
+            time_col = ""
+            for col in ("time", "day", "date", "datetime", "trade_time", "t"):
+                if col in work_df.columns:
+                    time_col = col
+                    break
+            if not time_col:
+                return None
+            if "close" not in work_df.columns:
                 return None
 
-            def _f(v):
-                try:
-                    return float(v or 0)
-                except Exception:
-                    return 0.0
+            work_df[time_col] = work_df[time_col].astype(str).str.strip()
+            selected = pd.DataFrame()
+            target_date = str(date_str or "").strip()
+            if target_date:
+                parsed_ts = pd.to_datetime(work_df[time_col], errors="coerce")
+                mask = parsed_ts.dt.strftime("%Y-%m-%d") == target_date
+                selected = work_df.loc[mask].copy()
+                if selected.empty:
+                    selected = work_df[work_df[time_col].str.contains(target_date, na=False)].copy()
+            else:
+                selected = work_df.copy()
 
-            out = []
-            for row in selected:
-                out.append({
-                    "时间": str(row.get("time", "") or ""),
-                    "开盘": _f(row.get("open", 0)),
-                    "收盘": _f(row.get("close", 0)),
-                    "最高": _f(row.get("high", 0)),
-                    "最低": _f(row.get("low", 0)),
-                    "成交量": _f(row.get("volume", 0)),
-                    "成交额": _f(row.get("amount", 0)),
-                })
+            if selected.empty and is_today:
+                selected = work_df.copy()
+            if selected.empty:
+                return None
 
-            kdf = pd.DataFrame(out)
+            selected["time"] = selected[time_col].astype(str).str.strip()
+            selected["close"] = pd.to_numeric(selected["close"], errors="coerce")
+            selected = selected.dropna(subset=["close"])
+            if selected.empty:
+                return None
+
+            if "open" in selected.columns:
+                selected["open"] = pd.to_numeric(selected["open"], errors="coerce")
+            else:
+                selected["open"] = selected["close"]
+            if "high" in selected.columns:
+                selected["high"] = pd.to_numeric(selected["high"], errors="coerce")
+            else:
+                selected["high"] = selected["close"]
+            if "low" in selected.columns:
+                selected["low"] = pd.to_numeric(selected["low"], errors="coerce")
+            else:
+                selected["low"] = selected["close"]
+            if "volume" in selected.columns:
+                selected["volume"] = pd.to_numeric(selected["volume"], errors="coerce")
+            else:
+                selected["volume"] = 0.0
+            if "amount" in selected.columns:
+                selected["amount"] = pd.to_numeric(selected["amount"], errors="coerce")
+            else:
+                selected["amount"] = 0.0
+
+            selected["open"] = selected["open"].fillna(selected["close"])
+            selected["high"] = selected["high"].fillna(selected[["open", "close"]].max(axis=1))
+            selected["low"] = selected["low"].fillna(selected[["open", "close"]].min(axis=1))
+            selected["volume"] = selected["volume"].fillna(0.0)
+            selected["amount"] = selected["amount"].fillna(0.0)
+
+            kdf = selected[["time", "open", "close", "high", "low", "volume", "amount"]].copy()
             if kdf.empty:
                 return None
-            if "时间" in kdf.columns:
-                kdf = kdf.sort_values("时间").reset_index(drop=True)
+            kdf = kdf.sort_values("time").reset_index(drop=True)
             return kdf
         except Exception:
             return None
@@ -693,7 +833,8 @@ class LHBManager:
         # Unique stock-date combinations
         tasks = df[['stock_code', 'trade_date']].drop_duplicates()
         
-        if logger: logger(f"[龙虎榜] 正在同步 {len(tasks)} 个 K线数据文件...")
+        if logger:
+            logger(f"[龙虎榜] 正在同步 {len(tasks)} 个K线数据文件...")
         biying_enabled = self._is_biying_kline_enabled()
         
         for _, row in tasks.iterrows():
@@ -714,7 +855,7 @@ class LHBManager:
                     )
                     if biying_df is not None and not biying_df.empty:
                         biying_df.to_csv(file_path, index=False)
-                    # 必盈启用时，不回退 AKShare，避免触发反爬。
+                    # 必盈启用时不回退 AKShare，避免触发反爬。
                     continue
                 except Exception:
                     continue
@@ -820,7 +961,63 @@ class LHBManager:
         now_ts = time.time()
         return int(max(0, self._kline_pause_until_ts - now_ts))
 
+    def _extract_intraday_time_series(self, df):
+        if df is None or df.empty:
+            return None
+        candidates = ["time", "day", "date", "datetime", "trade_time", "t"]
+        for col in candidates:
+            if col in df.columns:
+                try:
+                    return df[col].astype(str)
+                except Exception:
+                    return None
+        try:
+            return df.iloc[:, 0].astype(str)
+        except Exception:
+            return None
+
+    def _is_intraday_cache_complete(self, df, date_str: str = "", is_today: bool = False) -> bool:
+        if df is None or df.empty:
+            return False
+        try:
+            row_count = int(len(df))
+        except Exception:
+            return False
+        if row_count < 20:
+            return False
+
+        time_series = self._extract_intraday_time_series(df)
+        if time_series is None or time_series.empty:
+            return row_count >= (120 if is_today else 40)
+
+        text_series = time_series.astype(str).str.strip()
+        if date_str:
+            text_series = text_series[text_series.str.contains(str(date_str), na=False) | text_series.str.contains(r"\d{2}:\d{2}", regex=True, na=False)]
+            if text_series.empty:
+                return row_count >= (120 if is_today else 40)
+
+        hhmm = text_series.str.extract(r"(\d{2}:\d{2})", expand=False).dropna()
+        if hhmm.empty:
+            return row_count >= (120 if is_today else 40)
+
+        first_hhmm = hhmm.min()
+        last_hhmm = hhmm.max()
+        has_open = first_hhmm <= "09:40"
+
+        if is_today:
+            now = datetime.now()
+            if now.hour < 14 or (now.hour == 14 and now.minute < 50):
+                # During current trading day, allow partial session data.
+                return row_count >= 20
+
+        has_close = last_hhmm >= "14:50"
+        return bool(has_open and has_close and row_count >= 40)
+
     def get_kline_1min(self, code, date_str, min_refresh_seconds=600, allow_network=True):
+        # Clear stale per-day minute cache only when trade date actually rolls forward.
+        # Weekends/holidays keep the latest trading-day cache until the next trading day.
+        self._cleanup_intraday_cache_by_trade_day()
+
         clean_code = "".join(filter(str.isdigit, str(code or "")))
         if len(clean_code) != 6:
             return None
@@ -831,18 +1028,21 @@ class LHBManager:
         cache_key = f"{clean_code}_{date_str}"
         now_ts = time.time()
         cached_df = None
-        
-        if file_path.exists() and not is_today:
-            return pd.read_csv(file_path)
-        if file_path.exists() and is_today:
+
+        if file_path.exists():
             try:
                 cached_df = pd.read_csv(file_path)
             except Exception:
                 cached_df = None
+        cache_complete = self._is_intraday_cache_complete(cached_df, date_str, is_today) if cached_df is not None and not cached_df.empty else False
+
+        if not is_today and cached_df is not None and not cached_df.empty and cache_complete:
+            return cached_df
 
         if not allow_network:
             return cached_df
-        if self.is_kline_network_paused():
+        biying_enabled = self._is_biying_kline_enabled()
+        if (not biying_enabled) and self.is_kline_network_paused():
             now_ts = time.time()
             if now_ts - self._kline_pause_log_ts >= 60:
                 remain = self.get_kline_pause_remaining_seconds()
@@ -851,13 +1051,17 @@ class LHBManager:
             return cached_df
 
         interval = max(0, int(min_refresh_seconds or 0))
-        if is_today and cached_df is not None and not cached_df.empty:
+        retry_interval = interval
+        if cached_df is not None and not cached_df.empty and not cache_complete:
+            retry_interval = min(interval, 180) if interval > 0 else 60
+
+        if is_today and cached_df is not None and not cached_df.empty and cache_complete:
             last_fetch_ts = self._kline_last_fetch_ts.get(cache_key, 0)
             if now_ts - last_fetch_ts < interval:
                 return cached_df
 
         last_attempt_ts = self._kline_last_attempt_ts.get(cache_key, 0)
-        if now_ts - last_attempt_ts < interval:
+        if now_ts - last_attempt_ts < retry_interval:
             if cached_df is not None and not cached_df.empty:
                 return cached_df
             return None
@@ -865,7 +1069,6 @@ class LHBManager:
         self._kline_last_attempt_ts[cache_key] = now_ts
 
         # 优先使用必盈分时；启用必盈时不回退 AKShare，避免触发反爬。
-        biying_enabled = self._is_biying_kline_enabled()
         if biying_enabled:
             try:
                 biying_df = self._fetch_kline_via_biying_5min(clean_code, date_str, is_today)
@@ -1055,7 +1258,8 @@ class LHBManager:
             df_day = df[df['trade_date'] == date_str]
             
             if df_day.empty:
-                if logger: logger(f"[LHB Report] {date_str} 无数据。")
+                if logger:
+                    logger(f"[LHB Report] {date_str} 无数据。")
                 return
 
             # 1. Top Hot Money
@@ -1071,7 +1275,7 @@ class LHBManager:
             
             # 2. Top Stocks by Buy Amount (approx sum of seats)
             stock_buys = df_day.groupby('stock_name')['buy_amount'].sum().sort_values(ascending=False)
-            report.append("\n【大额榜单】")
+            report.append("\n【大额买单】")
             for name, amount in stock_buys.head(5).items():
                 report.append(f"  - {name}: 席位合计买入 {amount/100000000:.2f} 亿")
                 

@@ -20,10 +20,12 @@ import secrets
 import threading
 import socket
 import re
+import ipaddress
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel
+from starlette.routing import Match
 from app.core.news_analyzer import generate_watchlist, analyze_single_stock, analyze_daily_lhb
 from app.core.market_scanner import scan_limit_up_pool, scan_broken_limit_pool, get_market_overview
 from app.core.stock_utils import calculate_metrics, is_trading_time, is_market_open_day
@@ -52,6 +54,7 @@ DAY_KLINE_CACHE_DIR.mkdir(exist_ok=True)
 # Centralized cache policy:
 # user-facing APIs read from cache only; background tasks refresh network data.
 REALTIME_CACHE_INTERVAL_SEC = 20
+BIYING_BASE_SNAPSHOT_CHECK_INTERVAL_SEC = 300
 KLINE_BG_SCAN_INTERVAL_SEC = 60
 KLINE_MIN_REFRESH_SEC = 600
 DAY_KLINE_REFRESH_SEC = 3600
@@ -61,12 +64,15 @@ KLINE_ERROR_LOG_WINDOW_SEC = 60
 KLINE_ERROR_LOG_MAX_PER_WINDOW = 8
 KLINE_MIN_CACHE_EXPIRE_DAYS = 7
 KLINE_DAY_CACHE_EXPIRE_DAYS = 30
+MARKET_SENTIMENT_PROBE_COOLDOWN_SEC = 900
+KLINE_NON_TRADING_PROBE_DATES = 8
+KLINE_NON_TRADING_LOOKBACK_DAYS = 90
 
 # Initialize DB Tables
 database.Base.metadata.create_all(bind=database.engine)
 
 app = FastAPI()
-SERVER_VERSION = "v3.0.2"
+SERVER_VERSION = "v3.1.0"
 
 # 重要：CORS 中间件必须在任何路由 (app.include_router) 和中间件注册之前被加载
 # 否则会导致 OPTIONS preflight 请求被后续路由拦截（比如被报 "Missing Device ID"）
@@ -85,6 +91,8 @@ app.include_router(payment.router, prefix="/api/payment", tags=["payment"])
 
 FRONTEND_DIR = BASE_DIR.parent / "frontend"
 ADMIN_INDEX_FILE = FRONTEND_DIR / "admin" / "index.html"
+AUTH_API_PREFIX_FILE = DATA_DIR / "auth_api_prefix.json"
+IP_BANLIST_FILE = DATA_DIR / "ip_banlist.json"
 USER_OP_LOG_SKIP_PREFIXES = (
     "/api/stocks",
     "/api/indices",
@@ -107,10 +115,13 @@ USER_OP_LOG_SKIP_PREFIXES = (
     "/api/admin/update_password",
     "/api/admin/update_account",
     "/api/admin/panel_path",
+    "/api/admin/api_prefix",
+    "/api/admin/auth_api_prefix",
     "/api/admin/users/reset_password",
     "/api/admin/users/add_time",
     "/api/admin/users/ban",
     "/api/admin/users/set_membership",
+    "/api/admin/users/delete_all_guests",
     "/api/admin/orders/approve",
     "/api/admin/config",
     "/api/admin/referrals",
@@ -152,6 +163,12 @@ WS_TOKEN_BIND_MODE = str(os.getenv("WS_TOKEN_BIND_MODE", "ua") or "ua").strip().
 if WS_TOKEN_BIND_MODE not in {"ua", "ip_ua"}:
     WS_TOKEN_BIND_MODE = "ua"
 _ws_token_secret_cache = None
+_AUTH_API_PREFIX_CACHE_TTL_SEC = 5.0
+_auth_api_prefix_cache: Dict[str, Any] = {"ts": 0.0, "value": "/api/auth"}
+_auth_api_prefix_lock = threading.Lock()
+_ip_ban_lock = threading.Lock()
+_ip_ban_cache: Dict[str, Any] = {"loaded": False, "items": {}}
+UNKNOWN_API_BAN_REASON = "access_unknown_api"
 
 
 def _bool_env(name: str, default: bool = True) -> bool:
@@ -159,6 +176,262 @@ def _bool_env(name: str, default: bool = True) -> bool:
     if not raw:
         return bool(default)
     return raw in {"1", "true", "yes", "on"}
+
+
+def _normalize_auth_api_prefix(raw_prefix: str) -> str:
+    value = str(raw_prefix or "").strip()
+    if not value:
+        return "/api/auth"
+    if not value.startswith("/"):
+        value = "/" + value
+    if not value.startswith("/api/"):
+        value = "/api" + value
+
+    parts = [p for p in value.split("/") if p]
+    value = "/" + "/".join(parts)
+    if value in {"/", "/api"}:
+        raise ValueError("Auth API prefix cannot be / or /api")
+    if value.startswith("/api/admin") or value.startswith("/api/payment"):
+        raise ValueError("Auth API prefix cannot conflict with admin/payment routes")
+    if not re.fullmatch(r"/[A-Za-z0-9/_-]+", value):
+        raise ValueError("Auth API prefix only allows letters, numbers, /, _, -")
+    return value
+
+
+def get_auth_api_prefix() -> str:
+    now_ts = time.time()
+    with _auth_api_prefix_lock:
+        cached_ts = float(_auth_api_prefix_cache.get("ts", 0) or 0)
+        cached_value = str(_auth_api_prefix_cache.get("value", "/api/auth") or "/api/auth").strip() or "/api/auth"
+        if now_ts - cached_ts <= _AUTH_API_PREFIX_CACHE_TTL_SEC:
+            return cached_value
+
+    resolved = "/api/auth"
+    env_val = str(os.getenv("AUTH_API_PREFIX", "") or "").strip()
+    if env_val:
+        try:
+            resolved = _normalize_auth_api_prefix(env_val)
+        except ValueError:
+            resolved = "/api/auth"
+    else:
+        payload = {}
+        try:
+            if AUTH_API_PREFIX_FILE.exists():
+                payload = json.loads(str(AUTH_API_PREFIX_FILE.read_text(encoding="utf-8") or "{}"))
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            try:
+                resolved = _normalize_auth_api_prefix(payload.get("prefix", "/api/auth"))
+            except ValueError:
+                resolved = "/api/auth"
+
+    with _auth_api_prefix_lock:
+        _auth_api_prefix_cache["ts"] = time.time()
+        _auth_api_prefix_cache["value"] = resolved
+    return resolved
+
+
+def _inject_frontend_runtime_vars(
+    html_text: str,
+    *,
+    admin_api_prefix_hint: str = "",
+    auth_api_prefix: str = "",
+) -> str:
+    raw = str(html_text or "")
+    cleaned = re.sub(
+        r"\s*<!--\s*Generated by backend runtime injection\s*-->\s*<script>[\s\S]*?</script>\s*",
+        "\n",
+        raw,
+        flags=re.IGNORECASE,
+    )
+    lines: List[str] = []
+    admin_hint = str(admin_api_prefix_hint or "").strip()
+    auth_prefix = str(auth_api_prefix or "").strip()
+    if admin_hint:
+        lines.append(f'window.__ADMIN_API_PREFIX_HINT__ = "{admin_hint}";')
+    if auth_prefix:
+        lines.append(f'window.__AUTH_API_PREFIX__ = "{auth_prefix}";')
+    if not lines:
+        return cleaned
+    inject_block = (
+        "<!-- Generated by backend runtime injection -->\n"
+        f"<script>\n{chr(10).join(lines)}\n</script>\n"
+    )
+    head_open = re.search(r"<head[^>]*>", cleaned, flags=re.IGNORECASE)
+    if head_open:
+        insert_at = head_open.end()
+        return f"{cleaned[:insert_at]}\n{inject_block}{cleaned[insert_at:]}"
+    if "</head>" in cleaned:
+        return cleaned.replace("</head>", inject_block + "</head>", 1)
+    return inject_block + cleaned
+
+
+def _render_frontend_html_with_runtime_vars(
+    html_path: Path,
+    *,
+    admin_api_prefix_hint: str = "",
+    auth_api_prefix: str = "",
+) -> Optional[HTMLResponse]:
+    if not html_path.exists():
+        return None
+    try:
+        raw = html_path.read_text(encoding="utf-8", errors="ignore")
+        patched = _inject_frontend_runtime_vars(
+            raw,
+            admin_api_prefix_hint=admin_api_prefix_hint,
+            auth_api_prefix=auth_api_prefix,
+        )
+        return HTMLResponse(content=patched)
+    except Exception:
+        return None
+
+
+def _ip_addr_obj(ip_text: str):
+    text = str(ip_text or "").strip()
+    if not text:
+        return None
+    try:
+        return ipaddress.ip_address(text)
+    except Exception:
+        return None
+
+
+def _is_local_or_private_ip(ip_text: str) -> bool:
+    ip_obj = _ip_addr_obj(ip_text)
+    if ip_obj is None:
+        return True
+    return bool(
+        ip_obj.is_loopback
+        or ip_obj.is_private
+        or ip_obj.is_link_local
+        or ip_obj.is_multicast
+        or ip_obj.is_reserved
+        or ip_obj.is_unspecified
+    )
+
+
+def _load_ip_ban_items_locked() -> Dict[str, Dict[str, Any]]:
+    if bool(_ip_ban_cache.get("loaded")):
+        items = _ip_ban_cache.get("items", {})
+        return items if isinstance(items, dict) else {}
+
+    data = {}
+    try:
+        if IP_BANLIST_FILE.exists():
+            data = json.loads(str(IP_BANLIST_FILE.read_text(encoding="utf-8") or "{}"))
+    except Exception:
+        data = {}
+
+    items: Dict[str, Dict[str, Any]] = {}
+    src = data.get("items", {}) if isinstance(data, dict) else {}
+    if isinstance(src, dict):
+        for raw_ip, meta in src.items():
+            ip_text = str(raw_ip or "").strip()
+            if not ip_text:
+                continue
+            if _is_local_or_private_ip(ip_text):
+                continue
+            if isinstance(meta, dict):
+                items[ip_text] = {
+                    "reason": str(meta.get("reason", "") or "").strip(),
+                    "banned_at": str(meta.get("banned_at", "") or "").strip(),
+                    "path": str(meta.get("path", "") or "").strip(),
+                    "method": str(meta.get("method", "") or "").strip().upper(),
+                }
+            else:
+                items[ip_text] = {
+                    "reason": "",
+                    "banned_at": "",
+                    "path": "",
+                    "method": "",
+                }
+
+    _ip_ban_cache["loaded"] = True
+    _ip_ban_cache["items"] = items
+    return items
+
+
+def _save_ip_ban_items_locked(items: Dict[str, Dict[str, Any]]) -> None:
+    payload = {"items": items if isinstance(items, dict) else {}}
+    try:
+        IP_BANLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
+        IP_BANLIST_FILE.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception:
+        pass
+
+
+def _is_ip_banned(ip_text: str) -> bool:
+    ip_addr = str(ip_text or "").strip()
+    if not ip_addr or _is_local_or_private_ip(ip_addr):
+        return False
+    with _ip_ban_lock:
+        items = _load_ip_ban_items_locked()
+        return ip_addr in items
+
+
+def _ban_ip(ip_text: str, *, path: str, method: str, reason: str = UNKNOWN_API_BAN_REASON) -> bool:
+    ip_addr = str(ip_text or "").strip()
+    if not ip_addr or _is_local_or_private_ip(ip_addr):
+        return False
+
+    banned_now = False
+    with _ip_ban_lock:
+        items = _load_ip_ban_items_locked()
+        if ip_addr in items:
+            meta = items.get(ip_addr, {})
+            if isinstance(meta, dict):
+                meta["path"] = str(path or "").strip()
+                meta["method"] = str(method or "").strip().upper()
+                items[ip_addr] = meta
+                _save_ip_ban_items_locked(items)
+            return False
+        items[ip_addr] = {
+            "reason": str(reason or "").strip() or UNKNOWN_API_BAN_REASON,
+            "banned_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
+            "path": str(path or "").strip(),
+            "method": str(method or "").strip().upper(),
+        }
+        _save_ip_ban_items_locked(items)
+        banned_now = True
+
+    if banned_now:
+        try:
+            log_user_operation(
+                "ip_auto_ban",
+                status="success",
+                actor="system",
+                method=str(method or "").upper(),
+                path=str(path or "").strip(),
+                ip=ip_addr,
+                detail=f"reason={str(reason or UNKNOWN_API_BAN_REASON)}",
+            )
+        except Exception:
+            pass
+    return banned_now
+
+
+def _api_path_has_matching_route(request: Request) -> bool:
+    path = str(request.scope.get("path", "") or "").strip()
+    if not path.startswith("/api/"):
+        return True
+    scope = dict(request.scope)
+    scope["path"] = path
+    scope["root_path"] = ""
+    for route in app.router.routes:
+        route_path = str(getattr(route, "path", "") or "").strip()
+        if not route_path.startswith("/api/"):
+            continue
+        try:
+            match, _ = route.matches(scope)
+        except Exception:
+            continue
+        if match in {Match.FULL, Match.PARTIAL}:
+            return True
+    return False
 
 
 DISABLE_PUBLIC_FRONTEND = _bool_env("DISABLE_PUBLIC_FRONTEND", False)
@@ -453,10 +726,23 @@ def _device_info_from_request(request: Request) -> str:
     return info[:240]
 
 
+def _normalize_auth_request_path(path: str) -> str:
+    safe_path = str(path or "").strip()
+    normalized = safe_path.rstrip("/") or "/"
+    auth_api_prefix = str(get_auth_api_prefix() or "/api/auth").strip() or "/api/auth"
+    if auth_api_prefix != "/api/auth" and (
+        normalized == auth_api_prefix or normalized.startswith(auth_api_prefix + "/")
+    ):
+        suffix = safe_path[len(auth_api_prefix):]
+        return "/api/auth" + suffix
+    return safe_path
+
+
 def _should_log_api_path(path: str) -> bool:
-    if not path.startswith("/api/"):
+    normalized_path = _normalize_auth_request_path(path)
+    if not normalized_path.startswith("/api/"):
         return False
-    return not any(path.startswith(prefix) for prefix in USER_OP_LOG_SKIP_PREFIXES)
+    return not any(normalized_path.startswith(prefix) for prefix in USER_OP_LOG_SKIP_PREFIXES)
 
 
 def _is_admin_api_path(path: str) -> bool:
@@ -547,7 +833,7 @@ def _safe_bool_text(value: Optional[bool]) -> str:
 
 
 def _resolve_admin_refresh_targets(path: str, method: str, status_code: int) -> List[str]:
-    safe_path = str(path or "").strip().lower()
+    safe_path = _normalize_auth_request_path(path).strip().lower()
     safe_method = str(method or "").upper()
     if int(status_code or 0) >= 400:
         return []
@@ -695,6 +981,13 @@ async def admin_panel_custom_path_guard(request: Request, call_next):
         if normalized == admin_path and path.endswith("/") and path != "/":
             return RedirectResponse(url=admin_path, status_code=307)
         if normalized == admin_path or normalized.startswith(admin_path + "/"):
+            injected = _render_frontend_html_with_runtime_vars(
+                ADMIN_INDEX_FILE,
+                admin_api_prefix_hint=admin_api_prefix,
+                auth_api_prefix=get_auth_api_prefix(),
+            )
+            if injected is not None:
+                return injected
             return FileResponse(str(ADMIN_INDEX_FILE))
 
     if DISABLE_PUBLIC_FRONTEND:
@@ -707,14 +1000,53 @@ async def admin_panel_custom_path_guard(request: Request, call_next):
 async def api_device_auth_guard(request: Request, call_next):
     path = request.url.path
     normalized = path.rstrip("/") or "/"
+    method = str(request.method or "").upper()
     admin_api_prefix = admin.get_admin_api_prefix()
-    if request.method == "OPTIONS":
+
+    auth_api_prefix = get_auth_api_prefix()
+    if auth_api_prefix != "/api/auth":
+        if normalized == "/api/auth" or normalized.startswith("/api/auth/"):
+            return JSONResponse({"detail": "Not Found"}, status_code=404)
+        if normalized == auth_api_prefix or normalized.startswith(auth_api_prefix + "/"):
+            suffix = path[len(auth_api_prefix):]
+            new_path = "/api/auth" + suffix
+            request.scope["path"] = new_path
+            request.scope["raw_path"] = new_path.encode("utf-8")
+            path = new_path
+            normalized = path.rstrip("/") or "/"
+
+    if method == "OPTIONS":
         return await call_next(request)
     if not path.startswith("/api/"):
         return await call_next(request)
-    if path.startswith("/api/admin/"):
-        return await call_next(request)
-    if admin_api_prefix != "/api/admin" and (normalized == admin_api_prefix or normalized.startswith(admin_api_prefix + "/")):
+
+    client_ip = _client_ip_from_request(request)
+    if _is_ip_banned(client_ip):
+        return JSONResponse(status_code=403, content={"detail": "IP has been banned"})
+
+    has_admin_token = bool((request.headers.get("X-Admin-Token") or "").strip())
+    is_admin_namespace = bool(
+        path.startswith("/api/admin/")
+        or (
+            admin_api_prefix != "/api/admin"
+            and (normalized == admin_api_prefix or normalized.startswith(admin_api_prefix + "/"))
+        )
+    )
+    should_check_unknown_api = bool(
+        (not has_admin_token)
+        and (not _is_local_or_private_ip(client_ip))
+        and (not is_admin_namespace)
+    )
+    if should_check_unknown_api and (not _api_path_has_matching_route(request)):
+        _ban_ip(
+            client_ip,
+            path=path,
+            method=method,
+            reason=UNKNOWN_API_BAN_REASON,
+        )
+        return JSONResponse(status_code=403, content={"detail": "Forbidden"})
+
+    if is_admin_namespace:
         return await call_next(request)
     if path in API_DEVICE_AUTH_EXEMPT_PATHS:
         return await call_next(request)
@@ -795,12 +1127,14 @@ async def get_system_status(request: Request):
     """获取系统状态（交易日/时间）"""
     if _is_status_rate_limited(request):
         return JSONResponse(status_code=429, content={"detail": "Too many status requests"})
+    auth_api_prefix = get_auth_api_prefix()
     return {
         "status": "success",
         "is_trading_time": is_trading_time(),
         "is_market_open_day": is_market_open_day(),
         "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         "server_version": SERVER_VERSION,
+        "auth_api_prefix": auth_api_prefix,
     }
 
 @app.get("/api/news_history/clear")
@@ -977,6 +1311,7 @@ market_circ_map_refresh_guard = threading.Lock()
 market_ws_last_stock_hash = ""
 market_ws_last_pool_hash = ""
 market_ws_last_sentiment_hash = ""
+market_sentiment_probe_last_ts = 0.0
 market_ws_last_lhb_syncing = None
 market_ws_last_quote_state = {}
 admin_ws_last_overview_hint_hash = ""
@@ -988,6 +1323,7 @@ kline_error_window_start_ts = 0.0
 kline_error_window_count = 0
 kline_error_suppressed = 0
 analysis_key_locks = {}
+market_sentiment_cache_last_persist_hash = ""
 
 DEFAULT_MARKET_STATS = {
     "limit_up_count": 0,
@@ -1005,6 +1341,7 @@ DEFAULT_INDICES_ROWS = [
     {"name": "深证成指", "current": 0, "change": 0, "amount": 0},
     {"name": "创业板指", "current": 0, "change": 0, "amount": 0},
 ]
+MARKET_SENTIMENT_CACHE_FILE = DATA_DIR / "market_sentiment_cache.json"
 
 def load_analysis_cache():
     """Load AI analysis cache from disk"""
@@ -1025,6 +1362,104 @@ def save_analysis_cache():
             json.dump(ANALYSIS_CACHE, f, ensure_ascii=False)
     except:
         pass
+
+
+def _market_sentiment_payload_hash(payload: Any) -> str:
+    try:
+        encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    except Exception:
+        encoded = str(payload)
+    return hashlib.md5(encoded.encode("utf-8")).hexdigest()
+
+
+def _market_sentiment_stats_has_breadth(stats: Any) -> bool:
+    if not isinstance(stats, dict):
+        return False
+    try:
+        up_count = int(stats.get("up_count") or 0)
+        down_count = int(stats.get("down_count") or 0)
+        flat_count = int(stats.get("flat_count") or 0)
+    except Exception:
+        return False
+    return (up_count + down_count + flat_count) > 0
+
+
+def _market_sentiment_has_meaningful_indices(rows: Any) -> bool:
+    if not isinstance(rows, list):
+        return False
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            current = float(row.get("current") or 0)
+            amount = float(row.get("amount") or 0)
+        except Exception:
+            continue
+        if current > 0 or amount > 0:
+            return True
+    return False
+
+
+def load_market_sentiment_cache():
+    global market_sentiment_cache
+    global market_sentiment_cache_ts
+    global indices_cache
+    global indices_cache_ts
+    global market_sentiment_cache_last_persist_hash
+
+    if not MARKET_SENTIMENT_CACHE_FILE.exists():
+        return
+    try:
+        with open(MARKET_SENTIMENT_CACHE_FILE, "r", encoding="utf-8") as f:
+            snapshot = json.load(f)
+        raw_payload = snapshot.get("payload") if isinstance(snapshot, dict) else {}
+        payload = _build_market_sentiment_payload(raw_payload, fallback_indices=(raw_payload or {}).get("indices", []))
+        saved_ts = 0.0
+        if isinstance(snapshot, dict):
+            saved_ts = float(snapshot.get("updated_at_ts", 0) or 0)
+        if saved_ts <= 0:
+            try:
+                saved_ts = float(MARKET_SENTIMENT_CACHE_FILE.stat().st_mtime)
+            except Exception:
+                saved_ts = time.time()
+
+        with cache_lock:
+            market_sentiment_cache = payload
+            market_sentiment_cache_ts = saved_ts
+            if payload.get("indices"):
+                indices_cache = copy.deepcopy(payload.get("indices"))
+                indices_cache_ts = max(indices_cache_ts, saved_ts)
+            market_sentiment_cache_last_persist_hash = _market_sentiment_payload_hash(payload)
+    except Exception as e:
+        print(f"加载市场情绪缓存失败: {e}")
+
+
+def save_market_sentiment_cache(payload: Any = None, updated_ts: Optional[float] = None):
+    try:
+        if payload is None:
+            with cache_lock:
+                payload = copy.deepcopy(market_sentiment_cache)
+                updated_ts = float(market_sentiment_cache_ts or time.time())
+
+        normalized = _build_market_sentiment_payload(
+            payload,
+            fallback_indices=(payload or {}).get("indices", []) if isinstance(payload, dict) else [],
+        )
+        has_breadth = _market_sentiment_stats_has_breadth((normalized or {}).get("stats"))
+        has_indices = _market_sentiment_has_meaningful_indices((normalized or {}).get("indices"))
+        if not has_breadth and not has_indices:
+            return
+
+        snapshot = {
+            "updated_at_ts": float(updated_ts or time.time()),
+            "payload": normalized,
+        }
+        tmp_path = MARKET_SENTIMENT_CACHE_FILE.with_suffix(".tmp")
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(snapshot, f, ensure_ascii=False)
+        os.replace(tmp_path, MARKET_SENTIMENT_CACHE_FILE)
+    except Exception as e:
+        print(f"保存市场情绪缓存失败: {e}")
 
 def cleanup_analysis_cache(max_age_days=7):
     """清理超过指定天数的分析缓存"""
@@ -1143,31 +1578,37 @@ def _get_market_circ_map_cache() -> dict:
         return copy.deepcopy(market_circ_map_cache)
 
 
-def refresh_market_circ_map_cache():
+def _build_market_circ_map_from_df(market_df) -> dict:
+    market_map = {}
+    if market_df is None or market_df.empty:
+        return market_map
+    for _, row in market_df.iterrows():
+        raw_code = str(row.get("code", "")).strip().lower()
+        if not raw_code:
+            continue
+        circ_mv = _safe_float_number(row.get("circ_mv", row.get("circulation_value", 0)))
+        norm_code = _normalize_market_code(raw_code)
+        digits = "".join(filter(str.isdigit, norm_code or raw_code))
+        market_map[raw_code] = circ_mv
+        if norm_code:
+            market_map[norm_code] = circ_mv
+        if len(digits) == 6:
+            market_map[digits] = circ_mv
+    return market_map
+
+
+def refresh_market_circ_map_cache(allow_network: bool = True):
     market_map = {}
     try:
-        market_df = data_provider.fetch_all_market_data()
-        if market_df is None or market_df.empty:
-            return
-
-        for _, row in market_df.iterrows():
-            raw_code = str(row.get("code", "")).strip().lower()
-            if not raw_code:
-                continue
-            circ_mv = _safe_float_number(row.get("circ_mv", 0))
-            norm_code = _normalize_market_code(raw_code)
-            digits = "".join(filter(str.isdigit, norm_code or raw_code))
-            market_map[raw_code] = circ_mv
-            if norm_code:
-                market_map[norm_code] = circ_mv
-            if len(digits) == 6:
-                market_map[digits] = circ_mv
+        market_df = data_provider.fetch_all_market_data() if allow_network else data_provider.get_cached_all_market_data()
+        market_map = _build_market_circ_map_from_df(market_df)
     except Exception:
         return
-    _set_market_circ_map_cache(market_map)
+    if market_map:
+        _set_market_circ_map_cache(market_map)
 
 
-def ensure_market_circ_map_cache(max_age_sec: int = 600):
+def ensure_market_circ_map_cache(max_age_sec: int = 600, allow_network: bool = True):
     now_ts = time.time()
     with cache_lock:
         has_rows = bool(market_circ_map_cache)
@@ -1182,7 +1623,7 @@ def ensure_market_circ_map_cache(max_age_sec: int = 600):
             cache_age = (now_ts - market_circ_map_cache_ts) if market_circ_map_cache_ts > 0 else float("inf")
         if has_rows and cache_age <= max_age_sec:
             return
-        refresh_market_circ_map_cache()
+        refresh_market_circ_map_cache(allow_network=allow_network)
 
 
 def _normalize_indices_rows(rows):
@@ -1258,20 +1699,44 @@ def ensure_indices_cache(max_age_sec: int = max(60, REALTIME_CACHE_INTERVAL_SEC 
         refresh_indices_cache()
 
 
-def refresh_market_sentiment_cache():
+def refresh_market_sentiment_cache(allow_non_trading_probe: bool = False):
     global market_sentiment_cache, market_sentiment_cache_ts, indices_cache, indices_cache_ts
+    global market_sentiment_cache_last_persist_hash
     try:
-        data = get_market_overview() or {}
+        data = get_market_overview(allow_non_trading_probe=allow_non_trading_probe) or {}
         with cache_lock:
+            previous_payload = copy.deepcopy(market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {})
             fallback_indices = copy.deepcopy(indices_cache) or copy.deepcopy((market_sentiment_cache or {}).get("indices", []))
         payload = _build_market_sentiment_payload(data, fallback_indices=fallback_indices)
+
+        previous_stats = (previous_payload or {}).get("stats", {}) if isinstance(previous_payload, dict) else {}
+        current_stats = (payload or {}).get("stats", {}) if isinstance(payload, dict) else {}
+        if _market_sentiment_stats_has_breadth(previous_stats) and not _market_sentiment_stats_has_breadth(current_stats):
+            merged_stats = dict(DEFAULT_MARKET_STATS)
+            for key in DEFAULT_MARKET_STATS.keys():
+                if key in previous_stats and previous_stats.get(key) is not None:
+                    merged_stats[key] = previous_stats.get(key)
+            payload["stats"] = merged_stats
+
         now_ts = time.time()
+        persist_payload = None
+        persist_ts = now_ts
         with cache_lock:
             market_sentiment_cache = payload
             market_sentiment_cache_ts = now_ts
             if payload.get("indices"):
                 indices_cache = copy.deepcopy(payload.get("indices"))
                 indices_cache_ts = now_ts
+            payload_hash = _market_sentiment_payload_hash(payload)
+            if payload_hash != market_sentiment_cache_last_persist_hash:
+                market_sentiment_cache_last_persist_hash = payload_hash
+                has_breadth = _market_sentiment_stats_has_breadth((payload or {}).get("stats"))
+                has_indices = _market_sentiment_has_meaningful_indices((payload or {}).get("indices"))
+                if has_breadth or has_indices:
+                    persist_payload = copy.deepcopy(payload)
+                    persist_ts = now_ts
+        if persist_payload is not None:
+            save_market_sentiment_cache(payload=persist_payload, updated_ts=persist_ts)
     except Exception as e:
         print(f"刷新市场情绪缓存失败: {e}")
 
@@ -1284,10 +1749,13 @@ def get_market_sentiment_cache():
 
 
 def ensure_market_sentiment_cache(max_age_sec: int = max(60, REALTIME_CACHE_INTERVAL_SEC * 3)):
+    global market_sentiment_probe_last_ts
     now_ts = time.time()
     with cache_lock:
         payload = market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {}
-        has_payload = bool(payload.get("indices")) or bool(payload.get("stats"))
+        has_breadth = _market_sentiment_stats_has_breadth(payload.get("stats"))
+        has_indices = _market_sentiment_has_meaningful_indices(payload.get("indices"))
+        has_payload = has_breadth or has_indices
         cache_age = (now_ts - market_sentiment_cache_ts) if market_sentiment_cache_ts > 0 else float("inf")
     if has_payload and cache_age <= max_age_sec:
         return
@@ -1296,11 +1764,25 @@ def ensure_market_sentiment_cache(max_age_sec: int = max(60, REALTIME_CACHE_INTE
         now_ts = time.time()
         with cache_lock:
             payload = market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {}
-            has_payload = bool(payload.get("indices")) or bool(payload.get("stats"))
+            has_breadth = _market_sentiment_stats_has_breadth(payload.get("stats"))
+            has_indices = _market_sentiment_has_meaningful_indices(payload.get("indices"))
+            has_payload = has_breadth or has_indices
             cache_age = (now_ts - market_sentiment_cache_ts) if market_sentiment_cache_ts > 0 else float("inf")
         if has_payload and cache_age <= max_age_sec:
             return
         refresh_market_sentiment_cache()
+        now_ts = time.time()
+        with cache_lock:
+            payload = market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {}
+            has_breadth = _market_sentiment_stats_has_breadth(payload.get("stats"))
+            has_indices = _market_sentiment_has_meaningful_indices(payload.get("indices"))
+            need_probe = (not has_breadth) and (not has_indices) and (
+                now_ts - float(market_sentiment_probe_last_ts or 0) >= MARKET_SENTIMENT_PROBE_COOLDOWN_SEC
+            )
+            if need_probe:
+                market_sentiment_probe_last_ts = now_ts
+        if need_probe:
+            refresh_market_sentiment_cache(allow_non_trading_probe=True)
 
 
 def _day_kline_cache_path(clean_code: str) -> Path:
@@ -1331,10 +1813,17 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
         if now_dt.hour < 15 or (now_dt.hour == 15 and now_dt.minute < 30):
             return
 
-    if lhb_manager.is_kline_network_paused():
-        return
     now_ts = time.time()
     cache_path = _day_kline_cache_path(clean_code)
+    if lhb_manager.is_kline_network_paused():
+        # Minute-kline pause should not permanently block day-kline warmup.
+        # Reuse existing cache if present; otherwise allow a throttled one-shot refresh.
+        if cache_path.exists():
+            return
+    last_attempt_ts = day_kline_attempt_ts.get(clean_code, 0)
+    if now_ts - last_attempt_ts < DAY_KLINE_RETRY_SEC:
+        return
+    day_kline_attempt_ts[clean_code] = now_ts
     if (not force) and cache_path.exists():
         try:
             mtime = cache_path.stat().st_mtime
@@ -1346,10 +1835,6 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
     last_ts = day_kline_refresh_ts.get(clean_code, 0)
     if (not force) and now_ts - last_ts < DAY_KLINE_REFRESH_SEC:
         return
-    last_attempt_ts = day_kline_attempt_ts.get(clean_code, 0)
-    if (not force) and now_ts - last_attempt_ts < DAY_KLINE_RETRY_SEC:
-        return
-    day_kline_attempt_ts[clean_code] = now_ts
 
     try:
         biying_cfg = data_provider._get_biying_config()
@@ -1436,6 +1921,165 @@ def refresh_day_kline_cache_for_code(clean_code: str, force: bool = False):
         lhb_manager.register_external_kline_failure(e)
 
 
+def _pick_row_value(row: dict, candidate_keys: List[str], fallback_index: Optional[int] = None):
+    if not isinstance(row, dict):
+        return None
+    lower_key_map = {}
+    for raw_key in row.keys():
+        if isinstance(raw_key, str):
+            lower_key_map[raw_key.lower()] = raw_key
+    for key in candidate_keys:
+        if key in row:
+            value = row.get(key)
+            if value is not None and value != "":
+                return value
+        if isinstance(key, str):
+            mapped_key = lower_key_map.get(key.lower())
+            if mapped_key is not None and mapped_key in row:
+                value = row.get(mapped_key)
+                if value is not None and value != "":
+                    return value
+    if fallback_index is not None:
+        values = list(row.values())
+        if 0 <= fallback_index < len(values):
+            return values[fallback_index]
+    return None
+
+
+def _safe_float_or_none(value):
+    try:
+        num = float(value)
+        if num != num:
+            return None
+        return num
+    except Exception:
+        return None
+
+
+def _normalize_kline_time_text(raw_value) -> str:
+    text = str(raw_value or "").strip()
+    if not text:
+        return ""
+    digits = "".join(ch for ch in text if ch.isdigit())
+    if len(digits) >= 14:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}:{digits[12:14]}"
+    if len(digits) == 12:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]} {digits[8:10]}:{digits[10:12]}:00"
+    if len(digits) == 8:
+        return f"{digits[:4]}-{digits[4:6]}-{digits[6:8]}"
+    return text
+
+
+def _normalize_intraday_kline_rows(raw_rows) -> List[Dict[str, Any]]:
+    if raw_rows is None:
+        return []
+
+    rows = raw_rows
+    if hasattr(raw_rows, "to_dict"):
+        try:
+            rows = raw_rows.to_dict("records")
+        except Exception:
+            rows = []
+    if not isinstance(rows, list):
+        return []
+
+    normalized = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        date_raw = _pick_row_value(
+            row,
+            ["date", "time", "day", "datetime", "trade_time", "t", "d", "时间"],
+            0,
+        )
+        date_text = _normalize_kline_time_text(date_raw)
+        if not date_text:
+            continue
+
+        close_value = _safe_float_or_none(
+            _pick_row_value(row, ["close", "c", "latest", "price", "p", "收盘"], 2)
+        )
+        if close_value is None:
+            continue
+        open_value = _safe_float_or_none(_pick_row_value(row, ["open", "o", "开盘"], 1))
+        high_value = _safe_float_or_none(_pick_row_value(row, ["high", "h", "最高"], 3))
+        low_value = _safe_float_or_none(_pick_row_value(row, ["low", "l", "最低"], 4))
+        volume_value = _safe_float_or_none(
+            _pick_row_value(row, ["volume", "vol", "v", "tv", "pv", "成交量"], 5)
+        )
+
+        if open_value is None:
+            open_value = close_value
+        if high_value is None:
+            high_value = max(open_value, close_value)
+        if low_value is None:
+            low_value = min(open_value, close_value)
+        if volume_value is None:
+            volume_value = 0.0
+
+        high_value = max(high_value, open_value, close_value)
+        low_value = min(low_value, open_value, close_value)
+
+        normalized.append({
+            "date": date_text,
+            "open": float(open_value),
+            "close": float(close_value),
+            "high": float(high_value),
+            "low": float(low_value),
+            "volume": float(volume_value),
+        })
+
+    normalized.sort(key=lambda x: str(x.get("date", "")))
+    return normalized
+
+
+def _probe_trade_dates_for_intraday(max_results: int = KLINE_NON_TRADING_PROBE_DATES) -> List[str]:
+    end_date = datetime.now().date()
+    lookback = max(14, int(KLINE_NON_TRADING_LOOKBACK_DAYS))
+    start_date = end_date - timedelta(days=lookback)
+
+    dates = []
+    try:
+        dates = lhb_manager.get_trade_dates_between(
+            start_date.strftime("%Y-%m-%d"),
+            end_date.strftime("%Y-%m-%d"),
+        ) or []
+    except Exception:
+        dates = []
+
+    normalized = []
+    seen = set()
+    for item in dates:
+        text = str(item or "").strip()[:10]
+        if not text:
+            continue
+        try:
+            dt = datetime.strptime(text, "%Y-%m-%d").date()
+        except Exception:
+            continue
+        if dt >= end_date:
+            continue
+        if text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+
+    if not normalized:
+        for offset in range(1, lookback + 1):
+            dt = end_date - timedelta(days=offset)
+            if dt.weekday() >= 5:
+                continue
+            normalized.append(dt.strftime("%Y-%m-%d"))
+            if len(normalized) >= max_results:
+                break
+        return normalized
+
+    recent = normalized[-max_results:]
+    recent.reverse()
+    return recent
+
+
 def _collect_kline_target_codes(max_count=180):
     codes = set()
     for c in WATCH_LIST or []:
@@ -1477,6 +2121,17 @@ async def realtime_cache_updater_task():
         except Exception as e:
             print(f"实时缓存更新任务错误: {e}")
         await asyncio.sleep(REALTIME_CACHE_INTERVAL_SEC)
+
+
+async def biying_base_snapshot_task():
+    while True:
+        try:
+            refreshed = await asyncio.to_thread(data_provider.maybe_refresh_biying_base_snapshot, False)
+            if refreshed:
+                await asyncio.to_thread(refresh_market_circ_map_cache, False)
+        except Exception as e:
+            print(f"biying base snapshot task error: {e}")
+        await asyncio.sleep(BIYING_BASE_SNAPSHOT_CHECK_INTERVAL_SEC)
 
 
 async def kline_cache_updater_task():
@@ -1622,6 +2277,7 @@ def save_market_pools():
 # Load caches on startup
 load_market_pools()
 load_analysis_cache()
+load_market_sentiment_cache()
 
 from app.core.stock_utils import calculate_metrics, is_trading_time, is_market_open_day
 
@@ -2353,6 +3009,7 @@ def update_limit_up_pool_task():
 async def startup_event():
     # Load caches
     load_analysis_cache()
+    load_market_sentiment_cache()
     ensure_runtime_indexes()
 
     # Always start lightweight websocket log broadcaster.
@@ -2384,15 +3041,32 @@ async def startup_event():
         print("启动：当前非交易时段，跳过基础信息更新。")
         add_runtime_log("启动：当前非交易时段，跳过基础信息更新。")
 
+    # Base snapshot policy:
+    # startup backfill when cache is missing; pre-open/post-close handled by low-frequency task.
+    try:
+        await asyncio.to_thread(data_provider.maybe_refresh_biying_base_snapshot, False)
+        await asyncio.to_thread(refresh_market_circ_map_cache, False)
+    except Exception:
+        pass
+
     # Warm core caches once at startup.
     await asyncio.to_thread(refresh_stock_quotes_cache)
     await asyncio.to_thread(refresh_indices_cache)
     await asyncio.to_thread(refresh_market_sentiment_cache)
+    with cache_lock:
+        sentiment_snapshot = copy.deepcopy(market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {})
+    has_sentiment_breadth = _market_sentiment_stats_has_breadth((sentiment_snapshot or {}).get("stats"))
+    if not has_sentiment_breadth:
+        msg = "启动：市场情绪广度缓存缺失，尝试一次非交易时段快照抓取..."
+        print(msg)
+        add_runtime_log(msg)
+        await asyncio.to_thread(refresh_market_sentiment_cache, True)
 
     # Start background scheduler
     asyncio.create_task(scheduler_loop())
     # Start centralized cache updater (all user APIs read these caches only)
     asyncio.create_task(realtime_cache_updater_task())
+    asyncio.create_task(biying_base_snapshot_task())
     asyncio.create_task(kline_cache_updater_task())
     # Start market pool updater
     asyncio.create_task(update_market_pools_task())
@@ -2401,9 +3075,10 @@ async def startup_event():
     # Start periodic cleanup task
     asyncio.create_task(periodic_cleanup_task())
 
-    # 启动时立即执行一次盘中扫描，确保列表不为空。
-    print("启动：正在执行首次盘中扫描...")
-    add_runtime_log("启动：正在执行首次盘中扫描...")
+    # 启动时检查是否需要补跑一次盘中扫描（由 last_run_time 控制，非用户触发）。
+    startup_scan_msg = f"启动：后台任务已接管(pid={os.getpid()})，检查是否需要首次盘中扫描..."
+    print(startup_scan_msg)
+    add_runtime_log(startup_scan_msg)
     asyncio.create_task(run_initial_scan())
 
 def cleanup_kline_cache_files(min_cache_days: int = KLINE_MIN_CACHE_EXPIRE_DAYS, day_cache_days: int = KLINE_DAY_CACHE_EXPIRE_DAYS):
@@ -2500,19 +3175,23 @@ def _resolve_runtime_interval(now: datetime):
 
 
 async def run_initial_scan():
-    """启动时立即运行一次扫描"""
+    """服务启动后按持久化调度状态决定是否补跑一次扫描。"""
     try:
         # 等待几秒确保其他组件就绪
         await asyncio.sleep(2)
         # 仅在交易日且配置开启时执行初始扫描；并严格按上次运行时间判断是否到期。
         if not is_market_open_day() or not SYSTEM_CONFIG["auto_analysis_enabled"]:
-            print("启动: 跳过初始扫描 (非交易日或已禁用).")
+            msg = "启动：跳过首次扫描（非交易日或已禁用自动分析）。"
+            print(msg)
+            add_runtime_log(msg)
             return
 
         now = datetime.now()
         interval_seconds, mode = _resolve_runtime_interval(now)
         if mode == "none":
-            print("启动: 当前时段配置为暂停，跳过初始扫描。")
+            msg = "启动：当前时段配置为暂停，跳过首次扫描。"
+            print(msg)
+            add_runtime_log(msg)
             return
 
         now_ts = time.time()
@@ -2521,15 +3200,24 @@ async def run_initial_scan():
             elapsed = max(0, now_ts - last_run_ts)
             if elapsed < interval_seconds:
                 remain = int(interval_seconds - elapsed)
-                print(f"启动: 距离下次分析还有 {remain}s，跳过初始扫描。")
+                msg = f"启动：距离下次分析还有 {remain}s，跳过首次扫描。"
+                print(msg)
+                add_runtime_log(msg)
                 return
 
+        msg = f"启动：首次扫描条件满足，开始执行（模式={mode}）。"
+        print(msg)
+        add_runtime_log(msg)
         await asyncio.to_thread(execute_analysis, mode)
-        print("启动：首次扫描完成。")
+        msg = "启动：首次扫描完成。"
+        print(msg)
+        add_runtime_log(msg)
         SYSTEM_CONFIG["last_run_time"] = now_ts
         save_config()
     except Exception as e:
-        print(f"初始扫描错误: {e}")
+        err = f"初始扫描错误: {e}"
+        print(err)
+        add_runtime_log(err, level="ERROR")
 
 
 def _public_system_config():
@@ -2825,7 +3513,7 @@ def _is_user_visible_analysis_log(line: str, mode_cn: str = "") -> bool:
     return False
 
 
-def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
+def _replay_recent_analysis_logs(mode_cn: str, limit: int = 2000) -> int:
     try:
         logs = get_runtime_logs(limit=max(20, int(limit)))
     except Exception:
@@ -2835,18 +3523,84 @@ def _replay_recent_analysis_logs(mode_cn: str, limit: int = 100) -> int:
     if not selected:
         return 0
 
-    replay_items = [_normalize_runtime_log_for_replay(line) for line in selected[-80:]]
-    for line in replay_items:
-        thread_logger(line)
-    return len(replay_items)
+    def _parse_line_meta(raw_line: str) -> tuple[Optional[datetime], str]:
+        text = str(raw_line or "").strip()
+        m = re.match(
+            r"^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]\s*\[([^\]]+)\]\s*",
+            text,
+        )
+        if not m:
+            return None, "INFO"
+        try:
+            parsed_dt = datetime.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            parsed_dt = None
+        level = str(m.group(2) or "").strip().upper() or "INFO"
+        return parsed_dt, level
+
+    replayed = 0
+    replay_items_raw = selected[-80:]
+    replay_items = []
+    for line in replay_items_raw:
+        text = _normalize_runtime_log_for_replay(line)
+        if not text:
+            continue
+        src_dt, src_level = _parse_line_meta(line)
+        replay_items.append({
+            "src_dt": src_dt,
+            "level": src_level,
+            "text": text,
+        })
+    if not replay_items:
+        return 0
+
+    # Shift historical timeline to "now": first line => now, following lines keep original spacing.
+    replay_base = datetime.now()
+    first_src_dt = next((x["src_dt"] for x in replay_items if x["src_dt"] is not None), None)
+    last_replay_dt = replay_base
+    last_src_dt = first_src_dt or replay_base
+
+    for idx, item in enumerate(replay_items):
+        src_dt = item["src_dt"] or last_src_dt
+        last_src_dt = src_dt
+        if first_src_dt is None:
+            replay_dt = last_replay_dt if idx > 0 else replay_base
+        else:
+            delta_seconds = int((src_dt - first_src_dt).total_seconds())
+            if delta_seconds < 0:
+                delta_seconds = 0
+            replay_dt = replay_base + timedelta(seconds=delta_seconds)
+            if idx > 0 and replay_dt <= last_replay_dt:
+                replay_dt = last_replay_dt + timedelta(seconds=1)
+        last_replay_dt = replay_dt
+
+        level = str(item["level"] or "INFO").strip().upper() or "INFO"
+        replay_text = str(item["text"] or "").strip()
+        if not replay_text:
+            continue
+
+        # Replay only to websocket stream; do not write back into runtime cache to avoid duplicate nesting.
+        replay_line = f"[{replay_dt.strftime('%Y-%m-%d %H:%M:%S')}] [{level}] {replay_text}"
+        try:
+            log_queue.put(replay_line)
+        except Exception:
+            thread_logger(replay_line)
+        replayed += 1
+    return replayed
 
 
 def _normalize_runtime_log_for_replay(line: str) -> str:
     text = str(line or "").strip()
     if not text:
         return ""
-    text = re.sub(r"^\[[0-9:\- ]+\]\s*\[[^\]]+\]\s*", "", text)
-    text = re.sub(r"^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]\s*(\[[^\]]+\]\s*)?", "", text)
+    # Strip nested runtime prefixes repeatedly (e.g. [10:31:03] [2026-...][INFO] ...).
+    for _ in range(4):
+        prev = text
+        text = re.sub(r"^\[[0-9:\- ]+\]\s*\[[^\]]+\]\s*", "", text).strip()
+        text = re.sub(r"^\[[0-9]{2}:[0-9]{2}:[0-9]{2}\]\s*(\[[^\]]+\]\s*)?", "", text).strip()
+        if text == prev:
+            break
+    text = re.sub(r"^\[(INFO|ERROR|WARN|WARNING|DEBUG|TRACE)\]\s*", "", text, flags=re.IGNORECASE).strip()
     return text
 
 
@@ -2859,7 +3613,7 @@ def _recent_analysis_log_lines(limit: int = 120) -> list[str]:
     selected = [line for line in logs if _is_user_visible_analysis_log(line)]
     if not selected:
         return []
-    return [_normalize_runtime_log_for_replay(line) for line in selected[-100:]]
+    return [str(line) for line in selected[-100:]]
 
 # Global Cache Timer
 ANALYSIS_REUSE_SECONDS_INTRADAY = 15 * 60
@@ -2986,7 +3740,7 @@ def refresh_stock_quotes_cache():
                 intraday_map[norm_code] = s
         market_map = {}
         try:
-            ensure_market_circ_map_cache()
+            ensure_market_circ_map_cache(allow_network=False)
             market_map = _get_market_circ_map_cache()
         except Exception:
             market_map = {}
@@ -3393,7 +4147,7 @@ def _hydrate_analysis_stock_data(stock_data: dict, raw_code: str) -> None:
 
     if _safe_float_number(stock_data.get("circulation_value")) <= 0:
         try:
-            ensure_market_circ_map_cache()
+            ensure_market_circ_map_cache(allow_network=False)
             market_map = _get_market_circ_map_cache() or {}
             circ_mv = _safe_float_number(
                 market_map.get(req_norm, 0)
@@ -3794,53 +4548,122 @@ async def get_stock_kline(code: str, type: str = "1min", user: models.User = Dep
         clean_code = "".join(filter(str.isdigit, code))
         if type == "1min":
             today_str = datetime.now().strftime('%Y-%m-%d')
+            # Probe previous trade dates whenever the market is not in active
+            # intraday session (weekends/holidays, pre-open, lunch break, post-close).
+            allow_non_trading_probe = not (is_market_open_day() and is_trading_time())
+            probe_dates = _probe_trade_dates_for_intraday() if allow_non_trading_probe else []
             today_df = lhb_manager.get_kline_1min(
                 clean_code,
                 today_str,
                 KLINE_MIN_REFRESH_SEC,
                 False,
             )
-            if today_df is not None and not today_df.empty:
-                return {"status": "success", "data": today_df.to_dict('records')}
+            today_rows = _normalize_intraday_kline_rows(today_df)
+            today_complete = False
+            try:
+                today_complete = bool(lhb_manager._is_intraday_cache_complete(today_df, today_str, True))
+            except Exception:
+                today_complete = False
+            if today_rows and today_complete:
+                return {"status": "success", "data": today_rows}
+
+            # Cache exists but incomplete (e.g. half-day): force one network补拉.
+            if today_rows and not today_complete:
+                repaired_df = lhb_manager.get_kline_1min(
+                    clean_code,
+                    today_str,
+                    KLINE_MIN_REFRESH_SEC,
+                    True,
+                )
+                repaired_rows = _normalize_intraday_kline_rows(repaired_df)
+                if repaired_rows:
+                    return {"status": "success", "data": repaired_rows}
 
             # 个股分时图兜底：history 主体 + latest(lt<=5) 增量，再回退新浪。
+            if allow_non_trading_probe and probe_dates:
+                network_probe_budget = min(4, len(probe_dates))
+                for probe_date in probe_dates:
+                    allow_network_probe = network_probe_budget > 0
+                    if allow_network_probe:
+                        network_probe_budget -= 1
+                    probe_df = lhb_manager.get_kline_1min(
+                        clean_code,
+                        probe_date,
+                        KLINE_MIN_REFRESH_SEC,
+                        allow_network_probe,
+                    )
+                    probe_rows = _normalize_intraday_kline_rows(probe_df)
+                    if probe_rows:
+                        probe_only = [row for row in probe_rows if str(row.get("date", "")).startswith(probe_date)]
+                        return {"status": "success", "data": (probe_only or probe_rows)}
+
             try:
                 fallback_df = await asyncio.to_thread(data_provider.fetch_intraday_data, clean_code)
-                if fallback_df is not None and not fallback_df.empty:
-                    if "day" in fallback_df.columns and "time" not in fallback_df.columns:
-                        fallback_df = fallback_df.rename(columns={"day": "time"})
-                    if "time" in fallback_df.columns:
-                        time_col = fallback_df["time"].astype(str)
-                        today_only = fallback_df[time_col.str.startswith(today_str)]
-                        if not today_only.empty:
-                            fallback_df = today_only
-                    return {"status": "success", "data": fallback_df.to_dict('records')}
+                fallback_rows = _normalize_intraday_kline_rows(fallback_df)
+                if fallback_rows:
+                    if allow_non_trading_probe and probe_dates:
+                        for probe_date in probe_dates:
+                            probe_only = [row for row in fallback_rows if str(row.get("date", "")).startswith(probe_date)]
+                            if probe_only:
+                                return {"status": "success", "data": probe_only}
+                    today_only = [row for row in fallback_rows if str(row.get("date", "")).startswith(today_str)]
+                    if today_only:
+                        fallback_rows = today_only
+                    return {"status": "success", "data": fallback_rows}
             except Exception:
                 pass
 
             # 最后兜底：返回近几日已有缓存，避免完全空白。
-            for offset in range(1, 5):
-                date_str = (datetime.now() - timedelta(days=offset)).strftime('%Y-%m-%d')
+            fallback_dates = list(probe_dates)
+            if not fallback_dates:
+                for offset in range(1, 8):
+                    target_dt = datetime.now() - timedelta(days=offset)
+                    if target_dt.weekday() >= 5:
+                        continue
+                    fallback_dates.append(target_dt.strftime('%Y-%m-%d'))
+                    if len(fallback_dates) >= 4:
+                        break
+            for date_str in fallback_dates:
                 df = lhb_manager.get_kline_1min(
                     clean_code,
                     date_str,
                     KLINE_MIN_REFRESH_SEC,
                     False,
                 )
-                if df is not None and not df.empty:
-                    return {"status": "success", "data": df.to_dict('records')}
-            return {"status": "success", "data": [], "message": "分时缓存暂无数据，请稍后重试"}
+                rows = _normalize_intraday_kline_rows(df)
+                if rows:
+                    rows_on_date = [row for row in rows if str(row.get("date", "")).startswith(date_str)]
+                    return {"status": "success", "data": (rows_on_date or rows)}
+            msg = "分时缓存暂无数据，请稍后重试"
+            try:
+                biying_cfg = data_provider._get_biying_config()
+                if not data_provider._biying_enabled(biying_cfg):
+                    msg = "分时缓存暂无数据：必盈数据源未启用，且默认公网源暂不可用"
+                elif lhb_manager.is_kline_network_paused():
+                    remain = lhb_manager.get_kline_pause_remaining_seconds()
+                    msg = f"分时缓存暂无数据：上游暂不可用，约{remain}s后重试"
+            except Exception:
+                pass
+            return {"status": "success", "data": [], "message": msg}
         elif type == "day":
             rows = get_day_kline_from_cache(clean_code)
             if not rows:
                 try:
-                    await asyncio.to_thread(refresh_day_kline_cache_for_code, clean_code, False)
+                    # User explicitly opened day-K with empty cache: allow a throttled
+                    # one-shot refresh regardless of current trading clock.
+                    await asyncio.to_thread(refresh_day_kline_cache_for_code, clean_code, True)
                     rows = get_day_kline_from_cache(clean_code)
                 except Exception:
                     rows = []
             if rows:
                 return {"status": "success", "data": rows}
-            return {"status": "success", "data": [], "message": "日K缓存暂无数据，请稍后重试"}
+            msg = "日K缓存暂无数据，请稍后重试"
+            try:
+                if not data_provider._biying_enabled(data_provider._get_biying_config()):
+                    msg = "日K缓存暂无数据：必盈数据源未启用，且默认公网源暂不可用"
+            except Exception:
+                pass
+            return {"status": "success", "data": [], "message": msg}
                 
     except Exception as e:
         return {"status": "error", "message": str(e)}
@@ -3894,6 +4717,40 @@ async def get_ai_markers(code: str, type: str = None, user: models.User = Depend
             return {"status": "success", "markers": [{"date": datetime.now().strftime('%Y-%m-%d'), "data": data}]}
             
     return {"status": "success", "markers": []}
+
+
+def _render_public_frontend_entry(filename: str) -> HTMLResponse:
+    if DISABLE_PUBLIC_FRONTEND:
+        return JSONResponse({"detail": "Public frontend disabled"}, status_code=404)
+    html_path = FRONTEND_DIR / str(filename or "").strip()
+    injected = _render_frontend_html_with_runtime_vars(
+        html_path,
+        auth_api_prefix=get_auth_api_prefix(),
+    )
+    if injected is not None:
+        return injected
+    raise HTTPException(status_code=404, detail="Frontend entry not found")
+
+
+@app.get("/", include_in_schema=False)
+async def serve_public_index():
+    return _render_public_frontend_entry("index.html")
+
+
+@app.get("/index.html", include_in_schema=False)
+async def serve_public_index_html():
+    return _render_public_frontend_entry("index.html")
+
+
+@app.get("/lhb.html", include_in_schema=False)
+async def serve_public_lhb_html():
+    return _render_public_frontend_entry("lhb.html")
+
+
+@app.get("/help.html", include_in_schema=False)
+async def serve_public_help_html():
+    return _render_public_frontend_entry("help.html")
+
 
 # --- Static Files Deployment ---
 # Serve frontend from root URL

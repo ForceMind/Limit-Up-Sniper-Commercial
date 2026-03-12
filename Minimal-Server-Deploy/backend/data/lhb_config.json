@@ -1,8 +1,1 @@
-﻿{
-  "enabled": true,
-  "days": 1,
-  "min_amount": 20000000,
-  "last_update": null,
-  "sync_time": "17:30",
-  "last_ai_cache_update": null
-}
+﻿{"enabled":true,"days":3,"min_amount":20000000}

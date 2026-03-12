@@ -350,6 +350,14 @@ tune_systemd_service() {
 
     local deepseek_key
     deepseek_key=$(grep -E '^Environment="DEEPSEEK_API_KEY=' "$SERVICE_FILE" | head -n 1 | sed -E 's/^Environment="DEEPSEEK_API_KEY=([^"]*)"/\1/') || true
+    local disable_public_frontend
+    disable_public_frontend=$(grep -E '^Environment="DISABLE_PUBLIC_FRONTEND=' "$SERVICE_FILE" | head -n 1 | sed -E 's/^Environment="DISABLE_PUBLIC_FRONTEND=([^"]*)"/\1/') || true
+    local auth_api_prefix
+    auth_api_prefix=$(grep -E '^Environment="AUTH_API_PREFIX=' "$SERVICE_FILE" | head -n 1 | sed -E 's/^Environment="AUTH_API_PREFIX=([^"]*)"/\1/') || true
+    local status_rate_window
+    status_rate_window=$(grep -E '^Environment="STATUS_RATE_LIMIT_WINDOW_SECONDS=' "$SERVICE_FILE" | head -n 1 | sed -E 's/^Environment="STATUS_RATE_LIMIT_WINDOW_SECONDS=([^"]*)"/\1/') || true
+    local status_rate_max
+    status_rate_max=$(grep -E '^Environment="STATUS_RATE_LIMIT_MAX_REQUESTS=' "$SERVICE_FILE" | head -n 1 | sed -E 's/^Environment="STATUS_RATE_LIMIT_MAX_REQUESTS=([^"]*)"/\1/') || true
 
     cat > "$SERVICE_FILE" <<EOF
 [Unit]
@@ -371,6 +379,19 @@ RestartSec=5
 [Install]
 WantedBy=multi-user.target
 EOF
+
+    if [ -n "$disable_public_frontend" ]; then
+        sed -i -E '/^Environment="BACKGROUND_SINGLETON_PORT=/a Environment="DISABLE_PUBLIC_FRONTEND='"$disable_public_frontend"'"' "$SERVICE_FILE"
+    fi
+    if [ -n "$auth_api_prefix" ]; then
+        sed -i -E '/^Environment="BACKGROUND_SINGLETON_PORT=/a Environment="AUTH_API_PREFIX='"$auth_api_prefix"'"' "$SERVICE_FILE"
+    fi
+    if [ -n "$status_rate_window" ]; then
+        sed -i -E '/^Environment="BACKGROUND_SINGLETON_PORT=/a Environment="STATUS_RATE_LIMIT_WINDOW_SECONDS='"$status_rate_window"'"' "$SERVICE_FILE"
+    fi
+    if [ -n "$status_rate_max" ]; then
+        sed -i -E '/^Environment="BACKGROUND_SINGLETON_PORT=/a Environment="STATUS_RATE_LIMIT_MAX_REQUESTS='"$status_rate_max"'"' "$SERVICE_FILE"
+    fi
 
     systemctl daemon-reload
 }

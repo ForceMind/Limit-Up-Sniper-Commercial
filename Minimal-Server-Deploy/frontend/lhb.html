@@ -51,6 +51,22 @@
             return '';
         };
         const API_BASE_URL = getApiBaseUrl();
+        const normalizeApiPrefix = (value, fallback = '/api/auth') => {
+            let raw = String(value || '').trim();
+            if (!raw) return fallback;
+            if (!raw.startsWith('/')) raw = '/' + raw;
+            if (!raw.startsWith('/api/')) raw = '/api' + raw;
+            raw = '/' + raw.split('/').filter(Boolean).join('/');
+            return raw || fallback;
+        };
+        // Auth path is fixed at build time via window.__AUTH_API_PREFIX__ (fallback: /api/auth).
+        const AUTH_API_PREFIX = normalizeApiPrefix(window.__AUTH_API_PREFIX__ || '/api/auth');
+        const getAuthApiPrefix = () => AUTH_API_PREFIX;
+        const buildAuthApiUrl = (suffix = '') => {
+            const clean = String(suffix || '').trim();
+            const tail = clean ? (clean.startsWith('/') ? clean : `/${clean}`) : '';
+            return `${API_BASE_URL}${getAuthApiPrefix()}${tail}`;
+        };
     </script>
     <style>
         .markdown-content h1, .markdown-content h2, .markdown-content h3 {
@@ -313,10 +329,15 @@
                 }
             },
             methods: {
+                authApiUrl(path = '') {
+                    const clean = String(path || '').trim();
+                    if (!clean) return buildAuthApiUrl('');
+                    return buildAuthApiUrl(clean);
+                },
                 async ensureSession() {
                     this.deviceId = ensureDeviceId();
                     try {
-                        await fetch(API_BASE_URL + '/api/auth/login', {
+                        await fetch(this.authApiUrl('/login'), {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ device_id: this.deviceId })
@@ -441,9 +462,10 @@
                 this.authErrorHandler = (event) => this.handleAuthError(event);
                 window.addEventListener('auth-error', this.authErrorHandler);
 
-                this.ensureSession().finally(() => {
-                    this.fetchDates();
-                });
+                (async () => {
+                    await this.ensureSession();
+                    await this.fetchDates();
+                })();
             },
             beforeUnmount() {
                 if (this.authErrorHandler) {

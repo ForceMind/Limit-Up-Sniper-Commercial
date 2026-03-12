@@ -25,9 +25,10 @@ AUTH_ACCESS_LIMITS_FILE = DATA_DIR / "auth_access_limits.json"
 PAID_VERSIONS = {"basic", "advanced", "flagship"}
 GUEST_PREFIXES = ("guestv2_", "guest_", "visitor_")
 GUEST_TRIAL_MINUTES = 10
+REGISTER_TRIAL_DAYS = 3
 REGISTER_PER_IP_LIMIT = 3
 GUEST_PER_IP_LIMIT = 3
-SERVER_VERSION = os.getenv("APP_VERSION", "v3.0.2")
+SERVER_VERSION = os.getenv("APP_VERSION", "v3.1.0")
 
 
 def _ensure_data_dir():
@@ -157,6 +158,43 @@ def _guest_limit_detail(must_login: bool) -> str:
     if must_login:
         return "当前IP/设备游客已达上限，你已注册过账号，请先登录"
     return "当前IP/设备游客已达上限，请先注册账号"
+
+
+def _remove_guest_device_from_limits(
+    limits: dict,
+    *,
+    device_id: str = "",
+    client_ip: str = "",
+    fingerprint_id: str = "",
+):
+    if not isinstance(limits, dict):
+        return
+    did = str(device_id or "").strip()
+    ip_guest_devices = limits.setdefault("ip_guest_devices", {})
+    if isinstance(ip_guest_devices, dict):
+        for ip_key, arr in list(ip_guest_devices.items()):
+            cleaned = [x for x in _dedupe_str_list(arr) if (not did) or x != did]
+            if cleaned:
+                ip_guest_devices[ip_key] = cleaned
+            else:
+                ip_guest_devices.pop(ip_key, None)
+        if client_ip and client_ip in ip_guest_devices:
+            cleaned = [x for x in _dedupe_str_list(ip_guest_devices.get(client_ip, [])) if (not did) or x != did]
+            if cleaned:
+                ip_guest_devices[client_ip] = cleaned
+            else:
+                ip_guest_devices.pop(client_ip, None)
+
+    fp_guest_device = limits.setdefault("fingerprint_guest_device", {})
+    if isinstance(fp_guest_device, dict):
+        if fingerprint_id:
+            bound = str(fp_guest_device.get(fingerprint_id, "") or "").strip()
+            if (not did) or (bound == did):
+                fp_guest_device.pop(fingerprint_id, None)
+        if did:
+            for fp, bound in list(fp_guest_device.items()):
+                if str(bound or "").strip() == did:
+                    fp_guest_device.pop(fp, None)
 
 def _hash_password(password: str, salt: str) -> str:
     return account_store.hash_password(password, salt)
@@ -436,6 +474,8 @@ async def register(request: Request, data: dict = Body(...), db: Session = Depen
         raise HTTPException(status_code=400, detail="用户名已存在")
 
     accounts = _load_accounts()
+    source_device_id = str(request.headers.get("X-Device-ID") or "").strip()
+    source_is_guest = _is_guest_device(source_device_id)
 
     salt = os.urandom(8).hex()
     password_hash = _hash_password(password, salt)
@@ -452,7 +492,7 @@ async def register(request: Request, data: dict = Body(...), db: Session = Depen
     invite_code = account_store.ensure_account_invite_code(username, accounts)
     _save_accounts(accounts)
 
-    if client_ip or fingerprint_id:
+    if client_ip or fingerprint_id or source_is_guest:
         ip_registered_users = limits.setdefault("ip_registered_users", {})
         fingerprint_registered_users = limits.setdefault("fingerprint_registered_users", {})
         if client_ip:
@@ -465,10 +505,33 @@ async def register(request: Request, data: dict = Body(...), db: Session = Depen
                 _dedupe_str_list(fingerprint_registered_users.get(fingerprint_id, [])),
                 username,
             )
+
+        if source_is_guest:
+            _remove_guest_device_from_limits(
+                limits,
+                device_id=source_device_id,
+                client_ip=client_ip,
+                fingerprint_id=fingerprint_id,
+            )
         _save_auth_access_limits(limits)
 
     # 注册后默认未开通高级权限（需申请体验或购买）
-    user = user_service.get_or_create_user(db, device_id)
+    guest_user = None
+    if source_is_guest:
+        guest_user = db.query(models.User).filter(models.User.device_id == source_device_id).first()
+
+    user = db.query(models.User).filter(models.User.device_id == device_id).first()
+    if guest_user and (user is None or guest_user.id == user.id):
+        guest_user.device_id = device_id
+        user = guest_user
+    else:
+        user = user or user_service.get_or_create_user(db, device_id)
+        if guest_user and guest_user.id != user.id:
+            try:
+                db.delete(guest_user)
+            except Exception:
+                pass
+
     user.version = "trial"
     user.expires_at = datetime.utcnow()
     user.daily_ai_count = 0
@@ -624,15 +687,15 @@ async def apply_trial(
 
     user = user_service.get_or_create_user(db, x_device_id)
     if user.version in PAID_VERSIONS:
-        raise HTTPException(status_code=400, detail="会员账号不支持申请10分钟体验")
+        raise HTTPException(status_code=400, detail="会员账号无需申请3天体验")
 
     account = account_store.get_account_by_username(account_key) or accounts[account_key]
     if bool(account.get("trial_applied")):
-        raise HTTPException(status_code=400, detail="当前账号已申请过10分钟体验")
+        raise HTTPException(status_code=400, detail="当前账号已申请过3天体验")
 
     fp_used = _load_trial_fingerprints()
     if fp_used.get(fingerprint_id):
-        raise HTTPException(status_code=400, detail="当前设备已使用过体验资格")
+        raise HTTPException(status_code=400, detail="当前设备已使用过3天体验资格")
 
     fp_used[fingerprint_id] = {
         "username": account_key,
@@ -649,7 +712,7 @@ async def apply_trial(
     )
 
     user.version = "trial"
-    user.expires_at = datetime.utcnow() + timedelta(minutes=10)
+    user.expires_at = datetime.utcnow() + timedelta(days=REGISTER_TRIAL_DAYS)
     user.daily_ai_count = 0
     user.daily_raid_count = 0
     user.daily_review_count = 0
@@ -664,7 +727,7 @@ async def apply_trial(
         path="/api/auth/apply_trial",
         username=account_key,
         device_id=x_device_id,
-        detail="trial_10min_applied",
+        detail=f"trial_{REGISTER_TRIAL_DAYS}d_applied",
     )
 
     return {

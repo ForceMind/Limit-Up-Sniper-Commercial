@@ -620,7 +620,10 @@
                         <section class="mb-8 border-b pb-8">
                             <h3 class="text-xl font-semibold mb-4 text-gray-700">后台地址</h3>
                             <div class="bg-gray-50 border border-gray-200 rounded p-4 max-w-2xl">
-                                <p class="text-sm text-gray-500 mb-3">自定义后台访问地址与管理员API前缀，保存后即时生效，无需重新打包前端。</p>
+                                <p class="text-sm text-gray-500 mb-3">
+                                    后台路径与管理员API前缀保存后即时生效，无需重新打包管理端；
+                                    认证API前缀用于用户端登录接口；若用户前端独立部署（如 CF Pages）需按同前缀重新打包发布，若由本服务端托管页面则会自动生效。
+                                </p>
                                 <div class="flex gap-3 items-end">
                                     <div class="flex-1">
                                         <label class="block text-sm font-bold text-gray-700 mb-1">后台路径</label>
@@ -644,6 +647,23 @@
                                     </button>
                                 </div>
                                 <div class="text-xs text-gray-500 mt-2">当前生效：<span class="font-mono">{{ adminApiPrefix || '/api/admin' }}</span></div>
+
+                                <div class="flex gap-3 items-end mt-4">
+                                    <div class="flex-1">
+                                        <label class="block text-sm font-bold text-gray-700 mb-1">认证API前缀</label>
+                                        <input type="text" v-model="authApiPrefix" class="w-full border rounded p-2 text-sm font-mono" placeholder="/api/auth">
+                                    </div>
+                                    <button @click="saveAuthApiPrefix" class="text-white px-4 py-2 rounded text-sm whitespace-nowrap"
+                                        :class="isConfigDirty('admin_path') ? 'bg-amber-600 hover:bg-amber-700' : 'bg-indigo-600 hover:bg-indigo-700'">
+                                        {{ isConfigDirty('admin_path') ? '保存认证前缀（未保存）' : '保存认证前缀' }}
+                                    </button>
+                                </div>
+                                <div class="text-xs text-gray-500 mt-2">
+                                    当前生效：<span class="font-mono">{{ authApiPrefix || '/api/auth' }}</span>
+                                    <span v-if="authApiPrefixEnvOverride" class="text-amber-700 ml-2">
+                                        （检测到环境变量 AUTH_API_PREFIX={{ authApiPrefixEnvOverride }}，会覆盖后台设置）
+                                    </span>
+                                </div>
                             </div>
                         </section>
 
@@ -815,7 +835,7 @@
                                             <div class="font-mono">{{ log.device_info || '-' }}</div>
                                             <div class="text-gray-400 font-mono">{{ log.device_id || '-' }}</div>
                                         </td>
-                                        <td class="p-3 font-mono text-xs">{{ log.ip || '-' }}</td>
+                                        <td class="p-3 font-mono text-xs break-all">{{ formatIpDisplay(log.ip, log.ip_location) }}</td>
                                         <td class="p-3 font-bold whitespace-nowrap" :class="(log.status || '').toLowerCase() === 'success' ? 'text-green-600' : 'text-red-500'">{{ log.status || '-' }}</td>
                                         <td class="p-3 text-xs text-gray-600">{{ log.detail || '-' }}</td>
                                     </tr>
@@ -870,7 +890,7 @@
                                             </span>
                                         </td>
                                         <td class="p-3 font-mono text-xs">{{ log.event || '-' }}</td>
-                                        <td class="p-3 font-mono text-xs">{{ log.ip || '-' }}</td>
+                                        <td class="p-3 font-mono text-xs break-all">{{ formatIpDisplay(log.ip, log.ip_location) }}</td>
                                         <td class="p-3 text-xs">{{ log.admin_username || '-' }}</td>
                                         <td class="p-3 text-xs text-gray-700">{{ log.detail || '-' }}</td>
                                         <td class="p-3 text-xs text-gray-500">
@@ -1149,12 +1169,19 @@
                             <button @click="setUserFilter('all')" :class="userFilter === 'all' ? 'bg-gray-900 text-white' : 'bg-white border'" class="px-3 py-1 rounded text-sm">全部</button>
                             <button @click="setUserFilter('registered')" :class="userFilter === 'registered' ? 'bg-gray-900 text-white' : 'bg-white border'" class="px-3 py-1 rounded text-sm">正式注册</button>
                             <button @click="setUserFilter('guest')" :class="userFilter === 'guest' ? 'bg-gray-900 text-white' : 'bg-white border'" class="px-3 py-1 rounded text-sm">游客</button>
+                            <button
+                                @click="deleteAllGuestUsers"
+                                :disabled="deletingAllGuests"
+                                class="px-3 py-1 rounded text-sm border border-rose-500 text-rose-600 hover:text-rose-700 disabled:opacity-40"
+                            >
+                                {{ deletingAllGuests ? '删除中...' : '一键删除全部游客' }}
+                            </button>
                             <button @click="fetchUsers" class="text-blue-500 hover:text-blue-700">刷新</button>
                         </div>
                     </div>
 
                     <div class="bg-white rounded shadow overflow-x-auto">
-                        <table class="w-full min-w-[1500px] text-left table-auto">
+                        <table class="w-full min-w-[1840px] text-left table-auto">
                             <thead class="bg-gray-50 border-b">
                                 <tr>
                                     <th class="p-3 font-semibold text-gray-600 w-16">ID</th>
@@ -1163,9 +1190,11 @@
                                     <th class="p-3 font-semibold text-gray-600 w-28">账号类型</th>
                                     <th class="p-3 font-semibold text-gray-600 w-24">会员版本</th>
                                     <th class="p-3 font-semibold text-gray-600 w-36">状态</th>
-                                    <th class="p-3 font-semibold text-gray-600 w-56">过期时间</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-52">过期时间</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-52">最后在线</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-52">最近IP</th>
                                     <th class="p-3 font-semibold text-gray-600 w-64">用量 (已用/剩余/总额)</th>
-                                    <th class="p-3 font-semibold text-gray-600 w-[380px]">操作</th>
+                                    <th class="p-3 font-semibold text-gray-600 w-[440px]">操作</th>
                                 </tr>
                             </thead>
                             <tbody class="divide-y text-sm">
@@ -1194,8 +1223,17 @@
                                         <span v-else-if="u.is_expired" class="bg-amber-100 text-amber-700 px-2 py-1 rounded-full text-xs">过期</span>
                                         <span v-else class="bg-green-100 text-green-800 px-2 py-1 rounded-full text-xs">正常</span>
                                         <div v-if="u.is_banned && u.banned_reason" class="text-[11px] text-red-500 mt-1">{{ u.banned_reason }}</div>
+                                        <div v-if="u.is_registered" class="text-[11px] mt-1" :class="u.trial_applied ? 'text-emerald-600' : 'text-amber-600'">
+                                            {{ u.trial_applied ? '3天体验：已申请' : '3天体验：未申请' }}
+                                        </div>
                                     </td>
                                     <td class="p-3 text-xs whitespace-nowrap">{{ u.expires_at ? formatShanghaiTime(u.expires_at) : '永久' }}</td>
+                                    <td class="p-3 text-xs whitespace-nowrap">
+                                        <span v-if="u.last_online_at">{{ formatShanghaiTime(u.last_online_at) }}</span>
+                                        <span v-else class="text-gray-400">-</span>
+                                        <div v-if="u.is_online_recent" class="text-[11px] text-emerald-600">在线</div>
+                                    </td>
+                                    <td class="p-3 text-xs font-mono break-all">{{ formatIpDisplay(u.last_ip, u.last_ip_location) }}</td>
                                     <td class="p-3 text-xs font-mono">
                                         <div>AI: {{ u.daily_ai_count }} / {{ u.remaining_ai }} / {{ u.quota_ai }}</div>
                                         <div>突击: {{ u.daily_raid_count }} / {{ u.remaining_raid }} / {{ u.quota_raid }}</div>
@@ -1209,6 +1247,7 @@
                                             <button @click="toggleUserBan(u)" :disabled="!u.is_registered" class="text-xs border rounded px-2 py-1 disabled:opacity-40" :class="u.is_banned ? 'text-emerald-600 border-emerald-500 hover:text-emerald-700' : 'text-red-600 border-red-500 hover:text-red-700'">
                                                 {{ u.is_banned ? '解封' : '封禁' }}
                                             </button>
+                                            <button v-if="!u.is_registered" @click="deleteGuestUser(u)" class="text-xs border border-rose-500 text-rose-600 rounded px-2 py-1 hover:text-rose-700">删除游客</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -2039,7 +2078,8 @@
                         }
                     },
                     users: [],
-                    userFilter: 'all',
+                    userFilter: 'registered',
+                    deletingAllGuests: false,
                     orders: [],
                     orderStats: {},
                     msgModal: { show: false, msg: '', type: 'info' },
@@ -2135,6 +2175,8 @@
                     // Admin Account
                     adminPanelPath: '/admin',
                     adminApiPrefix: '/api/admin',
+                    authApiPrefix: '/api/auth',
+                    authApiPrefixEnvOverride: '',
                     newAdminUsername: '',
                     newAdminPassword: '',
                     passwordMsg: '',
@@ -2204,6 +2246,7 @@
                         this.fetchConfig();
                         this.fetchAdminPanelPath();
                         this.fetchAdminApiPrefix();
+                        this.fetchAuthApiPrefix();
                         this.fetchDataFiles();
                     }
                     if (val === 'users') {
@@ -2318,7 +2361,8 @@
                     if (section === 'admin_path') {
                         return {
                             panel_path: this.adminPanelPath || '/admin',
-                            api_prefix: this.adminApiPrefix || '/api/admin'
+                            api_prefix: this.adminApiPrefix || '/api/admin',
+                            auth_api_prefix: this.authApiPrefix || '/api/auth'
                         };
                     }
                     return null;
@@ -2915,6 +2959,12 @@
                         hour12: false
                     }).format(dt);
                 },
+                formatIpDisplay(ip, location = '') {
+                    const ipText = String(ip || '').trim();
+                    const locText = String(location || '').trim();
+                    if (!ipText) return '-';
+                    return locText ? `${ipText} (${locText})` : ipText;
+                },
                 formatFileSize(size) {
                     const n = Number(size || 0);
                     if (!Number.isFinite(n) || n <= 0) return '0 B';
@@ -3110,6 +3160,7 @@
                         this.fetchConfig();
                         this.fetchAdminPanelPath();
                         this.fetchAdminApiPrefix();
+                        this.fetchAuthApiPrefix();
                         this.fetchDataFiles();
                         this.fetchUsers();
                         this.fetchOrders();
@@ -3248,6 +3299,20 @@
                         console.error('Fetch admin api prefix failed', e);
                     }
                 },
+                async fetchAuthApiPrefix() {
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/auth_api_prefix', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (res.ok) {
+                            this.authApiPrefix = data.prefix || '/api/auth';
+                            this.authApiPrefixEnvOverride = String(data.env_override || '').trim();
+                            this.snapshotConfigSection('admin_path');
+                        }
+                    } catch (e) {
+                        console.error('Fetch auth api prefix failed', e);
+                    }
+                },
                 async saveAdminPanelPath() {
                     const path = (this.adminPanelPath || '').trim();
                     if (!path) {
@@ -3290,6 +3355,33 @@
                         this.showMsg(`管理员API前缀已更新为 ${finalPrefix}`, 'success');
                     } catch (e) {
                         this.showMsg(e.message || '保存管理员API前缀失败', 'error');
+                    }
+                },
+                async saveAuthApiPrefix() {
+                    const prefix = (this.authApiPrefix || '').trim();
+                    if (!prefix) {
+                        this.showMsg('请输入认证API前缀', 'error');
+                        return;
+                    }
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/auth_api_prefix', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({ prefix })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '保存认证API前缀失败');
+                        this.authApiPrefix = data.prefix || prefix;
+                        this.authApiPrefixEnvOverride = String(data.env_override || '').trim();
+                        this.snapshotConfigSection('admin_path');
+                        if (this.authApiPrefixEnvOverride) {
+                            this.showMsg(`已保存为 ${this.authApiPrefix}，但当前被环境变量 AUTH_API_PREFIX=${this.authApiPrefixEnvOverride} 覆盖`, 'warning');
+                        } else {
+                            this.showMsg(`认证API前缀已更新为 ${this.authApiPrefix}`, 'success');
+                        }
+                    } catch (e) {
+                        this.showMsg(e.message || '保存认证API前缀失败', 'error');
                     }
                 },
                 async updateAdminAccount() {
@@ -3403,12 +3495,12 @@
 
                 // Users
                 setUserFilter(mode) {
-                    this.userFilter = mode || 'all';
+                    this.userFilter = mode || 'registered';
                     this.fetchUsers();
                 },
                 async fetchUsers() {
                     try {
-                        const qs = new URLSearchParams({ account_type: this.userFilter || 'all' }).toString();
+                        const qs = new URLSearchParams({ account_type: this.userFilter || 'registered' }).toString();
                         const res = await fetch(API_BASE_URL + `/api/admin/users?${qs}`, { headers: this.getHeaders() });
                         if (res.status === 403) { this.clearAuth(true); return; }
                         if (!res.ok) throw new Error(`Users Load Failed: ${res.status}`);
@@ -3840,6 +3932,50 @@
                         this.showMsg(`已重置 ${data.username} 密码: ${data.new_password}`, 'success');
                     } catch (e) {
                         this.showMsg(e.message || '重置密码失败', 'error');
+                    }
+                },
+                async deleteAllGuestUsers() {
+                    if (this.deletingAllGuests) return;
+                    const confirmed = await this.showConfirm('确认一键删除全部游客账号？此操作不可恢复。');
+                    if (!confirmed) return;
+                    this.deletingAllGuests = true;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/users/delete_all_guests', {
+                            method: 'POST',
+                            headers: this.getHeaders()
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '删除全部游客失败');
+                        const deleted = Number(data.deleted || 0);
+                        this.showMsg(`已删除 ${deleted} 个游客账号`, 'success');
+                        this.fetchUsers();
+                    } catch (e) {
+                        this.showMsg(e.message || '删除全部游客失败', 'error');
+                    } finally {
+                        this.deletingAllGuests = false;
+                    }
+                },
+                async deleteGuestUser(user) {
+                    if (!user || !user.id || user.is_registered) {
+                        this.showMsg('仅支持删除游客账号', 'info');
+                        return;
+                    }
+                    const confirmed = await this.showConfirm(`确认删除游客账号 ${user.device_id || user.id}？`);
+                    if (!confirmed) return;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/users/delete', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({ user_id: user.id })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '删除失败');
+                        this.showMsg('游客账号已删除', 'success');
+                        this.fetchUsers();
+                    } catch (e) {
+                        this.showMsg(e.message || '删除游客账号失败', 'error');
                     }
                 },
                 async toggleUserBan(user) {

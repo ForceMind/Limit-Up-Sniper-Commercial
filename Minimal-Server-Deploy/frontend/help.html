@@ -24,10 +24,13 @@
     <div class="max-w-4xl mx-auto">
         <header class="mb-8 border-b border-gray-200 dark:border-gray-700 pb-4 flex justify-between items-center">
             <div>
+                <button onclick="goBackOrHome()" class="mb-3 inline-flex items-center px-3 py-1.5 text-xs rounded border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800">
+                    ← 返回
+                </button>
                 <h1 class="text-3xl font-bold text-red-600 dark:text-red-500 flex items-center gap-3">
-                    <span class="text-4xl">🎯</span> 涨停狙击手 (Limit-Up Sniper)
+                    <span class="text-4xl">🎯</span> 涨停狙击手
                 </h1>
-                <p class="text-gray-500 dark:text-gray-400 mt-2">新一代 AI 驱动的超短线辅助决策系统</p>
+                <p class="text-gray-500 dark:text-gray-400 mt-2">短线行情监控与智能辅助决策系统</p>
             </div>
             <button onclick="toggleTheme()" class="p-2 rounded-full hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors">
                 <span id="theme-icon">🌞</span>
@@ -42,27 +45,30 @@
                 </h2>
                 <div class="grid md:grid-cols-2 gap-6">
                     <div class="feature-card">
-                        <h3 class="text-xl font-bold text-purple-600 dark:text-purple-400 mb-2">🎯 竞价抢筹 (Aggressive)</h3>
+                        <h3 class="text-xl font-bold text-purple-600 dark:text-purple-400 mb-2">🎯 竞价抢筹</h3>
                         <p class="text-sm text-gray-600 dark:text-gray-300">
-                            <strong>适用场景：</strong> 每日 09:25 - 09:30<br>
-                            <strong>功能说明：</strong> 系统会在集合竞价结束后，自动扫描全市场，筛选出具有“弱转强”、“高开秒板”潜力的个股。
+                            <strong>适用场景：</strong> 每日 09:15 - 09:25<br>
+                            <strong>功能说明：</strong> 系统在竞价时段筛选潜在强势标的，适合开盘前做计划与下单准备。
                         </p>
                         <ul class="text-sm text-gray-600 dark:text-gray-300 mt-2">
-                            <li>重点关注：昨日涨停、今日高开、竞价量能爆棚的标的。</li>
-                            <li>AI 角色：顶级游资，专注于博弈开盘溢价。</li>
+                            <li>建议在 09:25 前看完并决定是否挂单抢筹。</li>
+                            <li>优先看：评分、涨幅、换手、流通市值和概念联动。</li>
+                            <li>点击股票行可打开图表；左侧细条可查看“选入逻辑”。</li>
+                            <li>初级版及以上可查看该列表。</li>
                         </ul>
                     </div>
 
                     <div class="feature-card">
-                        <h3 class="text-xl font-bold text-red-600 dark:text-red-400 mb-2">🚀 盘中打板 (Intraday)</h3>
+                        <h3 class="text-xl font-bold text-red-600 dark:text-red-400 mb-2">🚀 盘中打板</h3>
                         <p class="text-sm text-gray-600 dark:text-gray-300">
                             <strong>适用场景：</strong> 每日 09:30 - 15:00<br>
-                            <strong>功能说明：</strong> 实时监控全市场异动，捕捉即将涨停或刚刚涨停的股票。
+                            <strong>功能说明：</strong> 开盘后看盘中打板，实时监控强势股异动与封板质量。
                         </p>
                         <ul class="text-sm text-gray-600 dark:text-gray-300 mt-2">
-                            <li><strong>涨速：</strong> 监控短时间内快速拉升的个股。</li>
-                            <li><strong>换手率：</strong> 实时计算换手率，辅助判断筹码交换情况。</li>
-                            <li><strong>AI 角色：</strong> 打板客，专注于封板质量和连板接力。</li>
+                            <li>建议情绪偏强时再参与，避免弱市盲目追高。</li>
+                            <li>组合查看：涨速、换手、连板、概念共振、疑似主力。</li>
+                            <li>“已剔除/变弱”区域用于复盘，不建议作为追涨依据。</li>
+                            <li>每行“🤖”可触发智能分析，会消耗当日分析次数。</li>
                         </ul>
                     </div>
 
@@ -70,68 +76,67 @@
                         <h3 class="text-xl font-bold text-yellow-600 dark:text-yellow-400 mb-2">🔥 涨停池 & 炸板池</h3>
                         <p class="text-sm text-gray-600 dark:text-gray-300">
                             <strong>适用场景：</strong> 全天候复盘<br>
-                            <strong>功能说明：</strong> 
+                            <strong>功能说明：</strong> 快速观察封板质量、回封强弱与市场分歧。
                         </p>
                         <ul class="text-sm text-gray-600 dark:text-gray-300 mt-2">
-                            <li><strong>涨停池：</strong> 今日所有封死涨停的股票，按时间排序。</li>
-                            <li><strong>炸板池：</strong> 曾经涨停但后来打开的股票，用于观察市场亏钱效应。</li>
-                            <li><strong>已剔除：</strong> 盘中转弱或 AI 建议剔除的标的，保留展示以便复盘。</li>
+                            <li><strong>已涨停：</strong> 重点看首封时间、概念、晋级率、连板。</li>
+                            <li><strong>炸板：</strong> 重点看回封率、振幅、换手，判断承接是否存在。</li>
+                            <li>移动端默认上下折叠，点击标题可展开对应列表。</li>
                         </ul>
                     </div>
 
                     <div class="feature-card">
-                        <h3 class="text-xl font-bold text-blue-600 dark:text-blue-400 mb-2">📝 自选个股 (Manual)</h3>
+                        <h3 class="text-xl font-bold text-blue-600 dark:text-blue-400 mb-2">📝 自选个股</h3>
                         <p class="text-sm text-gray-600 dark:text-gray-300">
                             <strong>适用场景：</strong> 个人跟踪<br>
-                            <strong>功能说明：</strong> 您可以手动添加感兴趣的股票进行长期跟踪。
+                            <strong>功能说明：</strong> 维护你的重点观察池，便于连续跟踪。
                         </p>
                         <ul class="text-sm text-gray-600 dark:text-gray-300 mt-2">
                             <li>支持搜索添加（代码或拼音）。</li>
-                            <li><strong>排序优化：</strong> 按添加时间倒序排列，新加的在最上方。</li>
-                            <li><strong>AI 角色：</strong> 价值/波段交易者，专注于基本面和趋势分析。</li>
+                            <li>默认按添加时间倒序，新添加的股票排在最上方。</li>
+                            <li>开启编辑后可快速移除不再关注的标的。</li>
                         </ul>
                     </div>
                 </div>
             </section>
 
-            <!-- 2. 新闻与舆情 (New) -->
+            <!-- 2. 新闻与舆情 -->
             <section class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md border border-gray-200 dark:border-gray-700">
                 <h2 class="text-2xl font-bold mb-4 flex items-center gap-2">
-                    <span>📰</span> 新闻舆情中心 (News Center)
+                    <span>📰</span> 新闻舆情中心
                 </h2>
                 <div class="prose dark:prose-invert max-w-none text-sm">
                     <p>
-                        新增的独立新闻聚合模块，点击顶部的 <span class="inline-block px-2 py-0.5 bg-blue-100 text-blue-600 rounded text-xs font-bold">📰 新闻</span> 按钮即可打开。
+                        点击顶部 <span class="inline-block px-2 py-0.5 bg-blue-100 text-blue-600 rounded text-xs font-bold">📰 新闻</span> 按钮即可进入新闻舆情页。
                     </p>
                     <ul class="list-disc pl-5 space-y-2">
-                        <li><strong>实时电报：</strong> 自动接入主流财经媒体的7x24小时电报，不再错过任何利好。</li>
-                        <li><strong>智能总结：</strong> AI 自动提炼新闻摘要，并尝试关联相关股票 (Tag)。</li>
-                        <li><strong>历史回溯：</strong> 支持查看过去 7 天的新闻记录，并提供按日期筛选功能。</li>
+                        <li><strong>实时电报：</strong> 自动聚合财经快讯，帮助你同步题材变化。</li>
+                        <li><strong>智能总结：</strong> 系统会提炼重点，并尝试关联到股票与概念。</li>
+                        <li><strong>历史记录：</strong> 支持按时间查看与清理本地缓存。</li>
                         <li><strong>选入逻辑可视化：</strong> 
-                            在股票列表中，新增了 <span class="font-mono bg-gray-100 dark:bg-gray-700 px-1 rounded">选入逻辑</span> 字段。
-                            <br> AI 分析出的核心利好、概念或理由会直接显示在这里（例如："利好：自动驾驶概念" 或 "AI点评：弱转强"），点击该字段可查看完整详情。
+                            股票列表里的 <span class="font-mono bg-gray-100 dark:bg-gray-700 px-1 rounded">选入逻辑</span> 支持查看完整依据。
+                            <br> 建议先看逻辑是否和当日市场主线一致，再决定是否继续跟踪。
                         </li>
                     </ul>
                 </div>
             </section>
 
-            <!-- 3. 龙虎榜指挥中心 (New) -->
+            <!-- 3. 龙虎榜指挥中心 -->
             <section class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md border border-gray-200 dark:border-gray-700">
                 <h2 class="text-2xl font-bold mb-4 flex items-center gap-2">
                     <span>🐉</span> 龙虎榜指挥中心
                 </h2>
                 <div class="prose dark:prose-invert max-w-none text-sm">
                     <p>
-                        全新的龙虎榜数据分析模块，集成了数据采集、历史回溯与 AI 深度复盘功能。
+                        龙虎榜模块提供席位数据查看、历史回溯和智能复盘。
                     </p>
                     <ul class="list-disc pl-5 space-y-2">
                         <li><strong>历史回溯：</strong> 支持查看任意历史日期的龙虎榜详情，包括上榜个股、净买入金额及核心席位。</li>
                         <li><strong>智能过滤：</strong> 自动过滤科创板/北交所数据，专注于主板和创业板的核心博弈。</li>
                         <li><strong>AI 深度复盘：</strong>
-                            <span class="text-purple-600 dark:text-purple-400 font-bold">🤖 独家功能</span>
-                            点击“AI 复盘”按钮，AI 将阅读当日所有上榜数据，生成一份包含市场情绪定性、活跃游资点评及核心个股主力意图的深度研报。
+                            点击“AI 复盘”按钮，可生成当日龙虎榜复盘结论，包含情绪、席位风格和重点个股。
                         </li>
-                        <li><strong>数据备份：</strong> 提供一键打包下载所有历史数据的功能，方便数据迁移。</li>
+                        <li><strong>数据备份：</strong> 提供历史数据导出能力，便于保存和迁移。</li>
                     </ul>
                 </div>
             </section>
@@ -143,48 +148,44 @@
                 </h2>
                 <div class="prose dark:prose-invert max-w-none text-sm">
                     <p>
-                        本系统根据不同的交易场景，内置了多套 AI 分析逻辑（Prompt），AI 会根据上下文自动切换“分析师人格”：
+                        系统按交易场景切换分析逻辑，输出侧重点不同。建议结合盘面自行判断，不要只看单条结论：
                     </p>
                     <div class="grid md:grid-cols-2 gap-6 my-4">
                         <div class="p-4 bg-purple-50 dark:bg-purple-900/20 rounded-lg border border-purple-100 dark:border-purple-800">
-                            <h4 class="font-bold text-purple-600 dark:text-purple-400 mb-2">1. 竞价抢筹 (Aggressive)</h4>
+                            <h4 class="font-bold text-purple-600 dark:text-purple-400 mb-2">1. 竞价抢筹</h4>
                             <ul class="space-y-1 text-xs text-gray-600 dark:text-gray-300">
                                 <li><strong>触发场景：</strong> 竞价列表个股分析</li>
-                                <li><strong>AI 人格：</strong> 顶级游资/超短选手</li>
-                                <li><strong>分析重点：</strong> 弱转强预期、竞价量能、情绪博弈、分时形态（结合1分钟K线）。</li>
-                                <li><strong>输出目标：</strong> 判断开盘是否值得直接“抢筹”。</li>
+                                <li><strong>分析重点：</strong> 竞价强度、量能匹配、情绪承接。</li>
+                                <li><strong>输出目标：</strong> 给出开盘前观察与优先级建议。</li>
                             </ul>
                         </div>
                         <div class="p-4 bg-red-50 dark:bg-red-900/20 rounded-lg border border-red-100 dark:border-red-800">
-                            <h4 class="font-bold text-red-600 dark:text-red-400 mb-2">2. 打板接力 (LimitUp)</h4>
+                            <h4 class="font-bold text-red-600 dark:text-red-400 mb-2">2. 打板接力</h4>
                             <ul class="space-y-1 text-xs text-gray-600 dark:text-gray-300">
                                 <li><strong>触发场景：</strong> 涨停/盘中列表个股分析</li>
-                                <li><strong>AI 人格：</strong> 职业打板客</li>
-                                <li><strong>分析重点：</strong> 封板质量、板块地位、主力性质（游资vs机构）、明日溢价预期。</li>
-                                <li><strong>输出目标：</strong> 判断是否适合“打板”或“排板”。</li>
+                                <li><strong>分析重点：</strong> 封板质量、板块地位、资金风格、次日预期。</li>
+                                <li><strong>输出目标：</strong> 给出是否继续跟踪与风险提示。</li>
                             </ul>
                         </div>
                         <div class="p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-100 dark:border-blue-800">
-                            <h4 class="font-bold text-blue-600 dark:text-blue-400 mb-2">3. 稳健趋势 (Manual)</h4>
+                            <h4 class="font-bold text-blue-600 dark:text-blue-400 mb-2">3. 自选跟踪</h4>
                             <ul class="space-y-1 text-xs text-gray-600 dark:text-gray-300">
                                 <li><strong>触发场景：</strong> 自选股分析</li>
-                                <li><strong>AI 人格：</strong> 基本面研究员/波段交易者</li>
-                                <li><strong>分析重点：</strong> 公司基本面、行业逻辑、技术趋势、中线资金流向。</li>
-                                <li><strong>输出目标：</strong> 提供中短线波段操作建议。</li>
+                                <li><strong>分析重点：</strong> 结构位置、趋势延续、资金强弱。</li>
+                                <li><strong>输出目标：</strong> 给出持有、观察、减仓等方向建议。</li>
                             </ul>
                         </div>
                         <div class="p-4 bg-green-50 dark:bg-green-900/20 rounded-lg border border-green-100 dark:border-green-800">
-                            <h4 class="font-bold text-green-600 dark:text-green-400 mb-2">4. 龙虎榜日报 (LHB Daily)</h4>
+                            <h4 class="font-bold text-green-600 dark:text-green-400 mb-2">4. 龙虎榜复盘</h4>
                             <ul class="space-y-1 text-xs text-gray-600 dark:text-gray-300">
                                 <li><strong>触发场景：</strong> 龙虎榜指挥中心 -> AI复盘</li>
-                                <li><strong>AI 人格：</strong> 资深市场分析师</li>
-                                <li><strong>分析重点：</strong> 全市场情绪定性、活跃游资风格点评、机构动向、明日题材风向。</li>
-                                <li><strong>输出目标：</strong> 宏观把控市场节奏。</li>
+                                <li><strong>分析重点：</strong> 情绪强弱、活跃席位、次日方向。</li>
+                                <li><strong>输出目标：</strong> 输出复盘摘要与关注清单。</li>
                             </ul>
                         </div>
                     </div>
                     <div class="bg-gray-100 dark:bg-gray-900 p-3 rounded text-xs text-gray-500">
-                        * 注：所有 AI 分析均会自动结合最新的盘面数据（价格、成交量、分时走势）和新闻舆情进行综合判断。
+                        * 提示：智能分析结果仅供辅助，需结合盘面和仓位管理独立决策。
                     </div>
                 </div>
             </section>
@@ -192,62 +193,66 @@
             <!-- 5. 常见指标释义 -->
             <section class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md border border-gray-200 dark:border-gray-700">
                 <h2 class="text-2xl font-bold mb-4 flex items-center gap-2">
-                    <span>📊</span> 常见指标释义
+                    <span>📊</span> 列表字段与使用要点
                 </h2>
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                     <div>
-                        <div class="font-bold text-gray-700 dark:text-gray-300">晋级率</div>
-                        <div class="text-gray-500 dark:text-gray-400 text-xs mt-1">昨日涨停的股票，今日继续涨停的概率。反映接力情绪。</div>
+                        <div class="font-bold text-gray-700 dark:text-gray-300">代码/名称</div>
+                        <div class="text-gray-500 dark:text-gray-400 text-xs mt-1">点击整行打开图表，查看分时与日线；名称列便于快速定位个股。</div>
                     </div>
                     <div>
-                        <div class="font-bold text-gray-700 dark:text-gray-300">首炸率</div>
-                        <div class="text-gray-500 dark:text-gray-400 text-xs mt-1">首次封板后炸开的概率。数值越低，封板越稳。</div>
+                        <div class="font-bold text-gray-700 dark:text-gray-300">现价/涨幅/涨速</div>
+                        <div class="text-gray-500 dark:text-gray-400 text-xs mt-1">先看方向再看速度，涨速快但承接弱时要提高警惕。</div>
                     </div>
                     <div>
-                        <div class="font-bold text-gray-700 dark:text-gray-300">溢价率</div>
-                        <div class="text-gray-500 dark:text-gray-400 text-xs mt-1">昨日打板今日的平均高开幅度。反映赚钱效应。</div>
+                        <div class="font-bold text-gray-700 dark:text-gray-300">换手/流通</div>
+                        <div class="text-gray-500 dark:text-gray-400 text-xs mt-1">结合看资金参与度与盘子大小，避免只看单一强度指标。</div>
                     </div>
                     <div>
-                        <div class="font-bold text-gray-700 dark:text-gray-300">连板高度</div>
-                        <div class="text-gray-500 dark:text-gray-400 text-xs mt-1">当前市场最高的连续涨停板数。反映市场空间。</div>
+                        <div class="font-bold text-gray-700 dark:text-gray-300">概念/指标列</div>
+                        <div class="text-gray-500 dark:text-gray-400 text-xs mt-1">概念可点击展开；晋级、首炸、溢价、连板用于判断接力质量。</div>
                     </div>
                 </div>
+                <div class="mt-4 text-xs text-gray-500 dark:text-gray-400">
+                    使用建议：先看市场情绪，再看列表排序，最后点开图表与智能分析做交叉确认。
+                </div>
             </section>
-            <!-- 6. 会员权益与购买 (New) -->
+            <!-- 6. 会员权益与购买 -->
             <section class="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-md border border-gray-200 dark:border-gray-700">
                 <h2 class="text-2xl font-bold mb-4 flex items-center gap-2">
                     <span>💎</span> 会员权益与购买指南
                 </h2>
                 <div class="prose dark:prose-invert max-w-none text-sm">
                     <p>
-                        为了维持 AI 服务器的高昂开支，涨停狙击手提供不同等级的会员服务。
+                        不同会员等级开放的功能与次数不同，请按自己的使用频率选择。
                     </p>
                     
                     <div class="grid md:grid-cols-3 gap-6 my-4">
                         <div class="p-4 border rounded-lg dark:border-gray-700">
-                            <h4 class="font-bold text-lg mb-2">初级版 (Basic)</h4>
+                            <h4 class="font-bold text-lg mb-2">初级版</h4>
                             <ul class="text-xs space-y-2 text-gray-600 dark:text-gray-300">
+                                <li>✅ 可查看竞价抢筹</li>
                                 <li>✅ 解锁盘中实时AI分析</li>
                                 <li>✅ 解锁自选股AI复盘</li>
-                                <li>❌ 竞价抢筹功能</li>
+                                <li>❌ 盘中突击按钮</li>
                                 <li>❌ 龙虎榜AI复盘</li>
                             </ul>
                         </div>
                         <div class="p-4 border-2 border-red-500 rounded-lg relative overflow-hidden">
                             <div class="absolute top-0 right-0 bg-red-500 text-white text-xs px-2 py-0.5">推荐</div>
-                            <h4 class="font-bold text-lg mb-2 text-red-600">高级版 (Advanced)</h4>
+                            <h4 class="font-bold text-lg mb-2 text-red-600">高级版</h4>
                             <ul class="text-xs space-y-2 text-gray-600 dark:text-gray-300">
                                 <li>✅ 包含基础版所有功能</li>
-                                <li>✅ <strong>解锁竞价抢筹 (09:25)</strong></li>
+                                <li>✅ <strong>解锁盘中突击</strong></li>
                                 <li>✅ <strong>解锁龙虎榜日报</strong></li>
                                 <li>✅ 每日 AI 次数翻倍</li>
                             </ul>
                         </div>
                         <div class="p-4 border rounded-lg dark:border-gray-700 bg-gray-50 dark:bg-gray-900">
-                            <h4 class="font-bold text-lg mb-2">旗舰版 (Flagship)</h4>
+                            <h4 class="font-bold text-lg mb-2">旗舰版</h4>
                             <ul class="text-xs space-y-2 text-gray-600 dark:text-gray-300">
                                 <li>✅ 包含进阶版所有功能</li>
-                                <li>✅ 极速通道 (优先处理)</li>
+                                <li>✅ 极速通道（优先处理）</li>
                                 <li>✅ 每日 AI 次数无限制</li>
                                 <li>✅ 专属席位跟踪</li>
                             </ul>
@@ -258,10 +263,10 @@
                     <ol class="list-decimal pl-5 space-y-2">
                         <li>点击顶部导航栏的 <span class="bg-blue-600 text-white px-2 py-0.5 rounded text-xs">💎 升级会员</span> 按钮。</li>
                         <li>选择您需要的版本和时长（支持月付、季付、年付，买得越久越优惠）。</li>
-                        <li>点击“去支付”，系统将生成唯一的 <strong>24位订单识别码</strong>。</li>
-                        <li>使用支付宝/微信扫描页面上的二维码进行支付。</li>
-                        <li>支付完成后，点击 <strong>“我已支付”</strong> 按钮。</li>
-                        <li>系统管理员收到邮件通知后，将在后台审核通过，您的权益将立即生效（无需重启）。</li>
+                        <li>点击“去支付”后，系统会生成唯一的 <strong>订单口令</strong>。</li>
+                        <li>复制订单口令，按页面提示在支付宝口令红包中完成支付（金额和个数需与页面一致）。</li>
+                        <li>支付后点击 <strong>“我已正确支付”</strong>。</li>
+                        <li>进入“等待验证”状态后，后台审核通过即自动到账。</li>
                     </ol>
                     
                     <div class="bg-blue-50 dark:bg-blue-900/30 p-4 rounded-lg mt-4 text-xs">
@@ -274,7 +279,7 @@
         </main>
 
         <footer class="mt-12 text-center text-gray-400 text-sm pb-8">
-            &copy; 2025 Limit-Up Sniper. All rights reserved.
+            &copy; 2025 涨停狙击手
         </footer>
     </div>
 
@@ -291,6 +296,14 @@
                 localStorage.setItem('theme', 'dark');
                 document.getElementById('theme-icon').innerText = '🌞';
             }
+        }
+
+        function goBackOrHome() {
+            if (window.history.length > 1) {
+                window.history.back();
+                return;
+            }
+            window.location.href = 'index.html';
         }
 
         // Init Theme

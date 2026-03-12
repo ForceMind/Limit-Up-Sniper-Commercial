@@ -16,6 +16,8 @@ import shutil
 import tempfile
 import zipfile
 import subprocess
+import ipaddress
+import requests
 from pathlib import Path
 from app.core.config_manager import SYSTEM_CONFIG, save_config
 from app.core.lhb_manager import lhb_manager
@@ -55,9 +57,12 @@ ADMIN_CREDENTIALS_FILE = DATA_DIR / "admin_credentials.json"
 ADMIN_SESSIONS_FILE = DATA_DIR / "admin_sessions.json"
 ADMIN_PANEL_PATH_FILE = DATA_DIR / "admin_panel_path.json"
 ADMIN_API_PREFIX_FILE = DATA_DIR / "admin_api_prefix.json"
+AUTH_API_PREFIX_FILE = DATA_DIR / "auth_api_prefix.json"
 USER_ACCOUNTS_FILE = DATA_DIR / "user_accounts.json"
 SEAT_MAPPINGS_FILE = DATA_DIR / "seat_mappings.json"
 VIP_SEATS_FILE = DATA_DIR / "vip_seats.json"
+AUTH_ACCESS_LIMITS_FILE = DATA_DIR / "auth_access_limits.json"
+IP_GEO_CACHE_FILE = DATA_DIR / "ip_geo_cache.json"
 RATE_LIMIT_WINDOW = 60  # seconds
 RATE_LIMIT_MAX_ATTEMPTS = 5
 SESSION_EXPIRE_HOURS = 24
@@ -67,6 +72,8 @@ EXPORT_TICKET_TTL_SECONDS = 120
 ADMIN_OVERVIEW_CACHE_TTL_SECONDS = float(os.getenv("ADMIN_OVERVIEW_CACHE_TTL_SECONDS", "5") or 5)
 USER_OP_LOG_CACHE_MAX_ITEMS = int(os.getenv("USER_OP_LOG_CACHE_MAX_ITEMS", "200000") or 200000)
 OVERVIEW_AUX_CACHE_TTL_SECONDS = float(os.getenv("OVERVIEW_AUX_CACHE_TTL_SECONDS", "15") or 15)
+IP_GEO_CACHE_TTL_SECONDS = int(os.getenv("IP_GEO_CACHE_TTL_SECONDS", str(7 * 24 * 3600)) or (7 * 24 * 3600))
+IP_GEO_HTTP_TIMEOUT_SECONDS = float(os.getenv("IP_GEO_HTTP_TIMEOUT_SECONDS", "1.2") or 1.2)
 _export_ticket_lock = threading.Lock()
 _export_tickets: Dict[str, Dict[str, Any]] = {}
 _admin_overview_cache_lock = threading.Lock()
@@ -89,6 +96,8 @@ _ai_usage_summary_cache_lock = threading.Lock()
 _ai_usage_summary_cache: Dict[str, Dict[str, Any]] = {}
 _ai_usage_report_cache_lock = threading.Lock()
 _ai_usage_report_cache: Dict[str, Dict[str, Any]] = {}
+_ip_geo_cache_lock = threading.Lock()
+_ip_geo_cache: Dict[str, Any] = {"loaded": False, "items": {}}
 
 
 def _prune_timed_cache(cache_map: Dict[str, Dict[str, Any]], max_items: int = 128):
@@ -239,6 +248,194 @@ def _save_json(path: Path, data):
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
+
+
+def _normalize_ip_text(raw_ip: str) -> str:
+    text = str(raw_ip or "").strip()
+    if not text:
+        return ""
+    if "," in text:
+        text = text.split(",")[0].strip()
+    return text
+
+
+def _is_public_ip(ip_text: str) -> bool:
+    text = _normalize_ip_text(ip_text)
+    if not text:
+        return False
+    try:
+        ip_obj = ipaddress.ip_address(text)
+    except Exception:
+        return False
+    return not bool(
+        ip_obj.is_loopback
+        or ip_obj.is_private
+        or ip_obj.is_link_local
+        or ip_obj.is_multicast
+        or ip_obj.is_reserved
+        or ip_obj.is_unspecified
+    )
+
+
+def _load_ip_geo_cache_locked() -> Dict[str, Dict[str, Any]]:
+    if bool(_ip_geo_cache.get("loaded")):
+        items = _ip_geo_cache.get("items", {})
+        return items if isinstance(items, dict) else {}
+
+    raw = _load_json(IP_GEO_CACHE_FILE, {})
+    items: Dict[str, Dict[str, Any]] = {}
+    src = raw.get("items", {}) if isinstance(raw, dict) else {}
+    if isinstance(src, dict):
+        for k, v in src.items():
+            ip_text = _normalize_ip_text(k)
+            if not ip_text or not isinstance(v, dict):
+                continue
+            items[ip_text] = {
+                "location": str(v.get("location", "") or "").strip(),
+                "updated_at": int(v.get("updated_at", 0) or 0),
+            }
+
+    _ip_geo_cache["loaded"] = True
+    _ip_geo_cache["items"] = items
+    return items
+
+
+def _save_ip_geo_cache_locked(items: Dict[str, Dict[str, Any]]) -> None:
+    payload = {"items": items if isinstance(items, dict) else {}}
+    _save_json(IP_GEO_CACHE_FILE, payload)
+
+
+def _fetch_ip_geo_location(ip_text: str) -> str:
+    ip_addr = _normalize_ip_text(ip_text)
+    if not _is_public_ip(ip_addr):
+        return ""
+    endpoint = (
+        f"http://ip-api.com/json/{ip_addr}"
+        "?lang=zh-CN&fields=status,country,city"
+    )
+    try:
+        resp = requests.get(endpoint, timeout=IP_GEO_HTTP_TIMEOUT_SECONDS)
+        if resp.status_code != 200:
+            return ""
+        data = resp.json() if resp.content else {}
+    except Exception:
+        return ""
+
+    if not isinstance(data, dict) or str(data.get("status", "")).strip().lower() != "success":
+        return ""
+    country = str(data.get("country", "") or "").strip()
+    city = str(data.get("city", "") or "").strip()
+    location = " ".join([x for x in [country, city] if x]).strip()
+    return location[:80]
+
+
+def _resolve_ip_location(ip_text: str, *, allow_network: bool = True) -> str:
+    ip_addr = _normalize_ip_text(ip_text)
+    if not _is_public_ip(ip_addr):
+        return ""
+
+    now_ts = int(time.time())
+    with _ip_geo_cache_lock:
+        items = _load_ip_geo_cache_locked()
+        entry = items.get(ip_addr, {})
+        if isinstance(entry, dict):
+            cached_location = str(entry.get("location", "") or "").strip()
+            updated_at = int(entry.get("updated_at", 0) or 0)
+            if updated_at > 0 and now_ts - updated_at <= max(600, IP_GEO_CACHE_TTL_SECONDS):
+                return cached_location
+
+    if not allow_network:
+        return ""
+
+    location = _fetch_ip_geo_location(ip_addr)
+    with _ip_geo_cache_lock:
+        items = _load_ip_geo_cache_locked()
+        items[ip_addr] = {
+            "location": location,
+            "updated_at": int(time.time()),
+        }
+        _save_ip_geo_cache_locked(items)
+    return location
+
+
+def _resolve_ip_locations_bulk(ip_values: List[str]) -> Dict[str, str]:
+    unique_ips: List[str] = []
+    seen = set()
+    for raw in ip_values or []:
+        ip_text = _normalize_ip_text(raw)
+        if not ip_text or ip_text in seen:
+            continue
+        seen.add(ip_text)
+        unique_ips.append(ip_text)
+
+    resolved: Dict[str, str] = {}
+    unresolved: List[str] = []
+    for ip_text in unique_ips:
+        location = _resolve_ip_location(ip_text, allow_network=False)
+        if location:
+            resolved[ip_text] = location
+        else:
+            unresolved.append(ip_text)
+
+    network_budget = min(4, len(unresolved))
+    for ip_text in unresolved[:network_budget]:
+        resolved[ip_text] = _resolve_ip_location(ip_text, allow_network=True)
+    for ip_text in unresolved[network_budget:]:
+        resolved.setdefault(ip_text, "")
+    return resolved
+
+
+def _dedupe_text_list(raw: Any) -> List[str]:
+    result: List[str] = []
+    seen = set()
+    if isinstance(raw, list):
+        for item in raw:
+            text = str(item or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            result.append(text)
+    return result
+
+
+def _cleanup_guest_access_limits(removed_device_ids: List[str], *, clear_all: bool = False) -> None:
+    raw = _load_json(AUTH_ACCESS_LIMITS_FILE, {})
+    if not isinstance(raw, dict):
+        raw = {}
+
+    dirty = False
+    removed_set = {str(x or "").strip() for x in (removed_device_ids or []) if str(x or "").strip()}
+
+    ip_guest = raw.get("ip_guest_devices", {})
+    if isinstance(ip_guest, dict):
+        new_map: Dict[str, List[str]] = {}
+        for ip_key, devices in ip_guest.items():
+            deduped = _dedupe_text_list(devices)
+            if clear_all:
+                filtered: List[str] = []
+            else:
+                filtered = [did for did in deduped if did not in removed_set]
+            if filtered:
+                new_map[str(ip_key)] = filtered
+        if new_map != ip_guest:
+            raw["ip_guest_devices"] = new_map
+            dirty = True
+
+    fp_guest = raw.get("fingerprint_guest_device", {})
+    if isinstance(fp_guest, dict):
+        new_fp = {}
+        for fp, did in fp_guest.items():
+            did_text = str(did or "").strip()
+            if clear_all:
+                continue
+            if did_text and did_text not in removed_set:
+                new_fp[str(fp)] = did_text
+        if new_fp != fp_guest:
+            raw["fingerprint_guest_device"] = new_fp
+            dirty = True
+
+    if dirty:
+        _save_json(AUTH_ACCESS_LIMITS_FILE, raw)
 
 
 def _build_export_zip() -> Tuple[Path, str]:
@@ -396,6 +593,47 @@ def _save_admin_api_prefix(prefix: str):
     normalized = _normalize_admin_api_prefix(prefix)
     _save_json(
         ADMIN_API_PREFIX_FILE,
+        {
+            "prefix": normalized,
+            "updated_at": datetime.utcnow().isoformat(),
+        },
+    )
+
+
+def _normalize_auth_api_prefix(raw_prefix: str) -> str:
+    value = (raw_prefix or "").strip()
+    if not value:
+        return "/api/auth"
+    if not value.startswith("/"):
+        value = "/" + value
+    if not value.startswith("/api/"):
+        value = "/api" + value
+
+    parts = [p for p in value.split("/") if p]
+    value = "/" + "/".join(parts)
+    if value in {"/", "/api"}:
+        raise ValueError("认证API前缀不能为 / 或 /api")
+    if value.startswith("/api/admin") or value.startswith("/api/payment"):
+        raise ValueError("认证API前缀不能与 admin/payment 路由冲突")
+    if not re.fullmatch(r"/[A-Za-z0-9/_-]+", value):
+        raise ValueError("认证API前缀只允许字母、数字、/、_、-")
+    return value
+
+
+def get_auth_api_prefix_setting() -> str:
+    data = _load_json(AUTH_API_PREFIX_FILE, {})
+    if isinstance(data, dict):
+        try:
+            return _normalize_auth_api_prefix(data.get("prefix", "/api/auth"))
+        except ValueError:
+            return "/api/auth"
+    return "/api/auth"
+
+
+def _save_auth_api_prefix(prefix: str):
+    normalized = _normalize_auth_api_prefix(prefix)
+    _save_json(
+        AUTH_API_PREFIX_FILE,
         {
             "prefix": normalized,
             "updated_at": datetime.utcnow().isoformat(),
@@ -563,6 +801,10 @@ class UpdateAdminPanelPathSchema(BaseModel):
 
 
 class UpdateAdminApiPrefixSchema(BaseModel):
+    prefix: str
+
+
+class UpdateAuthApiPrefixSchema(BaseModel):
     prefix: str
 
 
@@ -801,18 +1043,77 @@ async def update_admin_api_prefix_api(
     return {"status": "success", "prefix": final_prefix}
 
 
+@router.get("/auth_api_prefix")
+async def get_auth_api_prefix_api(authorized: bool = Depends(verify_admin)):
+    env_override = str(os.getenv("AUTH_API_PREFIX", "") or "").strip()
+    return {
+        "status": "success",
+        "prefix": get_auth_api_prefix_setting(),
+        "env_override": env_override,
+    }
+
+
+@router.post("/auth_api_prefix")
+async def update_auth_api_prefix_api(
+    payload: UpdateAuthApiPrefixSchema,
+    authorized: bool = Depends(verify_admin),
+):
+    try:
+        _save_auth_api_prefix(payload.prefix)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    final_prefix = get_auth_api_prefix_setting()
+    env_override = str(os.getenv("AUTH_API_PREFIX", "") or "").strip()
+    if env_override:
+        add_runtime_log(f"[后台] 已写入认证API前缀配置: {final_prefix}（当前被环境变量 AUTH_API_PREFIX 覆盖）")
+    else:
+        add_runtime_log(f"[后台] 已更新认证API前缀: {final_prefix}")
+    log_user_operation(
+        "update_auth_api_prefix",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/auth_api_prefix",
+        detail=f"{final_prefix}{' (env_override)' if env_override else ''}",
+    )
+    return {"status": "success", "prefix": final_prefix, "env_override": env_override}
+
+
 # --- User / Order Management ---
 @router.get("/users")
 async def list_users(
     skip: int = 0,
     limit: int = 100,
-    account_type: str = "all",
+    account_type: str = "registered",
     db: Session = Depends(get_db),
     authorized: bool = Depends(verify_admin),
 ):
     users = db.query(models.User).order_by(models.User.created_at.desc()).all()
     accounts = _load_user_accounts()
     device_to_username = _device_username_map(accounts)
+    now_sh = datetime.now(SHANGHAI_TZ)
+
+    recent_ops = _iter_user_operation_logs()
+    last_online_by_device: Dict[str, str] = {}
+    last_ip_by_device: Dict[str, str] = {}
+    for row in recent_ops:
+        action = str((row or {}).get("action", "")).strip().lower()
+        status = str((row or {}).get("status", "")).strip().lower()
+        path = str((row or {}).get("path", "")).strip()
+        did = str((row or {}).get("device_id", "")).strip()
+        if not did:
+            continue
+        if status != "success":
+            continue
+        if action not in {"online_presence", "api_call"}:
+            continue
+        if not path.startswith("/api/"):
+            continue
+        if did not in last_online_by_device:
+            last_online_by_device[did] = str((row or {}).get("time", "") or "").strip()
+        if did not in last_ip_by_device:
+            last_ip_by_device[did] = _normalize_ip_text((row or {}).get("ip", ""))
 
     filter_mode = (account_type or "all").strip().lower()
     if filter_mode not in {"all", "guest", "registered"}:
@@ -835,6 +1136,10 @@ async def list_users(
         quota_raid = max(0, int(quotas.get("raid", 0)))
         quota_review = max(0, int(quotas.get("review", 0))
         )
+        last_online_at = str(last_online_by_device.get(u.device_id, "") or "").strip()
+        last_ip = _normalize_ip_text(last_ip_by_device.get(u.device_id, ""))
+        last_online_dt = _as_shanghai_datetime(last_online_at, assume_utc_when_naive=False)
+        is_online_recent = bool(last_online_dt and (now_sh - last_online_dt).total_seconds() <= 300)
         res.append({
             "id": u.id,
             "device_id": u.device_id,
@@ -843,6 +1148,8 @@ async def list_users(
             "account_type": "registered" if is_registered else "guest",
             "is_banned": bool(account.get("is_banned", False)) if isinstance(account, dict) else False,
             "banned_reason": str(account.get("banned_reason", "")).strip() if isinstance(account, dict) else "",
+            "trial_applied": bool(account.get("trial_applied", False)) if isinstance(account, dict) else False,
+            "trial_applied_at": str(account.get("trial_applied_at", "")).strip() if isinstance(account, dict) else "",
             "version": u.version,
             "expires_at": u.expires_at,
             "created_at": u.created_at,
@@ -855,8 +1162,18 @@ async def list_users(
             "remaining_ai": max(0, quota_ai - used_ai),
             "remaining_raid": max(0, quota_raid - used_raid),
             "remaining_review": max(0, quota_review - used_review),
-            "is_expired": (u.expires_at and u.expires_at < datetime.utcnow())
+            "is_expired": (u.expires_at and u.expires_at < datetime.utcnow()),
+            "last_online_at": last_online_at,
+            "last_ip": last_ip,
+            "is_online_recent": is_online_recent,
         })
+
+    ip_location_map = _resolve_ip_locations_bulk([str(item.get("last_ip", "")).strip() for item in res])
+    for item in res:
+        ip_text = _normalize_ip_text(item.get("last_ip", ""))
+        item["last_ip"] = ip_text
+        item["last_ip_location"] = str(ip_location_map.get(ip_text, "") or "").strip()
+
     safe_skip = max(0, int(skip or 0))
     safe_limit = max(1, min(int(limit or 100), 1000))
     return res[safe_skip:safe_skip + safe_limit]
@@ -880,6 +1197,10 @@ class SetUserMembershipSchema(BaseModel):
     user_id: int
     version: str
     days: int = 30
+
+
+class DeleteUserSchema(BaseModel):
+    user_id: int
 
 
 def _resolve_target_username(
@@ -1117,6 +1438,98 @@ async def set_user_membership(
         "user_id": user.id,
         "version": user.version,
         "expires_at": user.expires_at,
+    }
+
+
+@router.post("/users/delete")
+async def delete_user(
+    payload: DeleteUserSchema,
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_admin),
+):
+    user = db.query(models.User).filter(models.User.id == payload.user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    accounts = _load_user_accounts()
+    username = account_store.get_username_by_device_id(user.device_id, accounts=accounts)
+    if username:
+        raise HTTPException(status_code=400, detail="当前仅支持删除游客账户，注册账号请使用封禁/重置等管理操作")
+
+    deleted_device_id = str(user.device_id or "").strip()
+    try:
+        db.delete(user)
+        db.commit()
+    except Exception:
+        db.rollback()
+        raise HTTPException(status_code=500, detail="删除用户失败")
+    _cleanup_guest_access_limits([deleted_device_id], clear_all=False)
+
+    add_runtime_log(f"[后台] 删除游客账号: user_id={payload.user_id}, device={deleted_device_id}")
+    log_user_operation(
+        "delete_guest_user",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/users/delete",
+        device_id=deleted_device_id,
+        detail=f"user_id={payload.user_id}",
+    )
+    return {
+        "status": "success",
+        "user_id": payload.user_id,
+        "device_id": deleted_device_id,
+    }
+
+
+@router.post("/users/delete_all_guests")
+async def delete_all_guest_users(
+    db: Session = Depends(get_db),
+    authorized: bool = Depends(verify_admin),
+):
+    accounts = _load_user_accounts()
+    registered_device_ids = {
+        str((info or {}).get("device_id", "")).strip()
+        for info in accounts.values()
+        if isinstance(info, dict) and str((info or {}).get("device_id", "")).strip()
+    }
+
+    query = db.query(models.User)
+    if registered_device_ids:
+        guest_users = query.filter(~models.User.device_id.in_(list(registered_device_ids))).all()
+    else:
+        guest_users = query.all()
+
+    guest_ids = [int(u.id) for u in guest_users if getattr(u, "id", None) is not None]
+    guest_device_ids = [str(u.device_id or "").strip() for u in guest_users if str(u.device_id or "").strip()]
+
+    deleted_count = 0
+    if guest_ids:
+        try:
+            deleted_count = (
+                db.query(models.User)
+                .filter(models.User.id.in_(guest_ids))
+                .delete(synchronize_session=False)
+            )
+            db.commit()
+        except Exception:
+            db.rollback()
+            raise HTTPException(status_code=500, detail="批量删除游客账号失败")
+
+    _cleanup_guest_access_limits(guest_device_ids, clear_all=True)
+
+    add_runtime_log(f"[后台] 一键删除游客账号: deleted={deleted_count}")
+    log_user_operation(
+        "delete_all_guest_users",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/users/delete_all_guests",
+        detail=f"deleted={deleted_count}",
+    )
+    return {
+        "status": "success",
+        "deleted": int(deleted_count or 0),
     }
 
 
@@ -2419,6 +2832,8 @@ async def list_data_files(
         "lhb_config.json",
         "admin_credentials.json",
         "admin_panel_path.json",
+        "admin_api_prefix.json",
+        "auth_api_prefix.json",
         "admin_sessions.json",
         "pricing_config.json",
     }
@@ -2427,6 +2842,8 @@ async def list_data_files(
         "config.json": "系统主配置（调度、邮件、数据源、价格等）",
         "lhb_config.json": "龙虎榜配置",
         "user_accounts.json": "账号、设备与邀请码数据",
+        "admin_api_prefix.json": "管理员API前缀配置",
+        "auth_api_prefix.json": "认证API前缀配置",
         "referral_records.json": "邀请关系与奖励记录",
         "watchlist.json": "选股池结果",
         "watchlist_stats.json": "自选股统计",
@@ -2885,6 +3302,7 @@ def _read_security_audit_logs(
                     ).lower()
                     if keyword_text not in merged:
                         continue
+                row["ip"] = _normalize_ip_text(row.get("ip", ""))
                 items.append(row)
     except Exception:
         items = []
@@ -2893,6 +3311,11 @@ def _read_security_audit_logs(
     total = len(items)
     start = (safe_page - 1) * safe_size
     page_items = items[start:start + safe_size]
+    ip_location_map = _resolve_ip_locations_bulk([str(x.get("ip", "")).strip() for x in page_items])
+    for row in page_items:
+        ip_text = _normalize_ip_text(row.get("ip", ""))
+        row["ip"] = ip_text
+        row["ip_location"] = str(ip_location_map.get(ip_text, "") or "").strip()
     return {
         "items": page_items,
         "total": total,
@@ -3373,11 +3796,17 @@ async def get_user_operation_logs(
             if user_kw not in candidate:
                 continue
 
+        row["ip"] = _normalize_ip_text(row.get("ip", ""))
         filtered.append(row)
 
     total = len(filtered)
     start = (safe_page - 1) * safe_size
     logs = filtered[start:start + safe_size]
+    ip_location_map = _resolve_ip_locations_bulk([str(x.get("ip", "")).strip() for x in logs])
+    for row in logs:
+        ip_text = _normalize_ip_text(row.get("ip", ""))
+        row["ip"] = ip_text
+        row["ip_location"] = str(ip_location_map.get(ip_text, "") or "").strip()
     return {
         "logs": logs,
         "total": total,
