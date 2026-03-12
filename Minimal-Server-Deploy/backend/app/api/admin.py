@@ -28,6 +28,7 @@ from app.core.data_provider import data_provider
 from app.core.runtime_logs import get_runtime_logs, add_runtime_log
 from app.core.ws_hub import ws_hub
 from app.core.operation_log import log_user_operation, get_recent_user_operations
+from app.core.ip_ban_store import list_ip_bans, unban_ip
 from app.core.news_admin_store import (
     build_news_item_id,
     load_news_analysis_records,
@@ -757,11 +758,21 @@ def _cleanup_sessions(sessions: Dict[str, dict]) -> Dict[str, dict]:
     return cleaned
 
 
-async def verify_admin(x_admin_token: str = Header(..., alias="X-Admin-Token")):
+def _require_admin_session(x_admin_token: str) -> Dict[str, Any]:
     sessions = _cleanup_sessions(_load_sessions())
     if not x_admin_token or x_admin_token not in sessions:
         raise HTTPException(status_code=403, detail="Admin authorization failed")
+    info = sessions.get(x_admin_token, {})
+    return info if isinstance(info, dict) else {}
+
+
+async def verify_admin(x_admin_token: str = Header(..., alias="X-Admin-Token")):
+    _require_admin_session(x_admin_token)
     return True
+
+
+async def get_admin_session(x_admin_token: str = Header(..., alias="X-Admin-Token")):
+    return _require_admin_session(x_admin_token)
 
 
 def get_db():
@@ -806,6 +817,10 @@ class UpdateAdminApiPrefixSchema(BaseModel):
 
 class UpdateAuthApiPrefixSchema(BaseModel):
     prefix: str
+
+
+class UnbanIpSchema(BaseModel):
+    ip: str
 
 
 @router.post("/login")
@@ -3835,6 +3850,64 @@ async def get_security_audit_logs(
         event=event,
         keyword=keyword,
     )
+
+
+@router.get("/security/ip_bans")
+async def get_ip_ban_list(authorized: bool = Depends(verify_admin)):
+    items = list_ip_bans()
+    ip_location_map = _resolve_ip_locations_bulk([str(x.get("ip", "")).strip() for x in items])
+    for row in items:
+        ip_text = _normalize_ip_text(row.get("ip", ""))
+        row["ip"] = ip_text
+        row["ip_location"] = str(ip_location_map.get(ip_text, "") or "").strip()
+    return {
+        "items": items,
+        "total": len(items),
+    }
+
+
+@router.post("/security/ip_bans/unban")
+async def unban_security_ip(
+    payload: UnbanIpSchema,
+    request: Request,
+    admin_session: Dict[str, Any] = Depends(get_admin_session),
+):
+    ip_text = _normalize_ip_text(payload.ip)
+    if not ip_text:
+        raise HTTPException(status_code=400, detail="IP 不能为空")
+    if not unban_ip(ip_text):
+        raise HTTPException(status_code=404, detail="该 IP 不在封禁列表中")
+
+    admin_username = str(admin_session.get("username", "") or "").strip()
+    request_ip = (
+        str(request.headers.get("X-Forwarded-For", "") or "").split(",")[0].strip()
+        or str(request.client.host if request.client and request.client.host else "")
+    )
+    _append_security_audit_log(
+        event="ip_unban",
+        level="info",
+        detail=f"已解封 IP: {ip_text}",
+        ip=ip_text,
+        admin_username=admin_username,
+        context={
+            "target_ip": ip_text,
+            "admin_request_ip": _normalize_ip_text(request_ip),
+        },
+    )
+    log_user_operation(
+        "ip_unban",
+        status="success",
+        actor="admin",
+        method="POST",
+        path="/api/admin/security/ip_bans/unban",
+        username=admin_username,
+        ip=_normalize_ip_text(request_ip),
+        detail=f"target_ip={ip_text}",
+    )
+    return {
+        "status": "success",
+        "ip": ip_text,
+    }
 
 
 @router.get("/monitor/ai_cache")

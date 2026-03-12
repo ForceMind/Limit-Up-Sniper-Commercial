@@ -866,6 +866,49 @@
                             <input v-model="securityFilter.keyword" @keyup.enter="fetchSecurityLogs(1)" type="text" class="border rounded px-2 py-1 text-xs w-56" placeholder="详情/IP/上下文关键词">
                             <button @click="fetchSecurityLogs(1)" class="px-3 py-1 text-xs border rounded hover:bg-gray-100">筛选</button>
                         </div>
+                        <div class="border-b bg-rose-50 p-3">
+                            <div class="flex items-center justify-between gap-3">
+                                <div>
+                                    <div class="font-bold text-rose-700">当前封禁 IP</div>
+                                    <div class="text-xs text-gray-500 mt-1">被误封时，可以先用正确管理员账号登录，再在这里手动解封。</div>
+                                </div>
+                                <button @click="fetchIpBans()" class="px-3 py-1 text-xs border rounded bg-white hover:bg-gray-50">刷新封禁列表</button>
+                            </div>
+                            <div v-if="ipBansLoading" class="text-xs text-gray-500 mt-3">封禁列表加载中...</div>
+                            <div v-else-if="ipBans.length === 0" class="text-xs text-gray-400 mt-3">当前没有被封禁的公网 IP</div>
+                            <div v-else class="overflow-auto mt-3 max-h-64">
+                                <table class="w-full min-w-[980px] text-left text-xs">
+                                    <thead class="bg-white/90 text-gray-500 sticky top-0">
+                                        <tr>
+                                            <th class="p-2">IP</th>
+                                            <th class="p-2">原因</th>
+                                            <th class="p-2">触发接口</th>
+                                            <th class="p-2">方法</th>
+                                            <th class="p-2">封禁时间</th>
+                                            <th class="p-2">操作</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody class="divide-y">
+                                        <tr v-for="row in ipBans" :key="row.ip">
+                                            <td class="p-2 font-mono break-all">{{ formatIpDisplay(row.ip, row.ip_location) }}</td>
+                                            <td class="p-2">{{ row.reason || '-' }}</td>
+                                            <td class="p-2 font-mono break-all">{{ row.path || '-' }}</td>
+                                            <td class="p-2">{{ row.method || '-' }}</td>
+                                            <td class="p-2 whitespace-nowrap">{{ formatShanghaiTime(row.banned_at) }}</td>
+                                            <td class="p-2">
+                                                <button
+                                                    @click="unbanIp(row)"
+                                                    :disabled="ipBanBusy === row.ip"
+                                                    class="px-2 py-1 rounded border border-emerald-600 text-emerald-700 hover:bg-emerald-50 disabled:opacity-40"
+                                                >
+                                                    {{ ipBanBusy === row.ip ? '解封中...' : '解封' }}
+                                                </button>
+                                            </td>
+                                        </tr>
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
                         <div class="overflow-auto max-h-[60vh]">
                             <table class="w-full min-w-[1200px] text-left">
                                 <thead class="bg-gray-50 text-gray-500 sticky top-0">
@@ -2110,6 +2153,9 @@
                         keyword: ''
                     },
                     securityPagination: { page: 1, page_size: 50, total: 0, total_pages: 1 },
+                    ipBans: [],
+                    ipBansLoading: false,
+                    ipBanBusy: '',
                     aiCacheStats: {},
                     aiCacheDetail: null,
                     aiCostReport: {
@@ -2792,6 +2838,7 @@
                 },
                 async fetchSecurityLogs(page = null) {
                     try {
+                        await this.fetchIpBans(true);
                         const nextPage = Math.max(1, Number(page || this.securityPagination.page || 1));
                         const pageSize = Math.max(10, Math.min(Number(this.securityPagination.page_size || 50), 200));
                         const qs = new URLSearchParams({
@@ -2815,6 +2862,44 @@
                         };
                     } catch (e) {
                         this.showMsg(e.message || '安全审计日志加载失败', 'error');
+                    }
+                },
+                async fetchIpBans(silent = false) {
+                    if (!silent) this.ipBansLoading = true;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/security/ip_bans', { headers: this.getHeaders() });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || '封禁IP列表加载失败');
+                        this.ipBans = Array.isArray(data.items) ? data.items : [];
+                    } catch (e) {
+                        if (!silent) this.showMsg(e.message || '封禁IP列表加载失败', 'error');
+                    } finally {
+                        this.ipBansLoading = false;
+                    }
+                },
+                async unbanIp(row) {
+                    const ip = String((row || {}).ip || '').trim();
+                    if (!ip || this.ipBanBusy === ip) return;
+                    const confirmed = await this.showConfirm(`确认解封 IP ${ip}？`);
+                    if (!confirmed) return;
+                    this.ipBanBusy = ip;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/security/ip_bans/unban', {
+                            method: 'POST',
+                            headers: this.getHeaders(),
+                            body: JSON.stringify({ ip })
+                        });
+                        if (res.status === 403) { this.clearAuth(true); return; }
+                        const data = await res.json();
+                        if (!res.ok) throw new Error(data.detail || 'IP解封失败');
+                        this.showMsg(`已解封 IP ${data.ip || ip}`, 'success');
+                        await this.fetchIpBans(true);
+                        await this.fetchSecurityLogs(this.securityPagination.page || 1);
+                    } catch (e) {
+                        this.showMsg(e.message || 'IP解封失败', 'error');
+                    } finally {
+                        this.ipBanBusy = '';
                     }
                 },
                 async fetchAICostReport(page = null) {

@@ -20,7 +20,6 @@ import secrets
 import threading
 import socket
 import re
-import ipaddress
 from pathlib import Path
 from datetime import datetime, timedelta
 from typing import List, Optional, Dict, Any
@@ -36,6 +35,7 @@ from app.core.config_manager import SYSTEM_CONFIG, save_config, DEFAULT_SCHEDULE
 from app.core.ws_hub import ws_hub
 from app.core.runtime_logs import add_runtime_log, get_runtime_logs
 from app.core.operation_log import log_user_operation
+from app.core.ip_ban_store import is_local_or_private_ip, is_ip_banned, ban_ip
 from app.api import auth, admin, payment
 from app.db import database, models
 from app.dependencies import get_current_user, check_ai_permission, check_raid_permission, check_review_permission, check_data_permission, QuotaLimitExceeded, UpgradeRequired
@@ -92,7 +92,6 @@ app.include_router(payment.router, prefix="/api/payment", tags=["payment"])
 FRONTEND_DIR = BASE_DIR.parent / "frontend"
 ADMIN_INDEX_FILE = FRONTEND_DIR / "admin" / "index.html"
 AUTH_API_PREFIX_FILE = DATA_DIR / "auth_api_prefix.json"
-IP_BANLIST_FILE = DATA_DIR / "ip_banlist.json"
 USER_OP_LOG_SKIP_PREFIXES = (
     "/api/stocks",
     "/api/indices",
@@ -117,6 +116,7 @@ USER_OP_LOG_SKIP_PREFIXES = (
     "/api/admin/panel_path",
     "/api/admin/api_prefix",
     "/api/admin/auth_api_prefix",
+    "/api/admin/security/ip_bans",
     "/api/admin/users/reset_password",
     "/api/admin/users/add_time",
     "/api/admin/users/ban",
@@ -166,8 +166,6 @@ _ws_token_secret_cache = None
 _AUTH_API_PREFIX_CACHE_TTL_SEC = 5.0
 _auth_api_prefix_cache: Dict[str, Any] = {"ts": 0.0, "value": "/api/auth"}
 _auth_api_prefix_lock = threading.Lock()
-_ip_ban_lock = threading.Lock()
-_ip_ban_cache: Dict[str, Any] = {"loaded": False, "items": {}}
 UNKNOWN_API_BAN_REASON = "access_unknown_api"
 
 
@@ -287,116 +285,22 @@ def _render_frontend_html_with_runtime_vars(
         return None
 
 
-def _ip_addr_obj(ip_text: str):
-    text = str(ip_text or "").strip()
-    if not text:
-        return None
-    try:
-        return ipaddress.ip_address(text)
-    except Exception:
-        return None
-
-
 def _is_local_or_private_ip(ip_text: str) -> bool:
-    ip_obj = _ip_addr_obj(ip_text)
-    if ip_obj is None:
-        return True
-    return bool(
-        ip_obj.is_loopback
-        or ip_obj.is_private
-        or ip_obj.is_link_local
-        or ip_obj.is_multicast
-        or ip_obj.is_reserved
-        or ip_obj.is_unspecified
-    )
-
-
-def _load_ip_ban_items_locked() -> Dict[str, Dict[str, Any]]:
-    if bool(_ip_ban_cache.get("loaded")):
-        items = _ip_ban_cache.get("items", {})
-        return items if isinstance(items, dict) else {}
-
-    data = {}
-    try:
-        if IP_BANLIST_FILE.exists():
-            data = json.loads(str(IP_BANLIST_FILE.read_text(encoding="utf-8") or "{}"))
-    except Exception:
-        data = {}
-
-    items: Dict[str, Dict[str, Any]] = {}
-    src = data.get("items", {}) if isinstance(data, dict) else {}
-    if isinstance(src, dict):
-        for raw_ip, meta in src.items():
-            ip_text = str(raw_ip or "").strip()
-            if not ip_text:
-                continue
-            if _is_local_or_private_ip(ip_text):
-                continue
-            if isinstance(meta, dict):
-                items[ip_text] = {
-                    "reason": str(meta.get("reason", "") or "").strip(),
-                    "banned_at": str(meta.get("banned_at", "") or "").strip(),
-                    "path": str(meta.get("path", "") or "").strip(),
-                    "method": str(meta.get("method", "") or "").strip().upper(),
-                }
-            else:
-                items[ip_text] = {
-                    "reason": "",
-                    "banned_at": "",
-                    "path": "",
-                    "method": "",
-                }
-
-    _ip_ban_cache["loaded"] = True
-    _ip_ban_cache["items"] = items
-    return items
-
-
-def _save_ip_ban_items_locked(items: Dict[str, Dict[str, Any]]) -> None:
-    payload = {"items": items if isinstance(items, dict) else {}}
-    try:
-        IP_BANLIST_FILE.parent.mkdir(parents=True, exist_ok=True)
-        IP_BANLIST_FILE.write_text(
-            json.dumps(payload, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception:
-        pass
+    return is_local_or_private_ip(ip_text)
 
 
 def _is_ip_banned(ip_text: str) -> bool:
-    ip_addr = str(ip_text or "").strip()
-    if not ip_addr or _is_local_or_private_ip(ip_addr):
-        return False
-    with _ip_ban_lock:
-        items = _load_ip_ban_items_locked()
-        return ip_addr in items
+    return is_ip_banned(ip_text)
 
 
 def _ban_ip(ip_text: str, *, path: str, method: str, reason: str = UNKNOWN_API_BAN_REASON) -> bool:
     ip_addr = str(ip_text or "").strip()
-    if not ip_addr or _is_local_or_private_ip(ip_addr):
-        return False
-
-    banned_now = False
-    with _ip_ban_lock:
-        items = _load_ip_ban_items_locked()
-        if ip_addr in items:
-            meta = items.get(ip_addr, {})
-            if isinstance(meta, dict):
-                meta["path"] = str(path or "").strip()
-                meta["method"] = str(method or "").strip().upper()
-                items[ip_addr] = meta
-                _save_ip_ban_items_locked(items)
-            return False
-        items[ip_addr] = {
-            "reason": str(reason or "").strip() or UNKNOWN_API_BAN_REASON,
-            "banned_at": datetime.utcnow().replace(microsecond=0).isoformat() + "Z",
-            "path": str(path or "").strip(),
-            "method": str(method or "").strip().upper(),
-        }
-        _save_ip_ban_items_locked(items)
-        banned_now = True
+    banned_now = ban_ip(
+        ip_addr,
+        path=str(path or "").strip(),
+        method=str(method or "").strip().upper(),
+        reason=str(reason or "").strip() or UNKNOWN_API_BAN_REASON,
+    )
 
     if banned_now:
         try:
@@ -1020,10 +924,6 @@ async def api_device_auth_guard(request: Request, call_next):
     if not path.startswith("/api/"):
         return await call_next(request)
 
-    client_ip = _client_ip_from_request(request)
-    if _is_ip_banned(client_ip):
-        return JSONResponse(status_code=403, content={"detail": "IP has been banned"})
-
     has_admin_token = bool((request.headers.get("X-Admin-Token") or "").strip())
     is_admin_namespace = bool(
         path.startswith("/api/admin/")
@@ -1032,6 +932,12 @@ async def api_device_auth_guard(request: Request, call_next):
             and (normalized == admin_api_prefix or normalized.startswith(admin_api_prefix + "/"))
         )
     )
+    is_admin_login_path = normalized == "/api/admin/login"
+    client_ip = _client_ip_from_request(request)
+    if _is_ip_banned(client_ip):
+        if not (is_admin_login_path or (is_admin_namespace and has_admin_token)):
+            return JSONResponse(status_code=403, content={"detail": "IP has been banned"})
+
     should_check_unknown_api = bool(
         (not has_admin_token)
         and (not _is_local_or_private_ip(client_ip))
