@@ -306,10 +306,29 @@ def _save_ip_geo_cache_locked(items: Dict[str, Dict[str, Any]]) -> None:
     _save_json(IP_GEO_CACHE_FILE, payload)
 
 
-def _fetch_ip_geo_location(ip_text: str) -> str:
-    ip_addr = _normalize_ip_text(ip_text)
-    if not _is_public_ip(ip_addr):
+def _format_ip_geo_location(country: str, city: str) -> str:
+    location = " ".join(
+        [x for x in [str(country or "").strip(), str(city or "").strip()] if x]
+    ).strip()
+    return location[:80]
+
+
+def _fetch_ip_geo_location_from_ipwhois(ip_addr: str) -> str:
+    endpoint = f"https://ipwho.is/{ip_addr}"
+    try:
+        resp = requests.get(endpoint, timeout=IP_GEO_HTTP_TIMEOUT_SECONDS)
+        if resp.status_code != 200:
+            return ""
+        data = resp.json() if resp.content else {}
+    except Exception:
         return ""
+
+    if not isinstance(data, dict) or data.get("success") is False:
+        return ""
+    return _format_ip_geo_location(data.get("country", ""), data.get("city", ""))
+
+
+def _fetch_ip_geo_location_from_ip_api(ip_addr: str) -> str:
     endpoint = (
         f"http://ip-api.com/json/{ip_addr}"
         "?lang=zh-CN&fields=status,country,city"
@@ -324,10 +343,18 @@ def _fetch_ip_geo_location(ip_text: str) -> str:
 
     if not isinstance(data, dict) or str(data.get("status", "")).strip().lower() != "success":
         return ""
-    country = str(data.get("country", "") or "").strip()
-    city = str(data.get("city", "") or "").strip()
-    location = " ".join([x for x in [country, city] if x]).strip()
-    return location[:80]
+    return _format_ip_geo_location(data.get("country", ""), data.get("city", ""))
+
+
+def _fetch_ip_geo_location(ip_text: str) -> str:
+    ip_addr = _normalize_ip_text(ip_text)
+    if not _is_public_ip(ip_addr):
+        return ""
+    for resolver in (_fetch_ip_geo_location_from_ipwhois, _fetch_ip_geo_location_from_ip_api):
+        location = resolver(ip_addr)
+        if location:
+            return location
+    return ""
 
 
 def _resolve_ip_location(ip_text: str, *, allow_network: bool = True) -> str:

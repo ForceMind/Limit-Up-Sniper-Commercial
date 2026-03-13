@@ -315,6 +315,20 @@ def _ban_ip(ip_text: str, *, path: str, method: str, reason: str = UNKNOWN_API_B
             )
         except Exception:
             pass
+        try:
+            admin._append_security_audit_log(
+                event="ip_auto_ban",
+                level="warning",
+                detail=f"未知接口自动封禁 IP: {ip_addr}",
+                ip=ip_addr,
+                context={
+                    "path": str(path or "").strip(),
+                    "method": str(method or "").strip().upper(),
+                    "reason": str(reason or UNKNOWN_API_BAN_REASON).strip() or UNKNOWN_API_BAN_REASON,
+                },
+            )
+        except Exception:
+            pass
     return banned_now
 
 

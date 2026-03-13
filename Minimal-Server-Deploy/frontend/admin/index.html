@@ -2244,8 +2244,8 @@
                     _beforeUnloadHandler: null
                 }
             },
-            mounted() {
-                this.initAdminApiPrefixFromHint();
+                mounted() {
+                    this.initAdminApiPrefixFromHint();
                 const today = new Date();
                 const start = new Date(today.getTime() - 30 * 24 * 60 * 60 * 1000);
                 this.lhbRange.start_date = start.toISOString().slice(0, 10);
@@ -2260,6 +2260,7 @@
                 window.addEventListener('beforeunload', this._beforeUnloadHandler);
                 this._visibilityHandler = () => {
                     if (document.hidden) return;
+                    if (!this.token) return;
                     if (this.currentView === 'overview') {
                         this.fetchTodayOverview();
                         this.startOverviewAutoRefresh();
@@ -2282,6 +2283,10 @@
             },
             watch: {
                 currentView(val) {
+                    if (!this.token) {
+                        this.stopOverviewAutoRefresh();
+                        return;
+                    }
                     if (val === 'overview') {
                         this.fetchTodayOverview();
                         this.startOverviewAutoRefresh();
@@ -2471,8 +2476,22 @@
                     }
                     return this.setAdminApiPrefixRuntime(this.adminApiPrefix || '/api/admin', false);
                 },
+                async validateAdminSessionSilently() {
+                    if (!this.token) return false;
+                    try {
+                        const res = await fetch(API_BASE_URL + '/api/admin/auth_api_prefix', { headers: this.getHeaders() });
+                        if (res.ok) return true;
+                        if (res.status === 401 || res.status === 403) {
+                            this.clearAuth(false);
+                            return false;
+                        }
+                    } catch (_) {}
+                    return !!this.token;
+                },
                 async bootstrapAuthedSession() {
                     await this.resolveAdminApiPrefixForSession();
+                    const valid = await this.validateAdminSessionSilently();
+                    if (!valid) return;
                     this.fetchTodayOverview();
                     this.startOverviewAutoRefresh();
                     this.connectAdminWebSocket();
@@ -2790,6 +2809,7 @@
                     }
                 },
                 async fetchTodayOverview() {
+                    if (!this.token) return;
                     try {
                         const res = await fetch(API_BASE_URL + '/api/admin/overview/today', { headers: this.getHeaders() });
                         if (res.status === 403) { this.clearAuth(true); return; }
