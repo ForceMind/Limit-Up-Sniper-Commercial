@@ -66,6 +66,8 @@ KLINE_MIN_CACHE_EXPIRE_DAYS = 7
 KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 MARKET_SENTIMENT_PROBE_COOLDOWN_SEC = 900
 MARKET_SENTIMENT_API_TRIGGER_MIN_SEC = 3
+STOCK_QUOTES_API_TRIGGER_MIN_SEC = 3
+INDICES_API_TRIGGER_MIN_SEC = 3
 KLINE_NON_TRADING_PROBE_DATES = 8
 KLINE_NON_TRADING_LOOKBACK_DAYS = 90
 
@@ -1220,9 +1222,11 @@ cache_lock = threading.Lock()
 stock_quotes_cache = []
 stock_quotes_cache_ts = 0.0
 stock_quotes_refresh_guard = threading.Lock()
+stock_quotes_async_trigger_last_ts = 0.0
 indices_cache = []
 indices_cache_ts = 0.0
 indices_refresh_guard = threading.Lock()
+indices_async_trigger_last_ts = 0.0
 market_sentiment_cache = {}
 market_sentiment_cache_ts = 0.0
 market_sentiment_refresh_guard = threading.Lock()
@@ -1619,6 +1623,32 @@ def ensure_indices_cache(max_age_sec: int = max(60, REALTIME_CACHE_INTERVAL_SEC 
         if has_rows and cache_age <= max_age_sec:
             return
         refresh_indices_cache()
+
+
+def trigger_indices_refresh_if_needed(max_age_sec: int = max(60, REALTIME_CACHE_INTERVAL_SEC * 3)) -> bool:
+    global indices_async_trigger_last_ts
+    if indices_refresh_guard.locked():
+        return False
+
+    now_ts = time.time()
+    with cache_lock:
+        has_rows = bool(indices_cache)
+        cache_age = (now_ts - indices_cache_ts) if indices_cache_ts > 0 else float("inf")
+        if has_rows and cache_age <= max_age_sec:
+            return False
+        last_trigger = float(indices_async_trigger_last_ts or 0.0)
+        if now_ts - last_trigger < float(INDICES_API_TRIGGER_MIN_SEC or 0):
+            return False
+        indices_async_trigger_last_ts = now_ts
+
+    def _runner():
+        try:
+            ensure_indices_cache(max_age_sec=max_age_sec)
+        except Exception as e:
+            print(f"indices async refresh failed: {e}")
+
+    threading.Thread(target=_runner, daemon=True, name="indices_refresh").start()
+    return True
 
 
 def refresh_market_sentiment_cache(allow_non_trading_probe: bool = False):
@@ -2493,7 +2523,7 @@ async def api_favorite_quotes(codes: str = "", user: models.User = Depends(check
         return []
 
     unique_codes = list(dict.fromkeys(code_list))
-    await asyncio.to_thread(ensure_stock_quotes_cache)
+    trigger_stock_quotes_refresh_if_needed()
     cached_quotes = _get_stock_quotes_cache()
     cached_map = {}
 
@@ -3825,6 +3855,32 @@ def ensure_stock_quotes_cache(max_age_sec: int = max(30, REALTIME_CACHE_INTERVAL
         refresh_stock_quotes_cache()
 
 
+def trigger_stock_quotes_refresh_if_needed(max_age_sec: int = max(30, REALTIME_CACHE_INTERVAL_SEC * 2)) -> bool:
+    global stock_quotes_async_trigger_last_ts
+    if stock_quotes_refresh_guard.locked():
+        return False
+
+    now_ts = time.time()
+    with cache_lock:
+        has_rows = bool(stock_quotes_cache)
+        cache_age = (now_ts - stock_quotes_cache_ts) if stock_quotes_cache_ts > 0 else float("inf")
+        if has_rows and cache_age <= max_age_sec:
+            return False
+        last_trigger = float(stock_quotes_async_trigger_last_ts or 0.0)
+        if now_ts - last_trigger < float(STOCK_QUOTES_API_TRIGGER_MIN_SEC or 0):
+            return False
+        stock_quotes_async_trigger_last_ts = now_ts
+
+    def _runner():
+        try:
+            ensure_stock_quotes_cache(max_age_sec=max_age_sec)
+        except Exception as e:
+            print(f"stock quotes async refresh failed: {e}")
+
+    threading.Thread(target=_runner, daemon=True, name="stock_quotes_refresh").start()
+    return True
+
+
 def _project_rows(rows, selected_fields: set) -> list:
     if not isinstance(rows, list):
         return []
@@ -3889,7 +3945,7 @@ async def api_stocks(
     fields: str = Query(""),
     user: models.User = Depends(check_data_permission),
 ):
-    await asyncio.to_thread(ensure_stock_quotes_cache)
+    trigger_stock_quotes_refresh_if_needed()
     payload = get_stock_quotes()
     if lite or fields:
         selected = _resolve_selected_fields(
@@ -3927,7 +3983,7 @@ async def api_indices(
     user: models.User = Depends(check_data_permission),
 ):
     """快速获取大盘指数"""
-    await asyncio.to_thread(ensure_indices_cache)
+    trigger_indices_refresh_if_needed()
     payload = get_indices_cache()
     if lite or fields:
         selected = _resolve_selected_fields(
