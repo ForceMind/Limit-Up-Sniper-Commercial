@@ -51,7 +51,22 @@
             if (guessed) return guessed;
             return '';
         };
-        const API_BASE_URL = getApiBaseUrl();
+        let API_BASE_URL = getApiBaseUrl();
+        const clearStoredApiBase = () => {
+            try {
+                localStorage.removeItem('sniper_api_base');
+            } catch (_) {}
+        };
+        const switchApiBaseToSameOrigin = (reason = '') => {
+            const current = String(API_BASE_URL || '').trim();
+            if (!current) return false;
+            API_BASE_URL = '';
+            clearStoredApiBase();
+            try {
+                console.warn('[API] fallback to same-origin base:', reason || 'network_error');
+            } catch (_) {}
+            return true;
+        };
         const normalizeApiPrefix = (value, fallback = '/api/auth') => {
             let raw = String(value || '').trim();
             if (!raw) return fallback;
@@ -1791,8 +1806,25 @@
                 }
             }
             config.headers = headers;
-
-            const response = await originalFetch(resource, config);
+            let response;
+            try {
+                response = await originalFetch(resource, config);
+            } catch (fetchErr) {
+                const isApiRequest = requestUrl.includes('/api/');
+                const currentBase = String(API_BASE_URL || '').trim();
+                const canFallbackBase = !!currentBase && requestUrl.startsWith(currentBase + '/');
+                if (isApiRequest && canFallbackBase) {
+                    const fallbackUrl = requestUrl.slice(currentBase.length);
+                    try {
+                        response = await originalFetch(fallbackUrl, config);
+                        switchApiBaseToSameOrigin('initial_fetch_failed');
+                    } catch (_) {
+                        throw fetchErr;
+                    }
+                } else {
+                    throw fetchErr;
+                }
+            }
 
             if ((response.status === 401 || response.status === 403) && requestUrl.includes('/api/') && !shouldSkipAuthEvent(requestUrl)) {
                 let detail = '';
@@ -1978,6 +2010,7 @@
                     lastErrorFingerprint: '',
                     lastFetchTime: 0,
                     apiEtags: {},
+                    sentimentTimeoutNoticeTs: 0,
 
                     // --- New User & Subscription Data ---
                     userInfo: {
@@ -2021,6 +2054,7 @@
                     showOnboardingModal: false,
                     pendingOnboardingAfterQQ: false,
                     pendingOnboardingForce: false,
+                    deferredModalQueue: [],
                     onboardingStep: 0,
                     onboardingUsername: '',
                     onboardingSteps: [
@@ -2327,13 +2361,29 @@
                         return '';
                     }
                 },
-                async fetchJsonWithEtag(apiPath) {
+                async fetchJsonWithEtag(apiPath, options = {}) {
                     const path = String(apiPath || '').trim();
                     if (!path) throw new Error('Missing API path');
                     const headers = {};
                     const cachedEtag = this.apiEtags[path];
                     if (cachedEtag) headers['If-None-Match'] = cachedEtag;
-                    const response = await fetch(API_BASE_URL + path, { headers });
+                    const timeoutMs = Math.max(1000, Number(options.timeoutMs || 8000));
+                    const controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+                    const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
+                    let response;
+                    try {
+                        response = await fetch(API_BASE_URL + path, {
+                            headers,
+                            ...(controller ? { signal: controller.signal } : {})
+                        });
+                    } catch (error) {
+                        if (error && error.name === 'AbortError') {
+                            throw new Error(`REQUEST_TIMEOUT_${timeoutMs}`);
+                        }
+                        throw error;
+                    } finally {
+                        if (timer) clearTimeout(timer);
+                    }
                     if (response.status === 304) {
                         return { notModified: true, data: null, response };
                     }
@@ -2425,12 +2475,52 @@
                         this.openSubscription(this.userInfo.version === 'trial' ? 'basic' : this.userInfo.version);
                     }
                 },
+                isOnboardingBlockingModals() {
+                    if (!this.isRegisteredAccount) return false;
+                    const key = this.getOnboardingStorageKey();
+                    if (!key) return false;
+                    return localStorage.getItem(key) !== '1';
+                },
+                deferModalUntilOnboardingDone(actionKey, handler) {
+                    if (!this.isOnboardingBlockingModals()) return false;
+                    const key = String(actionKey || '').trim();
+                    const fn = (typeof handler === 'function') ? handler : null;
+                    if (!fn) return false;
+                    if (key) {
+                        const existing = this.deferredModalQueue.find(item => item && item.key === key);
+                        if (existing) {
+                            existing.handler = fn;
+                            return true;
+                        }
+                    }
+                    this.deferredModalQueue.push({ key, handler: fn });
+                    return true;
+                },
+                flushDeferredModalQueue() {
+                    if (this.isOnboardingBlockingModals()) return;
+                    if (!Array.isArray(this.deferredModalQueue) || this.deferredModalQueue.length === 0) return;
+                    const queued = this.deferredModalQueue.splice(0, this.deferredModalQueue.length);
+                    queued.forEach((item, idx) => {
+                        const fn = (item && typeof item.handler === 'function') ? item.handler : null;
+                        if (!fn) return;
+                        setTimeout(() => {
+                            try {
+                                fn();
+                            } catch (e) {
+                                console.error('Deferred modal callback failed', e);
+                            }
+                        }, idx * 50);
+                    });
+                },
                 maybeStartOnboarding(forceStart = false) {
                     if (!this.isRegisteredAccount) return;
                     const key = this.getOnboardingStorageKey();
                     if (!key) return;
                     if (forceStart) localStorage.removeItem(key);
-                    if (localStorage.getItem(key) === '1') return;
+                    if (localStorage.getItem(key) === '1') {
+                        this.flushDeferredModalQueue();
+                        return;
+                    }
                     if (this.showQQInviteModal) {
                         this.pendingOnboardingAfterQQ = true;
                         this.pendingOnboardingForce = !!forceStart;
@@ -2468,6 +2558,7 @@
                     if (key) localStorage.setItem(key, '1');
                     this.showOnboardingModal = false;
                     this.activeTab = 'pre';
+                    this.flushDeferredModalQueue();
                 },
                 normalizeInviteCode(code) {
                     return String(code || '').trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 20);
@@ -3038,6 +3129,7 @@
                     this.displayUsername = '';
                     this.deviceId = '';
                     this.accountCanApplyTrial = false;
+                    this.deferredModalQueue = [];
                     this.inviteInputCode = '';
                     this.inviteCodeHistory = [];
                     this.inviteCodeDeleted = [];
@@ -3199,6 +3291,9 @@
                 },
 
                 async openSubscription(targetVer) {
+                    if (this.deferModalUntilOnboardingDone('subscription_modal', () => this.openSubscription(targetVer))) {
+                        return;
+                    }
                     if (!this.isRegisteredAccount) {
                         this.showMsg('请先注册账号后购买会员', 'info');
                         this.showLoginModal = true;
@@ -4604,7 +4699,7 @@
                     this.isFetchingSentiment = true;
                     this.sentimentLoading = true;
                     try {
-                        const { notModified, data } = await this.fetchJsonWithEtag('/api/market_sentiment');
+                        const { notModified, data } = await this.fetchJsonWithEtag('/api/market_sentiment', { timeoutMs: 6000 });
                         if (notModified) {
                             this.sentimentLastUpdate = new Date().toLocaleTimeString();
                             return;
@@ -4615,6 +4710,14 @@
                         this.applyMarketSentimentPayload(data);
                     } catch (error) {
                         console.error('Market Sentiment fetch failed:', error);
+                        const errMsg = String((error && error.message) || '');
+                        if (errMsg.includes('REQUEST_TIMEOUT_')) {
+                            const now = Date.now();
+                            if (!this.sentimentTimeoutNoticeTs || now - this.sentimentTimeoutNoticeTs >= 60000) {
+                                this.sentimentTimeoutNoticeTs = now;
+                                this.showMsg('\u5e02\u573a\u60c5\u7eea\u5237\u65b0\u8d85\u65f6\uff0c\u5df2\u7ee7\u7eed\u4f7f\u7528\u7f13\u5b58\u6570\u636e', 'info');
+                            }
+                        }
                     } finally {
                         this.isFetchingSentiment = false;
                         this.sentimentLoading = false;

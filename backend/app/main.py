@@ -65,6 +65,7 @@ KLINE_ERROR_LOG_MAX_PER_WINDOW = 8
 KLINE_MIN_CACHE_EXPIRE_DAYS = 7
 KLINE_DAY_CACHE_EXPIRE_DAYS = 30
 MARKET_SENTIMENT_PROBE_COOLDOWN_SEC = 900
+MARKET_SENTIMENT_API_TRIGGER_MIN_SEC = 3
 KLINE_NON_TRADING_PROBE_DATES = 8
 KLINE_NON_TRADING_LOOKBACK_DAYS = 90
 
@@ -1232,6 +1233,7 @@ market_ws_last_stock_hash = ""
 market_ws_last_pool_hash = ""
 market_ws_last_sentiment_hash = ""
 market_sentiment_probe_last_ts = 0.0
+market_sentiment_async_trigger_last_ts = 0.0
 market_ws_last_lhb_syncing = None
 market_ws_last_quote_state = {}
 admin_ws_last_overview_hint_hash = ""
@@ -1703,6 +1705,35 @@ def ensure_market_sentiment_cache(max_age_sec: int = max(60, REALTIME_CACHE_INTE
                 market_sentiment_probe_last_ts = now_ts
         if need_probe:
             refresh_market_sentiment_cache(allow_non_trading_probe=True)
+
+
+def trigger_market_sentiment_refresh_if_needed(max_age_sec: int = max(60, REALTIME_CACHE_INTERVAL_SEC * 3)) -> bool:
+    global market_sentiment_async_trigger_last_ts
+    if market_sentiment_refresh_guard.locked():
+        return False
+
+    now_ts = time.time()
+    with cache_lock:
+        payload = market_sentiment_cache if isinstance(market_sentiment_cache, dict) else {}
+        has_breadth = _market_sentiment_stats_has_breadth(payload.get("stats"))
+        has_indices = _market_sentiment_has_meaningful_indices(payload.get("indices"))
+        has_payload = has_breadth or has_indices
+        cache_age = (now_ts - market_sentiment_cache_ts) if market_sentiment_cache_ts > 0 else float("inf")
+        if has_payload and cache_age <= max_age_sec:
+            return False
+        last_trigger = float(market_sentiment_async_trigger_last_ts or 0.0)
+        if now_ts - last_trigger < float(MARKET_SENTIMENT_API_TRIGGER_MIN_SEC or 0):
+            return False
+        market_sentiment_async_trigger_last_ts = now_ts
+
+    def _runner():
+        try:
+            ensure_market_sentiment_cache(max_age_sec=max_age_sec)
+        except Exception as e:
+            print(f"market sentiment async refresh failed: {e}")
+
+    threading.Thread(target=_runner, daemon=True, name="market_sentiment_refresh").start()
+    return True
 
 
 def _day_kline_cache_path(clean_code: str) -> Path:
@@ -3963,7 +3994,7 @@ async def api_intraday_pool(user: models.User = Depends(check_data_permission)):
 @app.get("/api/market_sentiment")
 async def api_market_sentiment(request: Request, user: models.User = Depends(check_data_permission)):
     """获取大盘情绪数据"""
-    await asyncio.to_thread(ensure_market_sentiment_cache)
+    trigger_market_sentiment_refresh_if_needed()
     payload = get_market_sentiment_cache()
     etag = _json_etag(payload)
     if _is_not_modified(request, etag):
